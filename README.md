@@ -4,7 +4,7 @@
 
 ## التقنيات المستخدمة
 
-### الواجهة الأمامية
+### الواجهة الأمامي
 
 - React
 - TypeScript
@@ -13,6 +13,8 @@
 - React Router
 - Axios / Fetch
 - Lucide Icons
+
+
 
 ### الخلفية
 
