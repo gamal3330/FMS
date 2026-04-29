@@ -1,0 +1,30 @@
+[2m١٢:٥٥:٢٦ م[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m [2m[console.error] [22mIn HTML, <th> cannot be a child of <thead>.
+This will cause a hydration error.
+
+  ...
+    <Routes>
+      <RenderedRoute match={{...}} routeContext={{outlet:null, ...}}>
+        <SettingsPage>
+          <section className="space-y-6" dir="rtl">
+            <div>
+            <div className="grid gap-5...">
+              <Card>
+              <Card className="p-5">
+                <div className="rounded-lg...">
+                  <Panel title="الإدارات">
+                    <div>
+                      <h3>
+                      <DepartmentsSettings notify={function notify}>
+                        <div className="space-y-5">
+                          <form>
+                          <div>
+                          <Table headers={[...]}>
+                            <div className="overflow-x...">
+                              <table className="w-full min...">
+>                               <thead className="bg-slate-50">
+>                                 <th className="p-3 text-right">
+                                  ...
+                                ...
+
+[2m١٢:٥٩:٥٤ م[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m [2m[console.error] [22m[vite] Failed to reload /src/App.tsx. This could be due to syntax errors or importing non-existent modules. (see errors above)
+[2m١٢:٥٩:٥٤ م[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m Pre-transform error: Failed to load url /src/App.tsx (resolved id: C:/Users/g.galal/Pictures/New folder/frontend/src/App.tsx) in C:/Users/g.galal/Pictures/New folder/frontend/src/main.tsx. Does the file exist?

@@ -1,0 +1,75 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bank-50: 239 250 243;
+  --bank-100: 216 242 225;
+  --bank-600: 18 128 70;
+  --bank-700: 13 99 55;
+  --bank-900: 8 53 31;
+  direction: rtl;
+  color: #0f172a;
+  background: #f6f8f7;
+  font-family: "Tajawal", "Cairo", "Segoe UI", Tahoma, Arial, sans-serif;
+}
+
+html {
+  direction: rtl;
+  text-align: right;
+  font-family: "Tajawal", "Cairo", "Segoe UI", Tahoma, Arial, sans-serif;
+}
+
+body {
+  margin: 0;
+  direction: rtl;
+  text-align: right;
+  font-family: "Tajawal", "Cairo", "Segoe UI", Tahoma, Arial, sans-serif;
+}
+
+#root {
+  min-height: 100vh;
+  direction: rtl;
+}
+
+button, input, select, textarea {
+  font: inherit;
+}
+
+input, select, textarea {
+  text-align: right;
+}
+
+input[type="email"],
+input[type="url"],
+input[type="password"],
+input[type="number"],
+input[type="date"],
+input[type="time"],
+input[type="datetime-local"] {
+  direction: ltr;
+  text-align: left;
+}
+
+table {
+  direction: rtl;
+  text-align: right;
+}
+
+th, td {
+  text-align: right;
+}
+
+[dir="rtl"] .ltr-value {
+  direction: ltr;
+  text-align: left;
+}
+
+:where(body, body *) {
+  color: #000 !important;
+}
+
+::placeholder {
+  color: rgb(0 0 0 / 0.55) !important;
+  opacity: 1;
+}

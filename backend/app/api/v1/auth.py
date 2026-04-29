@@ -1,0 +1,142 @@
+from datetime import datetime, timedelta, timezone
+
+from fastapi import APIRouter, Depends, Request, status
+from fastapi.exceptions import HTTPException
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.api.deps import get_current_user
+from app.core.security import create_access_token, get_password_hash, verify_password
+from app.db.session import get_db
+from app.models.settings import SecurityPolicy, SettingsGeneral
+from app.models.user import User
+from app.schemas.auth import ChangePasswordRequest, LoginRequest, TokenResponse
+from app.schemas.user import UserRead
+from app.services.audit import write_audit
+
+router = APIRouter(prefix="/auth", tags=["Authentication"])
+
+
+def get_singleton(db: Session, model):
+    item = db.scalar(select(model).limit(1))
+    if not item:
+        item = model()
+        db.add(item)
+        db.flush()
+    return item
+
+
+def is_locked(user: User) -> bool:
+    if not user.locked_until:
+        return False
+    locked_until = user.locked_until
+    if locked_until.tzinfo is None:
+        locked_until = locked_until.replace(tzinfo=timezone.utc)
+    return locked_until > datetime.now(timezone.utc)
+
+
+def password_expired(user: User, policy: SecurityPolicy) -> bool:
+    changed_at = user.password_changed_at or user.created_at
+    if changed_at.tzinfo is None:
+        changed_at = changed_at.replace(tzinfo=timezone.utc)
+    return changed_at + timedelta(days=policy.password_expiry_days) < datetime.now(timezone.utc)
+
+
+def validate_password_policy(password: str, policy: SecurityPolicy) -> None:
+    if len(password) < policy.password_min_length:
+        raise HTTPException(status_code=422, detail=f"كلمة المرور يجب ألا تقل عن {policy.password_min_length} أحرف")
+    if policy.require_uppercase and not any(char.isupper() for char in password):
+        raise HTTPException(status_code=422, detail="كلمة المرور يجب أن تحتوي على حرف كبير")
+    if policy.require_numbers and not any(char.isdigit() for char in password):
+        raise HTTPException(status_code=422, detail="كلمة المرور يجب أن تحتوي على رقم")
+    if policy.require_special_chars and not any(not char.isalnum() for char in password):
+        raise HTTPException(status_code=422, detail="كلمة المرور يجب أن تحتوي على رمز خاص")
+
+
+@router.post("/login", response_model=TokenResponse)
+def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)) -> TokenResponse:
+    policy = get_singleton(db, SecurityPolicy)
+    general = get_singleton(db, SettingsGeneral)
+    user = db.scalar(select(User).where(User.email == payload.email))
+    ip_address = request.client.host if request.client else None
+
+    if user and not user.is_active:
+        write_audit(db, "login_blocked", "user", actor=user, entity_id=str(user.id), ip_address=ip_address)
+        db.commit()
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="الحساب غير نشط. يرجى التواصل مع مدير النظام")
+
+    if user and is_locked(user):
+        write_audit(db, "login_blocked_locked", "user", actor=user, entity_id=str(user.id), ip_address=ip_address)
+        db.commit()
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="تم قفل الحساب مؤقتاً بسبب تجاوز عدد محاولات الدخول الفاشلة")
+
+    if not user:
+        write_audit(db, "login_failed", "user", metadata={"email": payload.email}, ip_address=ip_address)
+        db.commit()
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="البريد الإلكتروني أو كلمة المرور غير صحيحة")
+
+    if not verify_password(payload.password, user.hashed_password):
+        user.failed_login_attempts = (user.failed_login_attempts or 0) + 1
+        if user.failed_login_attempts >= policy.lock_after_failed_attempts:
+            user.locked_until = datetime.now(timezone.utc) + timedelta(minutes=30)
+            write_audit(
+                db,
+                "login_locked_after_failures",
+                "user",
+                actor=user,
+                entity_id=str(user.id),
+                metadata={"email": payload.email, "failed_login_attempts": user.failed_login_attempts},
+                ip_address=ip_address,
+            )
+            db.commit()
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="تم قفل الحساب مؤقتاً بسبب تجاوز عدد محاولات الدخول الفاشلة")
+
+        remaining = max(policy.lock_after_failed_attempts - user.failed_login_attempts, 0)
+        write_audit(
+            db,
+            "login_failed",
+            "user",
+            actor=user,
+            entity_id=str(user.id),
+            metadata={"email": payload.email, "failed_login_attempts": user.failed_login_attempts},
+            ip_address=ip_address,
+        )
+        db.commit()
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=f"البريد الإلكتروني أو كلمة المرور غير صحيحة. المحاولات المتبقية: {remaining}")
+
+    if password_expired(user, policy):
+        write_audit(db, "login_password_expired", "user", actor=user, entity_id=str(user.id), ip_address=ip_address)
+        db.commit()
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="انتهت صلاحية كلمة المرور. يرجى تغيير كلمة المرور")
+
+    user.failed_login_attempts = 0
+    user.locked_until = None
+    token = create_access_token(str(user.id), {"role": user.role, "email": user.email}, expires_minutes=general.session_timeout_minutes)
+    write_audit(db, "login_success", "user", actor=user, entity_id=str(user.id), ip_address=ip_address)
+    db.commit()
+    return TokenResponse(access_token=token)
+
+
+@router.get("/me", response_model=UserRead)
+def me(current_user: User = Depends(get_current_user)) -> User:
+    return current_user
+
+
+@router.post("/change-password", status_code=status.HTTP_204_NO_CONTENT)
+def change_password(payload: ChangePasswordRequest, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    ip_address = request.client.host if request.client else None
+    if not verify_password(payload.current_password, current_user.hashed_password):
+        write_audit(db, "change_password_failed", "user", actor=current_user, entity_id=str(current_user.id), ip_address=ip_address)
+        db.commit()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="كلمة المرور الحالية غير صحيحة")
+    if payload.new_password != payload.confirm_password:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="كلمة المرور الجديدة وتأكيدها غير متطابقين")
+    if verify_password(payload.new_password, current_user.hashed_password):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="كلمة المرور الجديدة يجب أن تختلف عن الحالية")
+    validate_password_policy(payload.new_password, get_singleton(db, SecurityPolicy))
+    current_user.hashed_password = get_password_hash(payload.new_password)
+    current_user.password_changed_at = datetime.now(timezone.utc)
+    current_user.failed_login_attempts = 0
+    current_user.locked_until = None
+    write_audit(db, "password_changed", "user", actor=current_user, entity_id=str(current_user.id), ip_address=ip_address)
+    db.commit()
