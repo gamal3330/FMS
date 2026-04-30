@@ -236,7 +236,6 @@ export function Layout({
         <header className="sticky top-0 z-10 border-b border-slate-200 bg-white/95 px-5 py-4 backdrop-blur">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
-              <p className="text-sm text-slate-500">النظام الداخلي لإدارة طلبات الخدمات</p>
               <h2 className="text-lg font-bold text-slate-950">{systemName}</h2>
             </div>
             <div className="relative flex items-center gap-2 self-start sm:self-auto">

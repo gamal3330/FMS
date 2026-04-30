@@ -1,18 +1,28 @@
 import { useEffect, useState } from "react";
 import { api, getErrorMessage } from "../../lib/axios";
 import { applyBranding } from "../../lib/branding";
+import { formatSystemDateTime } from "../../lib/datetime";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 
 const defaults = {
   system_name: "",
   language: "ar",
+  timezone: "Asia/Qatar",
   session_timeout_minutes: 60,
   upload_max_file_size_mb: 10,
   allowed_file_extensions: "pdf,docx,xlsx,png,jpg",
   logo_url: "",
   brand_color: "#0d6337"
 };
+
+const timezoneOptions = [
+  ["Asia/Qatar", "قطر - الدوحة (Asia/Qatar)"],
+  ["Asia/Aden", "اليمن - عدن (Asia/Aden)"],
+  ["Asia/Riyadh", "السعودية - الرياض (Asia/Riyadh)"],
+  ["Asia/Dubai", "الإمارات - دبي (Asia/Dubai)"],
+  ["UTC", "التوقيت العالمي UTC"]
+];
 
 export default function GeneralSettings({ notify }) {
   const [form, setForm] = useState(defaults);
@@ -42,6 +52,7 @@ export default function GeneralSettings({ notify }) {
       const { data } = await api.put("/settings/general-profile", {
         ...form,
         language: "ar",
+        timezone: form.timezone || defaults.timezone,
         session_timeout_minutes: Number(form.session_timeout_minutes),
         upload_max_file_size_mb: Number(form.upload_max_file_size_mb)
       });
@@ -93,6 +104,13 @@ export default function GeneralSettings({ notify }) {
           <option value="ar">العربية</option>
         </select>
       </label>
+      <label className="block space-y-2 text-sm font-medium text-slate-700">
+        توقيت النظام
+        <select value={form.timezone || defaults.timezone} onChange={(event) => setForm({ ...form, timezone: event.target.value })} className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none focus:border-bank-600 focus:ring-2 focus:ring-bank-100">
+          {timezoneOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+        </select>
+        <span className="block text-xs font-normal text-slate-500">الوقت الحالي حسب الاختيار: {formatSystemTime(form.timezone || defaults.timezone)}</span>
+      </label>
       <Field label="مهلة الجلسة بالدقائق" type="number" value={form.session_timeout_minutes} onChange={(value) => setForm({ ...form, session_timeout_minutes: value })} />
       <Field label="الحد الأقصى لحجم المرفق بالميجابايت" type="number" value={form.upload_max_file_size_mb} onChange={(value) => setForm({ ...form, upload_max_file_size_mb: value })} />
       <div className="md:col-span-2">
@@ -125,11 +143,16 @@ function applyLocalSettings(settings) {
   applyBranding({
     system_name: settings.system_name || defaults.system_name,
     logo_url: settings.logo_url || null,
-    brand_color: settings.brand_color || defaults.brand_color
+    brand_color: settings.brand_color || defaults.brand_color,
+    timezone: settings.timezone || defaults.timezone
   });
   document.documentElement.lang = "ar";
   document.documentElement.dir = "rtl";
   document.body.dir = "rtl";
+}
+
+function formatSystemTime(timezone) {
+  return formatSystemDateTime(new Date().toISOString(), timezone);
 }
 
 function resolveAssetUrl(url) {

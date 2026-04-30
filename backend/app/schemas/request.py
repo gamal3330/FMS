@@ -26,8 +26,10 @@ class ApprovalStepRead(BaseModel):
     step_order: int
     role: str
     action: ApprovalAction
+    can_return_for_edit: bool = False
     note: str | None = None
     acted_at: datetime | None = None
+    approver: UserRead | None = None
 
     model_config = {"from_attributes": True}
 

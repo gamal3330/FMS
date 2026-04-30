@@ -6,6 +6,7 @@ import { Button } from "../components/ui/button";
 import FeedbackDialog from "../components/ui/FeedbackDialog";
 import { Input } from "../components/ui/input";
 import GeneralSettings from "../components/settings/GeneralSettings";
+import { formatSystemDateTime } from "../lib/datetime";
 
 const tabs = [
   ["general", "الإعدادات العامة", Settings2],
@@ -121,6 +122,7 @@ function DatabaseSettings({ notify }) {
   const [file, setFile] = useState(null);
   const [restoreConfirmation, setRestoreConfirmation] = useState("");
   const [resetConfirmation, setResetConfirmation] = useState("");
+  const [resetPreview, setResetPreview] = useState(null);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
 
@@ -141,9 +143,18 @@ function DatabaseSettings({ notify }) {
     }
   }
 
+  async function loadResetPreview() {
+    try {
+      setResetPreview((await api.get("/settings/database/reset-preview")).data);
+    } catch (error) {
+      notify(getErrorMessage(error), "error");
+    }
+  }
+
   useEffect(() => {
     loadStatus();
     loadBackupSettings();
+    loadResetPreview();
   }, []);
 
   async function saveBackupSettings(event) {
@@ -211,7 +222,9 @@ function DatabaseSettings({ notify }) {
 
   async function resetDatabase(event) {
     event.preventDefault();
-    if (!window.confirm("سيتم حذف جميع بيانات النظام وإعادة إنشاء بيانات البداية فقط. هل تريد المتابعة؟")) return;
+    const tableCount = resetPreview?.table_count ?? 0;
+    const totalRows = resetPreview?.total_rows ?? 0;
+    if (!window.confirm(`سيتم حذف بيانات ${tableCount} جدول بإجمالي ${totalRows} سجل، ثم إعادة إنشاء بيانات البداية فقط. هل تريد المتابعة؟`)) return;
     setBusy("reset");
     setError("");
     try {
@@ -304,6 +317,40 @@ function DatabaseSettings({ notify }) {
             <p className="mt-1 text-sm leading-6 text-red-700">هذه العملية تحذف بيانات قاعدة البيانات وتعيد إنشاء حساب المدير والبيانات الأساسية فقط.</p>
           </div>
         </div>
+        <div className="mb-4 rounded-md border border-red-200 bg-white p-3">
+          <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-sm font-bold text-red-900">الجداول التي سيتم حذف بياناتها</p>
+              <p className="mt-1 text-xs text-red-700">
+                {resetPreview ? `${resetPreview.table_count} جدول - ${resetPreview.total_rows} سجل حالي` : "جار تحميل قائمة الجداول..."}
+              </p>
+            </div>
+            <button type="button" onClick={loadResetPreview} disabled={Boolean(busy)} className="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-red-200 bg-white px-3 text-xs font-bold text-red-700 hover:bg-red-50 disabled:opacity-60">
+              <RefreshCw className="h-3.5 w-3.5" /> تحديث القائمة
+            </button>
+          </div>
+          <div className="max-h-56 overflow-auto rounded-md border border-red-100">
+            <table className="w-full min-w-[420px] text-sm">
+              <thead className="bg-red-50 text-xs font-bold text-red-700">
+                <tr>
+                  <th className="p-2 text-right">الجدول</th>
+                  <th className="p-2 text-right">عدد السجلات الحالية</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-red-50">
+                {(resetPreview?.tables || []).map((item) => (
+                  <tr key={item.table}>
+                    <td className="p-2 font-mono text-xs text-slate-700">{item.table}</td>
+                    <td className="p-2 font-semibold text-slate-700">{item.rows}</td>
+                  </tr>
+                ))}
+                {resetPreview && resetPreview.tables.length === 0 && (
+                  <tr><td colSpan="2" className="p-3 text-center text-sm text-slate-500">لا توجد جداول ضمن خطة الحذف</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
         <div className="grid gap-3 lg:grid-cols-[1fr_auto]">
           <Input placeholder="اكتب: حذف جميع البيانات" value={resetConfirmation} onChange={(event) => setResetConfirmation(event.target.value)} />
           <button type="submit" disabled={busy === "reset"} className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-red-700 px-4 text-sm font-semibold text-white hover:bg-red-800 disabled:opacity-60">
@@ -321,4 +368,4 @@ function SimpleTable({ headers, rows }) { return <div className="overflow-x-auto
 function LabeledInput({ label, ...props }) { return <label className="block space-y-2 text-sm font-medium text-slate-700">{label}<Input {...props} /></label>; }
 function MetricBox({ label, value }) { return <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm"><p className="text-xs font-bold text-slate-500">{label}</p><p className="mt-2 break-words text-lg font-black text-slate-950">{value}</p></div>; }
 function formatBytes(value) { if (!value) return "0 B"; const units = ["B", "KB", "MB", "GB"]; const index = Math.min(Math.floor(Math.log(value) / Math.log(1024)), units.length - 1); return `${(value / Math.pow(1024, index)).toFixed(index ? 1 : 0)} ${units[index]}`; }
-function formatDateTime(value) { return value ? new Date(value).toLocaleString("ar-QA") : "-"; }
+function formatDateTime(value) { return formatSystemDateTime(value); }

@@ -8,6 +8,7 @@ class SettingsGeneralPayload(BaseModel):
     logo_url: str | None = None
     brand_color: str = Field(default="#0d6337", pattern=r"^#[0-9A-Fa-f]{6}$")
     language: str
+    timezone: str = Field(default="Asia/Qatar", max_length=80)
     session_timeout_minutes: int = Field(ge=5, le=1440)
     upload_max_file_size_mb: int = Field(ge=1, le=200)
     allowed_file_extensions: str

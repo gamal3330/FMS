@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle, BarChart3, CheckCircle2, Clock3, FileClock, RefreshCw, TrendingUp, UserCheck2 } from "lucide-react";
 import { apiFetch } from "../lib/api";
+import { formatSystemDateTime } from "../lib/datetime";
 import { Button } from "../components/ui/button";
 import { Card } from "../components/ui/card";
 
@@ -143,8 +144,8 @@ export function Dashboard() {
         <Card className="p-5">
           <div className="mb-5 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
             <div>
-              <h3 className="font-bold text-slate-950">إحصائية معالجة الطلبات حسب موظف تقنية المعلومات</h3>
-              <p className="mt-1 text-sm text-slate-500">إجمالي الطلبات المعالجة من الفريق: {totalStaffProcessed}</p>
+              <h3 className="font-bold text-slate-950">إحصائية معالجة الطلبات</h3>
+              <p className="mt-1 text-sm text-slate-500">إجمالي الطلبات المعالجة: {totalStaffProcessed}</p>
             </div>
             <div className="rounded-md bg-bank-50 p-2 text-bank-700">
               <UserCheck2 className="h-5 w-5" />
@@ -262,12 +263,5 @@ export function Dashboard() {
 }
 
 function formatDate(value?: string | null) {
-  if (!value) return "-";
-  return new Intl.DateTimeFormat("ar", {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit"
-  }).format(new Date(value));
+  return formatSystemDateTime(value);
 }

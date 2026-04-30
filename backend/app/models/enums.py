@@ -15,6 +15,7 @@ class RequestStatus(StrEnum):
     DRAFT = "draft"
     SUBMITTED = "submitted"
     PENDING_APPROVAL = "pending_approval"
+    RETURNED_FOR_EDIT = "returned_for_edit"
     APPROVED = "approved"
     REJECTED = "rejected"
     IN_IMPLEMENTATION = "in_implementation"
@@ -45,4 +46,5 @@ class ApprovalAction(StrEnum):
     PENDING = "pending"
     APPROVED = "approved"
     REJECTED = "rejected"
+    RETURNED_FOR_EDIT = "returned_for_edit"
     SKIPPED = "skipped"

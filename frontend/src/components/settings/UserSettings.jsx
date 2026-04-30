@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Edit3, KeyRound, Search, ShieldCheck, UserPlus, UserRoundX, Users } from "lucide-react";
+import { Download, Edit3, KeyRound, Search, ShieldCheck, Upload, UserPlus, UserRoundX, Users } from "lucide-react";
 import { api, getErrorMessage } from "../../lib/axios";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -67,6 +67,9 @@ export default function UserSettings({ notify }) {
   const [availableScreens, setAvailableScreens] = useState([]);
   const [selectedScreens, setSelectedScreens] = useState([]);
   const [permissionsSaving, setPermissionsSaving] = useState(false);
+  const [importFile, setImportFile] = useState(null);
+  const [importing, setImporting] = useState(false);
+  const [importResult, setImportResult] = useState(null);
 
   async function load() {
     setLoading(true);
@@ -274,6 +277,54 @@ export default function UserSettings({ notify }) {
     }
   }
 
+  async function downloadImportTemplate() {
+    try {
+      const response = await api.get("/users/import-template", { responseType: "blob" });
+      const disposition = response.headers["content-disposition"] || "";
+      const filename = disposition.match(/filename="?([^"]+)"?/)?.[1] || "users-import-template.xlsx";
+      const url = URL.createObjectURL(response.data);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      notify(getErrorMessage(error), "error");
+    }
+  }
+
+  async function importUsers(event) {
+    event.preventDefault();
+    if (!importFile) {
+      notify("اختر ملف Excel أولاً.", "error");
+      return;
+    }
+    setImporting(true);
+    setImportResult(null);
+    setError("");
+    try {
+      const body = new FormData();
+      body.append("file", importFile);
+      const response = await api.post("/users/import", body, { headers: { "Content-Type": "multipart/form-data" } });
+      setImportFile(null);
+      setImportResult({ created: response.data.created || 0, errors: [] });
+      notify(`تم إنشاء ${response.data.created || 0} مستخدم من ملف Excel`);
+      await load();
+    } catch (error) {
+      const detail = error?.response?.data?.detail;
+      if (detail?.errors) {
+        setImportResult({ created: 0, errors: detail.errors, message: detail.message });
+        notify(detail.message || "تعذر استيراد المستخدمين", "error");
+      } else {
+        const message = getErrorMessage(error);
+        setError(message);
+        notify(message, "error");
+      }
+    } finally {
+      setImporting(false);
+    }
+  }
+
   async function openPermissions(user) {
     setPermissionsDialog(user);
     setPermissionsSaving(true);
@@ -343,6 +394,58 @@ export default function UserSettings({ notify }) {
         <MetricCard icon={ShieldCheck} label="حسابات نشطة" value={activeCount} />
         <MetricCard icon={UserPlus} label="مديرو الإدارات" value={departmentManagersCount} hint={`${linkedCount} مستخدم مرتبط بإدارة ومدير`} />
       </div>
+
+      <form onSubmit={importUsers} className="rounded-lg border border-bank-100 bg-white p-4 shadow-sm">
+        <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <h4 className="text-base font-bold text-slate-950">استيراد المستخدمين من Excel</h4>
+            <p className="mt-1 text-xs leading-5 text-slate-500">نزّل النموذج، عبئ بيانات المستخدمين، ثم ارفع الملف لإنشاء الحسابات دفعة واحدة. لن يتم إنشاء أي مستخدم إذا كان الملف يحتوي على أخطاء.</p>
+          </div>
+          <Button type="button" onClick={downloadImportTemplate} className="gap-2 border border-slate-300 bg-white text-slate-700 hover:bg-slate-50">
+            <Download className="h-4 w-4" /> تنزيل النموذج
+          </Button>
+        </div>
+        <div className="grid gap-3 lg:grid-cols-[1fr_auto]">
+          <input
+            type="file"
+            accept=".xlsx,.xlsm"
+            onChange={(event) => {
+              setImportFile(event.target.files?.[0] || null);
+              setImportResult(null);
+            }}
+            className="h-10 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+          />
+          <Button type="submit" disabled={importing} className="gap-2">
+            <Upload className="h-4 w-4" /> {importing ? "جاري الاستيراد..." : "رفع وإنشاء المستخدمين"}
+          </Button>
+        </div>
+        {importResult?.created > 0 && <p className="mt-3 rounded-md bg-emerald-50 p-3 text-sm font-semibold text-emerald-700">تم إنشاء {importResult.created} مستخدم بنجاح.</p>}
+        {importResult?.errors?.length > 0 && (
+          <div className="mt-3 rounded-md border border-red-200 bg-red-50 p-3">
+            <p className="text-sm font-bold text-red-800">{importResult.message || "توجد أخطاء في ملف الاستيراد"}</p>
+            <div className="mt-3 max-h-56 overflow-auto rounded-md border border-red-100 bg-white">
+              <table className="w-full min-w-[620px] text-sm">
+                <thead className="bg-red-50 text-xs font-bold text-red-700">
+                  <tr>
+                    <th className="p-2 text-right">الصف</th>
+                    <th className="p-2 text-right">الحقل</th>
+                    <th className="p-2 text-right">المشكلة</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-red-50">
+                  {importResult.errors.map((item, index) => (
+                    <tr key={`${item.row}-${item.field}-${index}`}>
+                      <td className="p-2 font-semibold text-slate-700">{item.row}</td>
+                      <td className="p-2 text-slate-700">{item.field}</td>
+                      <td className="p-2 text-slate-700">{item.message}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+      </form>
 
       <form onSubmit={save} className="rounded-lg border border-slate-200 bg-slate-50/70 p-4">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">

@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import { AlertTriangle, CheckCircle2, Circle, Clock3, ExternalLink, FileCheck2, FileText, Filter, Image as ImageIcon, Paperclip, RefreshCw, Search, Send, UserCheck, XCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Circle, Clock3, ExternalLink, FileCheck2, FileText, Filter, Image as ImageIcon, Paperclip, Printer, RefreshCw, RotateCcw, Search, Send, UserCheck, XCircle } from "lucide-react";
 import { API_BASE, apiFetch, ApprovalAction, ApprovalStep, Attachment, CurrentUser, ServiceRequest } from "../lib/api";
+import { formatSystemDateTime } from "../lib/datetime";
 import { Button } from "../components/ui/button";
 import { Card } from "../components/ui/card";
 
@@ -19,6 +20,7 @@ const statusLabels: Record<string, string> = {
   draft: "مسودة",
   submitted: "مرسل",
   pending_approval: "بانتظار الموافقة",
+  returned_for_edit: "معاد للتعديل",
   approved: "معتمد",
   rejected: "مرفوض",
   in_implementation: "قيد التنفيذ",
@@ -74,6 +76,7 @@ const actionLabels: Record<ApprovalAction, string> = {
   pending: "بانتظار الإجراء",
   approved: "تمت الموافقة",
   rejected: "تم الرفض",
+  returned_for_edit: "أعيد للتعديل",
   skipped: "تم التجاوز"
 };
 
@@ -82,7 +85,7 @@ function getCurrentStep(request?: ServiceRequest) {
 }
 
 function formatDate(value?: string | null) {
-  return value ? new Date(value).toLocaleString("ar-QA") : "-";
+  return formatSystemDateTime(value);
 }
 
 function assignedSection(request?: ServiceRequest) {
@@ -105,6 +108,23 @@ async function openAttachment(requestId: number, attachment: Attachment) {
   window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
+async function downloadRequestPdf(request: ServiceRequest) {
+  const token = localStorage.getItem("qib_token");
+  const response = await fetch(`${API_BASE}/requests/${request.id}/print.pdf`, {
+    headers: {
+      ...(token ? { Authorization: `Bearer ${token}` } : {})
+    }
+  });
+  if (!response.ok) return;
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `${request.request_number || "request"}.pdf`;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
 function formatBytes(size?: number) {
   if (!size) return "-";
   if (size < 1024) return `${size} B`;
@@ -122,7 +142,7 @@ function isActionableForUser(step: ApprovalStep | null, user: CurrentUser | null
 export function Approvals() {
   const [requests, setRequests] = useState<ServiceRequest[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
-  const [decision, setDecision] = useState<"approved" | "rejected">("approved");
+  const [decision, setDecision] = useState<"approved" | "rejected" | "returned_for_edit">("approved");
   const [note, setNote] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -204,7 +224,7 @@ export function Approvals() {
       setRequests((current) => current.map((request) => (request.id === updated.id ? updated : request)));
       setSelectedId(updated.id);
       setNote("");
-      setMessage(decision === "approved" ? "تمت الموافقة على الخطوة الحالية." : "تم رفض الطلب وتحديث سجل الموافقات.");
+      setMessage(decision === "approved" ? "تمت الموافقة على الخطوة الحالية." : decision === "returned_for_edit" ? "تم إرجاع الطلب لصاحب الطلب للتعديل." : "تم رفض الطلب وتحديث سجل الموافقات.");
     } catch {
       setError("تعذر تنفيذ قرار الموافقة. تحقق من أن لديك صلاحية على الخطوة الحالية.");
     } finally {
@@ -346,6 +366,14 @@ export function Approvals() {
                     <span className="rounded-md bg-bank-50 px-3 py-2 text-sm font-semibold text-bank-700">
                       {statusLabels[selectedRequest.status] ?? selectedRequest.status}
                     </span>
+                    <button
+                      type="button"
+                      onClick={() => downloadRequestPdf(selectedRequest)}
+                      className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                    >
+                      <Printer className="h-4 w-4" />
+                      طباعة PDF
+                    </button>
                   </div>
                 </div>
 
@@ -392,7 +420,7 @@ export function Approvals() {
                       المرحلة الحالية: <span className="font-bold">{currentStep ? roleLabels[currentStep.role] ?? currentStep.role : "-"}</span>
                     </div>
                     <form onSubmit={submitDecision} className="space-y-4">
-                      <div className="grid grid-cols-2 gap-2">
+                      <div className={`grid gap-2 ${currentStep?.can_return_for_edit ? "grid-cols-3" : "grid-cols-2"}`}>
                         <button
                           type="button"
                           onClick={() => setDecision("approved")}
@@ -413,6 +441,18 @@ export function Approvals() {
                           <XCircle className="h-4 w-4" />
                           رفض
                         </button>
+                        {currentStep?.can_return_for_edit && (
+                          <button
+                            type="button"
+                            onClick={() => setDecision("returned_for_edit")}
+                            className={`flex h-10 items-center justify-center gap-2 rounded-md border text-sm font-semibold ${
+                              decision === "returned_for_edit" ? "border-amber-600 bg-amber-50 text-amber-700" : "border-slate-200 text-slate-600"
+                            }`}
+                          >
+                            <RotateCcw className="h-4 w-4" />
+                            إرجاع للتعديل
+                          </button>
+                        )}
                       </div>
                       <label className="block space-y-2 text-sm font-medium text-slate-700">
                         ملاحظة القرار
@@ -420,8 +460,8 @@ export function Approvals() {
                           value={note}
                           onChange={(event) => setNote(event.target.value)}
                           rows={5}
-                          required={decision === "rejected"}
-                          placeholder="اكتب سبب القرار أو أي تعليمات للتنفيذ"
+                          required={decision === "rejected" || decision === "returned_for_edit"}
+                          placeholder={decision === "returned_for_edit" ? "اكتب التعديلات المطلوبة من صاحب الطلب" : "اكتب سبب القرار أو أي تعليمات للتنفيذ"}
                           className="w-full resize-y rounded-md border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-bank-600 focus:ring-2 focus:ring-bank-100"
                         />
                       </label>
@@ -517,21 +557,30 @@ function Info({ label, value }: { label: string; value: string }) {
 function ApprovalTimelineItem({ step }: { step: ApprovalStep }) {
   const isApproved = step.action === "approved";
   const isRejected = step.action === "rejected";
-  const tone = isApproved ? "bg-bank-50 text-bank-700" : isRejected ? "bg-red-50 text-red-700" : "bg-slate-100 text-slate-600";
+  const isReturned = step.action === "returned_for_edit";
+  const tone = isApproved ? "bg-bank-50 text-bank-700" : isRejected ? "bg-red-50 text-red-700" : isReturned ? "bg-amber-50 text-amber-700" : "bg-slate-100 text-slate-600";
+  const actorLabel = isApproved ? "قام بالموافقة" : isRejected ? "قام بالرفض" : isReturned ? "قام بالإرجاع" : "";
+  const dateLabel = isApproved ? "تاريخ الموافقة" : isRejected ? "تاريخ الرفض" : isReturned ? "تاريخ الإرجاع" : "";
 
   return (
     <div className="flex gap-3 rounded-md border border-slate-200 p-3">
       <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-md ${tone}`}>
-        {isApproved ? <CheckCircle2 className="h-5 w-5" /> : isRejected ? <XCircle className="h-5 w-5" /> : <Clock3 className="h-5 w-5" />}
+        {isApproved ? <CheckCircle2 className="h-5 w-5" /> : isRejected ? <XCircle className="h-5 w-5" /> : isReturned ? <RotateCcw className="h-5 w-5" /> : <Clock3 className="h-5 w-5" />}
       </div>
       <div className="min-w-0 flex-1">
         <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
           <p className="font-semibold text-slate-900">
             {step.step_order}. {roleLabels[step.role] ?? step.role}
           </p>
-          <span className="text-xs text-slate-500">{formatDate(step.acted_at)}</span>
+          {!(isApproved || isRejected) && <span className="text-xs text-slate-500">{formatDate(step.acted_at)}</span>}
         </div>
         <p className="mt-1 text-sm text-slate-500">{actionLabels[step.action]}</p>
+        {(isApproved || isRejected || isReturned) && (
+          <div className="mt-2 grid gap-1 rounded-md bg-slate-50 p-2 text-xs leading-5 text-slate-600 sm:grid-cols-2">
+            <p><span className="font-bold text-slate-700">{actorLabel}:</span> {step.approver?.full_name_ar || step.approver?.email || "-"}</p>
+            <p><span className="font-bold text-slate-700">{dateLabel}:</span> {formatDate(step.acted_at)}</p>
+          </div>
+        )}
         {step.note && <p className="mt-2 rounded-md bg-slate-50 p-2 text-sm leading-6 text-slate-600">{step.note}</p>}
       </div>
     </div>
@@ -541,6 +590,7 @@ function ApprovalTimelineItem({ step }: { step: ApprovalStep }) {
 function ApprovalProgressBar({ steps }: { steps: ApprovalStep[] }) {
   const orderedSteps = [...steps].sort((first, second) => first.step_order - second.step_order);
   const rejectedIndex = orderedSteps.findIndex((step) => step.action === "rejected");
+  const returnedIndex = orderedSteps.findIndex((step) => step.action === "returned_for_edit");
   const currentIndex = orderedSteps.findIndex((step) => step.action === "pending");
   const completedCount = orderedSteps.filter((step) => step.action === "approved" || step.action === "skipped").length;
   const progressPercent = orderedSteps.length === 0 ? 0 : Math.round((completedCount / orderedSteps.length) * 100);
@@ -557,13 +607,15 @@ function ApprovalProgressBar({ steps }: { steps: ApprovalStep[] }) {
           <p className="mt-1 text-xs text-slate-500">
             {rejectedIndex >= 0
               ? `تم إيقاف المسار عند مرحلة ${roleLabels[orderedSteps[rejectedIndex].role] ?? orderedSteps[rejectedIndex].role}`
+              : returnedIndex >= 0
+                ? `تم إرجاع الطلب للتعديل من مرحلة ${roleLabels[orderedSteps[returnedIndex].role] ?? orderedSteps[returnedIndex].role}`
               : currentIndex >= 0
                 ? `الموافقة وصلت إلى مرحلة ${roleLabels[orderedSteps[currentIndex].role] ?? orderedSteps[currentIndex].role}`
                 : "اكتملت جميع مراحل الموافقة"}
           </p>
         </div>
-        <span className={`rounded-md px-3 py-1 text-xs font-bold ${rejectedIndex >= 0 ? "bg-red-50 text-red-700" : currentIndex >= 0 ? "bg-amber-50 text-amber-700" : "bg-bank-50 text-bank-700"}`}>
-          {rejectedIndex >= 0 ? "مرفوض" : currentIndex >= 0 ? `نسبة الإنجاز ${progressPercent}%` : "مكتمل"}
+        <span className={`rounded-md px-3 py-1 text-xs font-bold ${rejectedIndex >= 0 ? "bg-red-50 text-red-700" : returnedIndex >= 0 || currentIndex >= 0 ? "bg-amber-50 text-amber-700" : "bg-bank-50 text-bank-700"}`}>
+          {rejectedIndex >= 0 ? "مرفوض" : returnedIndex >= 0 ? "معاد للتعديل" : currentIndex >= 0 ? `نسبة الإنجاز ${progressPercent}%` : "مكتمل"}
         </span>
       </div>
 
@@ -653,6 +705,15 @@ function getStepState(step: ApprovalStep, index: number, currentIndex: number, r
       ring: "border-red-600 text-red-700",
       text: "text-red-700",
       icon: <XCircle className="h-5 w-5" />
+    };
+  }
+
+  if (step.action === "returned_for_edit") {
+    return {
+      label: "أعيد للتعديل",
+      ring: "border-amber-600 text-amber-700",
+      text: "text-amber-700",
+      icon: <RotateCcw className="h-5 w-5" />
     };
   }
 

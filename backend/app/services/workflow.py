@@ -4,7 +4,8 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.enums import ApprovalAction, RequestStatus, RequestType, UserRole
-from app.models.request import ApprovalStep, ServiceRequest
+from app.models.request import ApprovalStep, RequestApprovalStep, ServiceRequest
+from app.models.settings import WorkflowTemplate, WorkflowTemplateStep
 from app.models.user import User
 
 WORKFLOW_CHAINS: dict[RequestType, list[UserRole | str]] = {
@@ -60,17 +61,59 @@ def user_can_act(user: User, step: ApprovalStep) -> bool:
     }
 
 
+def step_can_return_for_edit(db: Session, request: ServiceRequest, step: ApprovalStep) -> bool:
+    if not request.request_type_id:
+        return False
+    return bool(
+        db.scalar(
+            select(WorkflowTemplateStep.can_return_for_edit)
+            .join(WorkflowTemplate, WorkflowTemplateStep.workflow_template_id == WorkflowTemplate.id)
+            .where(
+                WorkflowTemplate.request_type_id == request.request_type_id,
+                WorkflowTemplate.is_active == True,
+                WorkflowTemplateStep.is_active == True,
+                WorkflowTemplateStep.sort_order == step.step_order,
+                WorkflowTemplateStep.step_type == step.role,
+            )
+            .limit(1)
+        )
+    )
+
+
+def reset_workflow_for_resubmission(request: ServiceRequest) -> None:
+    for step in request.approvals:
+        step.action = ApprovalAction.PENDING
+        step.approver_id = None
+        step.note = None
+        step.acted_at = None
+    for snapshot in request.approval_snapshots:
+        snapshot.status = "pending" if snapshot.sort_order == min((item.sort_order for item in request.approval_snapshots), default=snapshot.sort_order) else "waiting"
+        snapshot.action_by = None
+        snapshot.action_at = None
+        snapshot.comments = None
+    request.status = RequestStatus.PENDING_APPROVAL
+    request.closed_at = None
+    request.sla_due_at = datetime.now(timezone.utc) + timedelta(hours=SLA_HOURS.get(request.request_type, 24))
+
+
 def advance_workflow(db: Session, request: ServiceRequest, actor: User, action: ApprovalAction, note: str | None) -> ApprovalStep:
     pending_step = next((step for step in sorted(request.approvals, key=lambda item: item.step_order) if step.action == ApprovalAction.PENDING), None)
     if pending_step is None:
         raise ValueError("No pending approval step")
     if not user_can_act(actor, pending_step):
         raise PermissionError("User cannot act on current step")
+    if action == ApprovalAction.RETURNED_FOR_EDIT and not step_can_return_for_edit(db, request, pending_step):
+        raise PermissionError("This step cannot return the request for editing")
 
     pending_step.action = action
     pending_step.approver_id = actor.id
     pending_step.note = note
     pending_step.acted_at = datetime.now(timezone.utc)
+
+    if action == ApprovalAction.RETURNED_FOR_EDIT:
+        request.status = RequestStatus.RETURNED_FOR_EDIT
+        request.closed_at = None
+        return pending_step
 
     if action == ApprovalAction.REJECTED:
         request.status = RequestStatus.REJECTED

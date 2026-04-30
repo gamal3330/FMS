@@ -105,6 +105,59 @@ def count_log_errors_last_24h() -> int:
     return total
 
 
+def recent_system_logs(db: Session, limit: int = 30) -> list[dict]:
+    logs: list[dict] = []
+    keywords = ("ERROR", "Traceback", "Exception", "CRITICAL", "sqlalchemy.exc")
+    log_candidates = [Path.cwd() / "uvicorn.err.log", Path.cwd().parent / "backend" / "uvicorn.err.log"]
+
+    for path in log_candidates:
+        if not path.exists():
+            continue
+        try:
+            lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+        except OSError:
+            continue
+        for line_number, line in reversed(list(enumerate(lines, start=1))):
+            message = line.strip()
+            if not message or not any(keyword in message for keyword in keywords):
+                continue
+            severity = "critical" if "CRITICAL" in message or "Traceback" in message else "warning"
+            logs.append(
+                {
+                    "id": f"{path.name}-{line_number}",
+                    "source": path.name,
+                    "severity": severity,
+                    "message": message[:600],
+                    "occurred_at": format_dt(datetime.fromtimestamp(path.stat().st_mtime)),
+                    "reference": f"line {line_number}",
+                }
+            )
+            if len(logs) >= limit:
+                break
+        if len(logs) >= limit:
+            break
+
+    audit_errors = db.scalars(
+        select(AuditLog)
+        .where(AuditLog.action.ilike("%error%"))
+        .order_by(AuditLog.created_at.desc(), AuditLog.id.desc())
+        .limit(limit)
+    ).all()
+    for audit in audit_errors:
+        logs.append(
+            {
+                "id": f"audit-{audit.id}",
+                "source": "audit_logs",
+                "severity": "warning",
+                "message": audit.action,
+                "occurred_at": format_dt(audit.created_at),
+                "reference": audit.entity_type or "-",
+            }
+        )
+
+    return sorted(logs, key=lambda item: item.get("occurred_at") or "", reverse=True)[:limit]
+
+
 def check_status_from_thresholds(value: int | float, warning: int | float, critical: int | float) -> str:
     if value > critical:
         return "critical"
@@ -289,6 +342,7 @@ def enrich_summary(db: Session, summary: dict) -> dict:
             }
             for alert in alerts
         ],
+        "system_logs": recent_system_logs(db),
     }
 
 

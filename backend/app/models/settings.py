@@ -29,6 +29,7 @@ class SettingsGeneral(Base):
     logo_url: Mapped[str | None] = mapped_column(String(255))
     brand_color: Mapped[str] = mapped_column(String(7), default="#0d6337")
     language: Mapped[str] = mapped_column(String(20), default="Arabic")
+    timezone: Mapped[str] = mapped_column(String(80), default="Asia/Qatar")
     session_timeout_minutes: Mapped[int] = mapped_column(Integer, default=60)
     upload_max_file_size_mb: Mapped[int] = mapped_column(Integer, default=10)
     allowed_file_extensions: Mapped[str] = mapped_column(String(255), default="pdf,docx,xlsx,png,jpg")

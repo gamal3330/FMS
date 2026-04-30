@@ -1,12 +1,13 @@
 const DEFAULT_BRAND_COLOR = "#0d6337";
 
-export function applyBranding(settings: { system_name?: string; logo_url?: string | null; brand_color?: string | null }) {
+export function applyBranding(settings: { system_name?: string; logo_url?: string | null; brand_color?: string | null; timezone?: string | null }) {
   if (settings.system_name) {
     localStorage.setItem("qib_system_name", settings.system_name);
     document.title = settings.system_name;
   }
   if (settings.logo_url) localStorage.setItem("qib_logo_url", settings.logo_url);
   else if ("logo_url" in settings) localStorage.removeItem("qib_logo_url");
+  if (settings.timezone) localStorage.setItem("qib_timezone", settings.timezone);
   applyBrandColor(settings.brand_color || localStorage.getItem("qib_brand_color") || DEFAULT_BRAND_COLOR);
   window.dispatchEvent(new Event("qib-settings-updated"));
 }

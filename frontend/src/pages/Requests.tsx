@@ -1,6 +1,7 @@
 import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
-import { FilePlus2, Laptop, Mail, Network, RefreshCw, Router, Save, Send, Shield, Ticket, Upload } from "lucide-react";
+import { FilePlus2, Laptop, Mail, Network, RefreshCw, Router, RotateCcw, Save, Send, Shield, Ticket, Upload } from "lucide-react";
 import { API_BASE, apiFetch, ServiceRequest } from "../lib/api";
+import { formatSystemDate } from "../lib/datetime";
 import { Button } from "../components/ui/button";
 import { Card } from "../components/ui/card";
 import FeedbackDialog from "../components/ui/FeedbackDialog";
@@ -194,6 +195,7 @@ const statusLabels: Record<string, string> = {
   draft: "مسودة",
   submitted: "مرسل",
   pending_approval: "بانتظار الموافقة",
+  returned_for_edit: "معاد للتعديل",
   approved: "معتمد",
   rejected: "مرفوض",
   in_implementation: "قيد التنفيذ",
@@ -216,6 +218,7 @@ export function Requests() {
   const [isLoading, setIsLoading] = useState(true);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const [editingRequestId, setEditingRequestId] = useState<number | null>(null);
 
   const availableRequestTypes = useMemo(() => managedRequestTypes, [managedRequestTypes]);
   const selectedType = useMemo(
@@ -322,14 +325,27 @@ export function Requests() {
 
     try {
       const payload = buildRequestPayload();
-      const created = await apiFetch<{ id: number }>(selectedType.requestTypeId ? "/requests/dynamic" : "/requests", {
-        method: "POST",
-        body: JSON.stringify(payload)
-      });
-      if (attachment && created?.id) {
-        await uploadAttachment(created.id, attachment);
+      if (editingRequestId) {
+        await apiFetch<ServiceRequest>(`/requests/${editingRequestId}`, {
+          method: "PATCH",
+          body: JSON.stringify(payload)
+        });
+        if (attachment) {
+          await uploadAttachment(editingRequestId, attachment);
+        }
+        await apiFetch<ServiceRequest>(`/requests/${editingRequestId}/resubmit`, { method: "POST" });
+        setMessage("تم تحديث الطلب وإعادة إرساله إلى مسار الموافقات.");
+        setEditingRequestId(null);
+      } else {
+        const created = await apiFetch<{ id: number }>(selectedType.requestTypeId ? "/requests/dynamic" : "/requests", {
+          method: "POST",
+          body: JSON.stringify(payload)
+        });
+        if (attachment && created?.id) {
+          await uploadAttachment(created.id, attachment);
+        }
+        setMessage("تم إرسال الطلب بنجاح وإضافته إلى مسار الموافقات.");
       }
-      setMessage("تم إرسال الطلب بنجاح وإضافته إلى مسار الموافقات.");
       resetForm();
       await loadRequests();
     } catch {
@@ -337,6 +353,24 @@ export function Requests() {
     } finally {
       setIsSubmitting(false);
     }
+  }
+
+  function beginEditReturnedRequest(item: ServiceRequest) {
+    const nextType =
+      availableRequestTypes.find((type) => type.requestTypeId === item.request_type_id) ??
+      availableRequestTypes.find((type) => type.value === item.request_type || type.code === item.form_data?.request_type_code) ??
+      availableRequestTypes[0];
+    if (!nextType) return;
+    setEditingRequestId(item.id);
+    setRequestType(nextType.value);
+    setTitle(item.title);
+    setPriority(item.priority as Priority);
+    setBusinessJustification(item.business_justification || "");
+    setAttachment(null);
+    setFormData({ ...(item.form_data || {}) });
+    setMessage("");
+    setError("");
+    window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
   function buildRequestPayload() {
@@ -412,6 +446,7 @@ export function Requests() {
             <div>
               <h3 className="font-bold text-slate-950">بيانات الطلب</h3>
               <p className="text-sm text-slate-500">{selectedType.description}</p>
+              {editingRequestId && <p className="mt-1 text-xs font-bold text-amber-700">وضع تعديل طلب معاد: سيتم إعادة إرساله للموافقات بعد الحفظ.</p>}
             </div>
           </div>
 
@@ -500,9 +535,9 @@ export function Requests() {
             <div className="flex flex-col gap-3 sm:flex-row">
               <Button type="submit" disabled={isSubmitting} className="gap-2">
                 <Send className="h-4 w-4" />
-                {isSubmitting ? "جاري الإرسال..." : "إرسال الطلب"}
+                {isSubmitting ? "جاري الإرسال..." : editingRequestId ? "حفظ وإعادة إرسال" : "إرسال الطلب"}
               </Button>
-              <button type="button" onClick={() => resetForm()} className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+              <button type="button" onClick={() => { setEditingRequestId(null); resetForm(); }} className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50">
                 <Save className="h-4 w-4" />
                 تفريغ النموذج
               </button>
@@ -517,7 +552,7 @@ export function Requests() {
           </div>
 
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[760px] text-sm">
+            <table className="w-full min-w-[860px] text-sm">
               <thead className="bg-slate-50 text-slate-500">
                 <tr>
                   <th className="p-3 text-right">رقم الطلب</th>
@@ -527,12 +562,13 @@ export function Requests() {
                   <th className="p-3 text-right">الحالة</th>
                   <th className="p-3 text-right">الأولوية</th>
                   <th className="p-3 text-right">تاريخ الإنشاء</th>
+                  <th className="p-3 text-right">الإجراء</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {items.length === 0 && (
                   <tr>
-                    <td colSpan={7} className="p-6 text-center text-slate-500">لا توجد طلبات لعرضها حالياً.</td>
+                    <td colSpan={8} className="p-6 text-center text-slate-500">لا توجد طلبات لعرضها حالياً.</td>
                   </tr>
                 )}
                 {items.map((item) => (
@@ -543,7 +579,21 @@ export function Requests() {
                     <td className="p-3">{requestSectionLabel(item)}</td>
                     <td className="p-3">{statusLabels[item.status] ?? item.status}</td>
                     <td className="p-3">{priorities.find((type) => type.value === item.priority)?.label ?? item.priority}</td>
-                    <td className="p-3">{new Date(item.created_at).toLocaleDateString("ar-QA")}</td>
+                    <td className="p-3">{formatSystemDate(item.created_at)}</td>
+                    <td className="p-3">
+                      {item.status === "returned_for_edit" ? (
+                        <button
+                          type="button"
+                          onClick={() => beginEditReturnedRequest(item)}
+                          className="inline-flex h-9 items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 text-xs font-bold text-amber-700 hover:bg-amber-100"
+                        >
+                          <RotateCcw className="h-4 w-4" />
+                          تعديل وإعادة إرسال
+                        </button>
+                      ) : (
+                        <span className="text-xs text-slate-400">-</span>
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>

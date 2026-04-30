@@ -73,6 +73,15 @@ BACKUP_SETTINGS_KEY = "backup_settings"
 DEFAULT_BACKUP_SETTINGS = BackupSettingsPayload().model_dump()
 
 
+def database_reset_plan() -> list[dict[str, int | str]]:
+    plan = []
+    with engine.connect() as connection:
+        for table in reversed(Base.metadata.sorted_tables):
+            count = connection.execute(text(f'SELECT COUNT(*) FROM "{table.name}"')).scalar_one()
+            plan.append({"table": table.name, "rows": int(count or 0)})
+    return plan
+
+
 def require_super_admin_token(token: str = Depends(oauth2_scheme)) -> dict:
     try:
       payload = decode_access_token(token)
@@ -144,7 +153,7 @@ def get_public_profile(db: Session = Depends(get_db)):
     item = get_or_create_singleton(db, SettingsGeneral)
     db.commit()
     db.refresh(item)
-    return {"system_name": item.system_name, "language": item.language, "logo_url": item.logo_url, "brand_color": item.brand_color}
+    return {"system_name": item.system_name, "language": item.language, "timezone": item.timezone, "logo_url": item.logo_url, "brand_color": item.brand_color}
 
 
 @router.get("/general-profile", response_model=SettingsGeneralRead)
@@ -329,6 +338,16 @@ def get_database_status(_: User = SettingsActor):
         "exists": exists,
         "size_bytes": database_path.stat().st_size if exists else 0,
         "updated_at": datetime.fromtimestamp(database_path.stat().st_mtime).isoformat() if exists else None,
+    }
+
+
+@router.get("/database/reset-preview")
+def get_database_reset_preview(_: dict = Depends(require_super_admin_token)):
+    tables = database_reset_plan()
+    return {
+        "tables": tables,
+        "table_count": len(tables),
+        "total_rows": sum(item["rows"] for item in tables),
     }
 
 

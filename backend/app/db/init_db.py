@@ -67,6 +67,7 @@ def ensure_sqlite_dev_columns(db: Session) -> None:
         "settings_general": {
             "logo_url": "VARCHAR(255)",
             "brand_color": "VARCHAR(7) DEFAULT '#0d6337'",
+            "timezone": "VARCHAR(80) DEFAULT 'Asia/Qatar'",
         },
         "service_requests": {
             "request_type_id": "INTEGER",

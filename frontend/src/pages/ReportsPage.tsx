@@ -4,6 +4,7 @@ import { Card } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { api } from "../lib/axios";
 import { apiFetch, ServiceRequest } from "../lib/api";
+import { formatSystemDate } from "../lib/datetime";
 
 const statusLabels: Record<string, string> = {
   draft: "مسودة",
@@ -180,7 +181,7 @@ export function ReportsPage() {
                   <td className="p-3">{request.requester.full_name_ar}</td>
                   <td className="p-3">{typeLabel(request)}</td>
                   <td className="p-3">{statusLabels[request.status] ?? request.status}</td>
-                  <td className="p-3">{new Date(request.created_at).toLocaleDateString("ar-QA")}</td>
+                  <td className="p-3">{formatSystemDate(request.created_at)}</td>
                 </tr>
               ))}
             </tbody>

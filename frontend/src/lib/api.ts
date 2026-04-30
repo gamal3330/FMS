@@ -1,8 +1,8 @@
 export const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000/api/v1";
 
-export type RequestStatus = "draft" | "submitted" | "pending_approval" | "approved" | "rejected" | "in_implementation" | "completed" | "closed" | "cancelled";
+export type RequestStatus = "draft" | "submitted" | "pending_approval" | "returned_for_edit" | "approved" | "rejected" | "in_implementation" | "completed" | "closed" | "cancelled";
 
-export type ApprovalAction = "pending" | "approved" | "rejected" | "skipped";
+export type ApprovalAction = "pending" | "approved" | "rejected" | "returned_for_edit" | "skipped";
 
 export type UserRole =
   | "employee"
@@ -32,8 +32,10 @@ export interface ApprovalStep {
   step_order: number;
   role: string;
   action: ApprovalAction;
+  can_return_for_edit?: boolean;
   note?: string | null;
   acted_at?: string | null;
+  approver?: CurrentUser | null;
 }
 
 export interface RequestComment {

@@ -130,7 +130,7 @@ export default function HealthMonitoringPage() {
             <p className="text-sm font-semibold text-bank-700">الإعدادات</p>
             <h2 className="mt-2 text-2xl font-bold text-slate-950">مراقبة صحة النظام</h2>
             <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
-              متابعة حالة الخادم وقاعدة البيانات والتخزين والنسخ الاحتياطي والتنبيهات من داخل النظام فقط.
+              متابعة حالة الخادم وقاعدة البيانات والتخزين والنسخ الاحتياطي والسجلات من داخل النظام فقط.
             </p>
           </div>
           <Button type="button" onClick={runChecks} disabled={running || loading} className="gap-2 self-start">
@@ -192,24 +192,24 @@ export default function HealthMonitoringPage() {
 
             <Card className="overflow-hidden">
               <div className="border-b border-slate-200 p-4">
-                <h3 className="font-bold text-slate-950">التنبيهات</h3>
+                <h3 className="font-bold text-slate-950">السجلات</h3>
               </div>
               <div className="divide-y divide-slate-100">
-                {(summary?.alerts || []).map((alert) => (
-                  <div key={alert.id} className="p-4">
-                    <div className="flex items-start justify-between gap-3">
-                      <StatusBadge status={alert.severity} />
-                      <span className={`rounded-full px-2 py-1 text-xs font-semibold ${alert.is_resolved ? "bg-slate-100 text-slate-600" : "bg-red-50 text-red-700"}`}>
-                        {alert.is_resolved ? "تم الحل" : "نشط"}
-                      </span>
+                {(summary?.system_logs || []).map((log) => (
+                  <div key={log.id} className="p-4">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <StatusBadge status={log.severity} />
+                      <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-600">{log.source}</span>
                     </div>
-                    <p className="mt-3 text-sm font-semibold text-slate-900">{alert.message}</p>
-                    <p className="mt-2 text-xs text-slate-500">تاريخ الإنشاء: {alert.created_at || "-"}</p>
-                    {alert.resolved_at && <p className="mt-1 text-xs text-slate-500">تاريخ الحل: {alert.resolved_at}</p>}
+                    <p className="mt-3 whitespace-pre-wrap break-words text-sm font-semibold leading-6 text-slate-900">{log.message}</p>
+                    <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-500">
+                      <span>الوقت: {log.occurred_at || "-"}</span>
+                      <span>المرجع: {log.reference || "-"}</span>
+                    </div>
                   </div>
                 ))}
-                {!summary?.alerts?.length && (
-                  <div className="p-6 text-center text-sm text-slate-500">لا توجد تنبيهات حالياً.</div>
+                {!summary?.system_logs?.length && (
+                  <div className="p-6 text-center text-sm text-slate-500">لا توجد أخطاء مسجلة حالياً.</div>
                 )}
               </div>
             </Card>
