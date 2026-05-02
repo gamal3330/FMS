@@ -333,7 +333,7 @@ class RequestPdfBuilder:
         return self.stream
 
     def draw_approval_circles(self, steps: list[ApprovalStep]) -> None:
-        self.page_break(145)
+        self.page_break(175)
         if not steps:
             self.text("لا يوجد مسار موافقات مسجل.", self.right, self.y, 11)
             self.y -= 24
@@ -380,8 +380,14 @@ class RequestPdfBuilder:
             role = label(step.role, ROLE_LABELS)
             self.text(role[:18], x + 28, circle_y - 31, 8)
             self.muted_text(label(step.action, ACTION_LABELS), x + 28, circle_y - 45, 7)
+            if step.acted_at or step.approver:
+                approver_name = "-"
+                if step.approver:
+                    approver_name = step.approver.full_name_ar or step.approver.email or "-"
+                self.muted_text(f"بواسطة: {approver_name}"[:34], x + 28, circle_y - 59, 6)
+                self.muted_text(f"في: {format_pdf_datetime(step.acted_at, self.tz)}", x + 28, circle_y - 71, 6)
 
-        self.y -= 90
+        self.y -= 120
 
 
 def scoped_requests_stmt(stmt, current_user: User):

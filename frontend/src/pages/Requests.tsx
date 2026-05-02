@@ -1,6 +1,6 @@
 import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
 import { FilePlus2, Laptop, Mail, Network, RefreshCw, Router, RotateCcw, Save, Send, Shield, Ticket, Upload } from "lucide-react";
-import { API_BASE, apiFetch, ServiceRequest } from "../lib/api";
+import { API_BASE, apiFetch, CurrentUser, ServiceRequest } from "../lib/api";
 import { formatSystemDate } from "../lib/datetime";
 import { Button } from "../components/ui/button";
 import { Card } from "../components/ui/card";
@@ -219,6 +219,7 @@ export function Requests() {
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [editingRequestId, setEditingRequestId] = useState<number | null>(null);
+  const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
 
   const availableRequestTypes = useMemo(() => managedRequestTypes, [managedRequestTypes]);
   const selectedType = useMemo(
@@ -307,6 +308,7 @@ export function Requests() {
     resetForm("vpn_remote_access");
     loadActiveRequestTypes();
     loadRequests();
+    apiFetch<CurrentUser>("/auth/me").then(setCurrentUser).catch(() => setCurrentUser(null));
   }, []);
 
   function handleTypeChange(event: ChangeEvent<HTMLSelectElement>) {
@@ -581,7 +583,7 @@ export function Requests() {
                     <td className="p-3">{priorities.find((type) => type.value === item.priority)?.label ?? item.priority}</td>
                     <td className="p-3">{formatSystemDate(item.created_at)}</td>
                     <td className="p-3">
-                      {item.status === "returned_for_edit" ? (
+                      {item.status === "returned_for_edit" && currentUser?.id === item.requester?.id ? (
                         <button
                           type="button"
                           onClick={() => beginEditReturnedRequest(item)}

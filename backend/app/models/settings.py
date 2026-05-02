@@ -204,6 +204,8 @@ class NotificationSettings(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     smtp_host: Mapped[str | None] = mapped_column(String(160))
     smtp_port: Mapped[int] = mapped_column(Integer, default=587)
+    smtp_from_email: Mapped[str | None] = mapped_column(String(160))
+    smtp_from_name: Mapped[str | None] = mapped_column(String(160))
     smtp_username: Mapped[str | None] = mapped_column(String(160))
     smtp_password: Mapped[str | None] = mapped_column(String(255))
     smtp_tls: Mapped[bool] = mapped_column(Boolean, default=True)

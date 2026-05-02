@@ -126,6 +126,8 @@ class IntegrationConfigRead(IntegrationConfigPayload):
 class NotificationSettingsPayload(BaseModel):
     smtp_host: str | None = None
     smtp_port: int = Field(default=587, ge=1, le=65535)
+    smtp_from_email: str | None = None
+    smtp_from_name: str | None = None
     smtp_username: str | None = None
     smtp_password: str | None = None
     smtp_tls: bool = True

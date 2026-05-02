@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { AlertTriangle, Database, Download, LockKeyhole, RefreshCw, RotateCcw, Settings2, Upload } from "lucide-react";
+import { AlertTriangle, Database, Download, LockKeyhole, Mail, RefreshCw, RotateCcw, Settings2, Upload } from "lucide-react";
 import { api, getErrorMessage } from "../lib/axios";
 import { Card } from "../components/ui/card";
 import { Button } from "../components/ui/button";
@@ -10,6 +10,7 @@ import { formatSystemDateTime } from "../lib/datetime";
 
 const tabs = [
   ["general", "الإعدادات العامة", Settings2],
+  ["email", "البريد SMTP", Mail],
   ["security", "إعدادات الأمان", LockKeyhole],
   ["database", "قاعدة البيانات", Database]
 ];
@@ -44,6 +45,7 @@ export default function SettingsPage() {
         </Card>
         <Card className="p-5">
           {active === "general" && <Panel title="الإعدادات العامة"><GeneralSettings notify={notify} /></Panel>}
+          {active === "email" && <Panel title="إعدادات البريد SMTP"><EmailSettings notify={notify} /></Panel>}
           {active === "requestTypes" && <Panel title="أنواع الطلبات"><RequestTypesSettings notify={notify} /></Panel>}
           {active === "security" && <Panel title="إعدادات الأمان"><SecuritySettings notify={notify} /></Panel>}
           {active === "database" && <Panel title="قاعدة البيانات والنسخ الاحتياطي"><DatabaseSettings notify={notify} /></Panel>}
@@ -71,6 +73,113 @@ function RequestTypesSettings({ notify }) {
     try { await api.post("/request-types", form); notify("تم حفظ نوع الطلب"); await load(); } catch (error) { notify(getErrorMessage(error), "error"); }
   }
   return <div className="space-y-4"><form onSubmit={save} className="grid gap-3 md:grid-cols-4"><Input value={form.request_type} onChange={(e) => setForm({ ...form, request_type: e.target.value })} required /><Input value={form.label_ar} onChange={(e) => setForm({ ...form, label_ar: e.target.value })} required /><label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.is_enabled} onChange={(e) => setForm({ ...form, is_enabled: e.target.checked })} /> Enabled</label><label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.require_attachment} onChange={(e) => setForm({ ...form, require_attachment: e.target.checked })} /> Require Attachment</label><Button type="submit">حفظ</Button></form><SimpleError error={error} /><SimpleTable headers={["Type", "Arabic Label", "Enabled", "Attachment"]} rows={items.map((i) => [i.request_type, i.label_ar, i.is_enabled ? "Yes" : "No", i.require_attachment ? "Yes" : "No"])} /></div>;
+}
+
+const emailDefaults = {
+  smtp_host: "",
+  smtp_port: 587,
+  smtp_from_email: "",
+  smtp_from_name: "",
+  smtp_username: "",
+  smtp_password: "",
+  smtp_tls: true,
+  email_approvals: true,
+  email_rejections: true,
+  request_completed: true,
+  daily_summary: false
+};
+
+function EmailSettings({ notify }) {
+  const [form, setForm] = useState(emailDefaults);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    setLoading(true);
+    api.get("/settings/notifications")
+      .then(({ data }) => setForm({ ...emailDefaults, ...data, smtp_password: data.smtp_password || "" }))
+      .catch((error) => {
+        const message = getErrorMessage(error);
+        setError(message);
+        notify(message, "error");
+      })
+      .finally(() => setLoading(false));
+  }, []);
+
+  function update(field, value) {
+    setForm((current) => ({ ...current, [field]: value }));
+  }
+
+  async function save(event) {
+    event.preventDefault();
+    setSaving(true);
+    setError("");
+    try {
+      const payload = {
+        ...form,
+        smtp_port: Number(form.smtp_port || 587),
+        smtp_host: form.smtp_host || null,
+        smtp_from_email: form.smtp_from_email || null,
+        smtp_from_name: form.smtp_from_name || null,
+        smtp_username: form.smtp_username || null,
+        smtp_password: form.smtp_password || null
+      };
+      const { data } = await api.put("/settings/notifications", payload);
+      setForm({ ...emailDefaults, ...data, smtp_password: data.smtp_password || "" });
+      notify("تم حفظ إعدادات البريد SMTP");
+    } catch (error) {
+      const message = getErrorMessage(error);
+      setError(message);
+      notify(message, "error");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (loading) {
+    return <div className="rounded-md border border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">جاري تحميل إعدادات البريد...</div>;
+  }
+
+  return (
+    <form onSubmit={save} className="space-y-5 text-right" dir="rtl">
+      <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+        <div className="flex items-start gap-3">
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-bank-50 text-bank-700">
+            <Mail className="h-5 w-5" />
+          </span>
+          <div>
+            <p className="font-bold text-slate-950">ربط البريد الإلكتروني SMTP</p>
+            <p className="mt-1 text-sm leading-6 text-slate-500">تستخدم هذه البيانات لإرسال إشعارات الموافقات والرفض واكتمال الطلبات من بريد رسمي.</p>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-2">
+        <EmailField label="خادم SMTP" value={form.smtp_host || ""} onChange={(value) => update("smtp_host", value)} />
+        <EmailField label="منفذ SMTP" type="number" value={form.smtp_port} onChange={(value) => update("smtp_port", value)} />
+        <EmailField label="بريد الإرسال" type="email" value={form.smtp_from_email || ""} onChange={(value) => update("smtp_from_email", value)} />
+        <EmailField label="اسم المرسل" value={form.smtp_from_name || ""} onChange={(value) => update("smtp_from_name", value)} />
+        <EmailField label="اسم مستخدم SMTP" value={form.smtp_username || ""} onChange={(value) => update("smtp_username", value)} />
+        <EmailField label="كلمة مرور SMTP" type="password" value={form.smtp_password || ""} onChange={(value) => update("smtp_password", value)} />
+      </div>
+
+      <div className="grid gap-3 rounded-lg border border-slate-200 bg-white p-4 md:grid-cols-2">
+        <Toggle label="استخدام TLS" checked={Boolean(form.smtp_tls)} onChange={(value) => update("smtp_tls", value)} />
+        <Toggle label="إرسال إشعار عند الموافقة" checked={Boolean(form.email_approvals)} onChange={(value) => update("email_approvals", value)} />
+        <Toggle label="إرسال إشعار عند الرفض" checked={Boolean(form.email_rejections)} onChange={(value) => update("email_rejections", value)} />
+        <Toggle label="إرسال إشعار عند اكتمال الطلب" checked={Boolean(form.request_completed)} onChange={(value) => update("request_completed", value)} />
+        <Toggle label="إرسال ملخص يومي" checked={Boolean(form.daily_summary)} onChange={(value) => update("daily_summary", value)} />
+      </div>
+
+      {error && <p className="rounded-md bg-red-50 p-3 text-sm text-red-700">{error}</p>}
+
+      <div className="flex flex-wrap gap-3">
+        <Button type="submit" disabled={saving}>{saving ? "جاري الحفظ..." : "حفظ إعدادات البريد"}</Button>
+        <button type="button" onClick={() => setForm(emailDefaults)} className="h-10 rounded-md border border-slate-300 px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50">تفريغ الإعدادات</button>
+      </div>
+    </form>
+  );
 }
 
 function SecuritySettings({ notify }) {
@@ -365,6 +474,8 @@ function DatabaseSettings({ notify }) {
 
 function SimpleError({ error }) { return error ? <p className="rounded-md bg-red-50 p-3 text-sm text-red-700">{error}</p> : null; }
 function SimpleTable({ headers, rows }) { return <div className="overflow-x-auto rounded-md border"><table className="w-full min-w-[680px] text-sm"><thead className="bg-slate-50"><tr>{headers.map((h) => <th key={h} className="p-3 text-right">{h}</th>)}</tr></thead><tbody className="divide-y">{rows.map((r, i) => <tr key={i}>{r.map((c, j) => <td key={j} className="p-3">{c}</td>)}</tr>)}</tbody></table></div>; }
+function EmailField({ label, value, onChange, type = "text" }) { return <label className="block space-y-2 text-sm font-medium text-slate-700">{label}<Input type={type} value={value ?? ""} onChange={(event) => onChange(event.target.value)} /></label>; }
+function Toggle({ label, checked, onChange }) { return <label className="flex min-h-11 items-center justify-between gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 text-sm font-semibold text-slate-700"><span>{label}</span><input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} className="h-4 w-4 accent-bank-700" /></label>; }
 function LabeledInput({ label, ...props }) { return <label className="block space-y-2 text-sm font-medium text-slate-700">{label}<Input {...props} /></label>; }
 function MetricBox({ label, value }) { return <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm"><p className="text-xs font-bold text-slate-500">{label}</p><p className="mt-2 break-words text-lg font-black text-slate-950">{value}</p></div>; }
 function formatBytes(value) { if (!value) return "0 B"; const units = ["B", "KB", "MB", "GB"]; const index = Math.min(Math.floor(Math.log(value) / Math.log(1024)), units.length - 1); return `${(value / Math.pow(1024, index)).toFixed(index ? 1 : 0)} ${units[index]}`; }
