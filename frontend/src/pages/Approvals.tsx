@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import { AlertTriangle, CheckCircle2, Circle, Clock3, ExternalLink, FileCheck2, FileText, Filter, Image as ImageIcon, Paperclip, Printer, RefreshCw, RotateCcw, Search, Send, UserCheck, XCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Circle, Clock3, Download, ExternalLink, FileCheck2, FileText, Filter, Image as ImageIcon, Paperclip, RefreshCw, RotateCcw, Search, Send, UserCheck, XCircle } from "lucide-react";
 import { API_BASE, apiFetch, ApprovalAction, ApprovalStep, Attachment, CurrentUser, ServiceRequest } from "../lib/api";
 import { formatSystemDateTime } from "../lib/datetime";
 import { Button } from "../components/ui/button";
@@ -108,7 +108,7 @@ async function openAttachment(requestId: number, attachment: Attachment) {
   window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
-async function downloadRequestPdf(request: ServiceRequest) {
+async function handleRequestPdf(request: ServiceRequest, action: "preview" | "download") {
   const token = localStorage.getItem("qib_token");
   const response = await fetch(`${API_BASE}/requests/${request.id}/print.pdf`, {
     headers: {
@@ -118,14 +118,22 @@ async function downloadRequestPdf(request: ServiceRequest) {
   if (!response.ok) return;
   const blob = await response.blob();
   const url = URL.createObjectURL(blob);
-  const opened = window.open(url, "_blank", "noopener,noreferrer");
-  if (!opened) {
+  if (action === "preview") {
+    const opened = window.open(url, "_blank", "noopener,noreferrer");
+    if (!opened) {
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${request.request_number || "request"}.pdf`;
+      link.click();
+    }
+    window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  } else {
     const link = document.createElement("a");
     link.href = url;
     link.download = `${request.request_number || "request"}.pdf`;
     link.click();
+    URL.revokeObjectURL(url);
   }
-  window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
 function formatBytes(size?: number) {
@@ -371,11 +379,11 @@ export function Approvals() {
                     </span>
                     <button
                       type="button"
-                      onClick={() => downloadRequestPdf(selectedRequest)}
+                      onClick={() => handleRequestPdf(selectedRequest, "download")}
                       className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50"
                     >
-                      <Printer className="h-4 w-4" />
-                      طباعة PDF
+                      <Download className="h-4 w-4" />
+                      تحميل PDF
                     </button>
                   </div>
                 </div>

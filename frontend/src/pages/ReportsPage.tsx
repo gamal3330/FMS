@@ -1,5 +1,5 @@
 import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
-import { FileSpreadsheet, Filter, Printer, RefreshCw } from "lucide-react";
+import { Download, ExternalLink, Eye, FileSpreadsheet, Filter, RefreshCw, X } from "lucide-react";
 import { Card } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { api } from "../lib/axios";
@@ -39,7 +39,8 @@ export function ReportsPage() {
   const [requestTypes, setRequestTypes] = useState<ActiveRequestType[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isExporting, setIsExporting] = useState("");
-  const [printingId, setPrintingId] = useState<number | null>(null);
+  const [pdfAction, setPdfAction] = useState<{ id: number; action: "preview" | "download" } | null>(null);
+  const [viewedRequest, setViewedRequest] = useState<ServiceRequest | null>(null);
   const [error, setError] = useState("");
 
   async function loadRequests(event?: FormEvent) {
@@ -113,8 +114,8 @@ export function ReportsPage() {
     }
   }
 
-  async function printRequest(request: ServiceRequest) {
-    setPrintingId(request.id);
+  async function handleRequestPdf(request: ServiceRequest, action: "preview" | "download") {
+    setPdfAction({ id: request.id, action });
     setError("");
     try {
       const token = localStorage.getItem("qib_token");
@@ -126,18 +127,26 @@ export function ReportsPage() {
       if (!response.ok) throw new Error("print_failed");
       const blob = await response.blob();
       const url = URL.createObjectURL(blob);
-      const opened = window.open(url, "_blank", "noopener,noreferrer");
-      if (!opened) {
+      if (action === "preview") {
+        const opened = window.open(url, "_blank", "noopener,noreferrer");
+        if (!opened) {
+          const link = document.createElement("a");
+          link.href = url;
+          link.download = `${request.request_number || "request"}.pdf`;
+          link.click();
+        }
+        window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      } else {
         const link = document.createElement("a");
         link.href = url;
         link.download = `${request.request_number || "request"}.pdf`;
         link.click();
+        URL.revokeObjectURL(url);
       }
-      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
     } catch {
-      setError("تعذر طباعة الطلب. تحقق من صلاحياتك أو اتصال الخادم.");
+      setError("تعذر تجهيز ملف PDF. تحقق من صلاحياتك أو اتصال الخادم.");
     } finally {
-      setPrintingId(null);
+      setPdfAction(null);
     }
   }
 
@@ -147,6 +156,33 @@ export function ReportsPage() {
 
   return (
     <div className="space-y-5" dir="rtl">
+      {viewedRequest && (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm" role="dialog" aria-modal="true">
+          <div className="max-h-[88vh] w-full max-w-3xl overflow-y-auto rounded-lg border border-slate-200 bg-white p-5 shadow-xl">
+            <div className="mb-5 flex items-start justify-between gap-4">
+              <div>
+                <p className="text-sm font-semibold text-bank-700">{viewedRequest.request_number}</p>
+                <h3 className="mt-2 text-xl font-bold text-slate-950">{viewedRequest.title}</h3>
+                <p className="mt-1 text-sm text-slate-500">{viewedRequest.requester.full_name_ar} - {formatSystemDate(viewedRequest.created_at)}</p>
+              </div>
+              <button type="button" onClick={() => setViewedRequest(null)} className="flex h-9 w-9 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100" aria-label="إغلاق">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <div className="grid gap-3 md:grid-cols-2">
+              <Info label="نوع الطلب" value={typeLabel(viewedRequest)} />
+              <Info label="الحالة" value={statusLabels[viewedRequest.status] ?? viewedRequest.status} />
+              <Info label="الموظف" value={viewedRequest.requester.full_name_ar} />
+              <Info label="الإدارة" value={viewedRequest.department?.name_ar ?? "-"} />
+              <Info label="مبرر العمل" value={viewedRequest.business_justification || "-"} wide />
+              {Object.entries(viewedRequest.form_data ?? {})
+                .filter(([key]) => !["request_type_code", "request_type_label", "assigned_section", "administrative_section", "assigned_section_label", "administrative_section_label"].includes(key))
+                .map(([key, value]) => <Info key={key} label={key.replace(/_/g, " ")} value={String(value || "-")} />)}
+            </div>
+          </div>
+        </div>
+      )}
+
       <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
         <p className="text-sm font-semibold text-bank-700">التقارير</p>
         <h2 className="mt-2 text-2xl font-bold text-slate-950">تقارير الطلبات</h2>
@@ -211,15 +247,34 @@ export function ReportsPage() {
                   <td className="p-3">{statusLabels[request.status] ?? request.status}</td>
                   <td className="p-3">{formatSystemDate(request.created_at)}</td>
                   <td className="p-3">
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setViewedRequest(request)}
+                        className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-300 px-3 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
+                      >
+                        <Eye className="h-4 w-4" />
+                        عرض
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleRequestPdf(request, "preview")}
+                        disabled={pdfAction?.id === request.id}
+                        className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-300 px-3 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-60"
+                      >
+                        <ExternalLink className="h-4 w-4" />
+                        {pdfAction?.id === request.id && pdfAction.action === "preview" ? "جاري المعاينة..." : "معاينة"}
+                      </button>
                     <button
                       type="button"
-                      onClick={() => printRequest(request)}
-                      disabled={printingId === request.id}
+                        onClick={() => handleRequestPdf(request, "download")}
+                        disabled={pdfAction?.id === request.id}
                       className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-300 px-3 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-60"
                     >
-                      <Printer className="h-4 w-4" />
-                      {printingId === request.id ? "جاري الطباعة..." : "طباعة"}
+                        <Download className="h-4 w-4" />
+                        {pdfAction?.id === request.id && pdfAction.action === "download" ? "جاري التحميل..." : "تحميل"}
                     </button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -237,4 +292,13 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
 
 function Metric({ label, value }: { label: string; value: number }) {
   return <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm"><p className="text-sm text-slate-500">{label}</p><p className="mt-2 text-3xl font-bold text-slate-950">{value}</p></div>;
+}
+
+function Info({ label, value, wide = false }: { label: string; value: string; wide?: boolean }) {
+  return (
+    <div className={`rounded-md border border-slate-200 bg-slate-50 p-3 ${wide ? "md:col-span-2" : ""}`}>
+      <p className="text-xs font-semibold text-slate-500">{label}</p>
+      <p className="mt-1 break-words text-sm font-bold leading-6 text-slate-950">{value}</p>
+    </div>
+  );
 }
