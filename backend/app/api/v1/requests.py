@@ -63,6 +63,13 @@ ROLE_LABELS = {
     "execution": "التنفيذ",
 }
 FIELD_LABELS = {
+    "source_ip": "عنوان المصدر",
+    "destination_ip": "عنوان الوجهة",
+    "destination_port": "منفذ الوجهة",
+    "nat_port": "منفذ NAT",
+    "asset_tag": "رقم الجهاز",
+    "current_location": "الموقع الحالي",
+    "new_location": "الموقع الجديد",
     "assigned_section": "القسم المختص",
     "administrative_section": "القسم المختص",
     "assigned_section_label": "القسم المختص",
@@ -71,6 +78,14 @@ FIELD_LABELS = {
     "request_type_label": "نوع الطلب",
     "reason": "المبرر",
     "issue_description": "وصف المشكلة",
+}
+PDF_HIDDEN_FORM_KEYS = {
+    "request_type_code",
+    "request_type_label",
+    "assigned_section",
+    "administrative_section",
+    "assigned_section_label",
+    "administrative_section_label",
 }
 
 ALLOWED_CONTENT_TYPES = {
@@ -206,6 +221,20 @@ def hex_to_rgb(hex_value: str | None, fallback: tuple[float, float, float] = (0.
 
 def label(value: object, labels: dict[str, str]) -> str:
     return labels.get(str(value or ""), str(value or ""))
+
+
+def pdf_form_pairs(form_data: dict) -> list[tuple[str, object]]:
+    pairs: list[tuple[str, object]] = []
+    seen_labels = {"نوع الطلب", "القسم المختص"}
+    for key, value in form_data.items():
+        if key in PDF_HIDDEN_FORM_KEYS or value in (None, ""):
+            continue
+        field_label = FIELD_LABELS.get(key, key.replace("_", " "))
+        if field_label in seen_labels:
+            continue
+        seen_labels.add(field_label)
+        pairs.append((field_label, value))
+    return pairs
 
 
 def system_timezone(db: Session) -> ZoneInfo:
@@ -448,8 +477,7 @@ class RequestPdfBuilder:
             ("تاريخ الإنشاء", format_pdf_datetime(self.request.created_at, self.tz)),
             ("القسم المختص", form_data.get("assigned_section_label") or form_data.get("administrative_section_label") or form_data.get("assigned_section") or "-"),
         ]
-        for key, value in form_data.items():
-            values.append((FIELD_LABELS.get(key, key), value))
+        values.extend(pdf_form_pairs(form_data))
         self.pairs(values)
 
         self.section("مسار الموافقات")

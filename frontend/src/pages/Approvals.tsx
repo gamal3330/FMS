@@ -118,11 +118,14 @@ async function downloadRequestPdf(request: ServiceRequest) {
   if (!response.ok) return;
   const blob = await response.blob();
   const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = `${request.request_number || "request"}.pdf`;
-  link.click();
-  URL.revokeObjectURL(url);
+  const opened = window.open(url, "_blank", "noopener,noreferrer");
+  if (!opened) {
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${request.request_number || "request"}.pdf`;
+    link.click();
+  }
+  window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
 function formatBytes(size?: number) {

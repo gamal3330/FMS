@@ -36,9 +36,11 @@ export default function HealthMonitoringPage() {
   const [running, setRunning] = useState(false);
   const [clearingLogs, setClearingLogs] = useState(false);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
 
   async function load() {
     setError("");
+    setNotice("");
     setLoading(true);
     try {
       const { data } = await api.get("/health/summary");
@@ -52,6 +54,7 @@ export default function HealthMonitoringPage() {
 
   async function runChecks() {
     setError("");
+    setNotice("");
     setRunning(true);
     try {
       const { data } = await api.post("/health/run-checks");
@@ -66,10 +69,12 @@ export default function HealthMonitoringPage() {
   async function clearLogs() {
     if (!window.confirm("هل تريد محو السجلات المعروضة؟")) return;
     setError("");
+    setNotice("");
     setClearingLogs(true);
     try {
       const { data } = await api.post("/health/clear-logs");
       setSummary(data);
+      setNotice("تم محو السجلات بنجاح.");
     } catch (error) {
       setError(getErrorMessage(error));
     } finally {
@@ -158,6 +163,11 @@ export default function HealthMonitoringPage() {
       {error && (
         <div className="rounded-md border border-red-200 bg-red-50 p-4 text-sm font-semibold text-red-700">
           {error}
+        </div>
+      )}
+      {notice && (
+        <div className="rounded-md border border-emerald-200 bg-emerald-50 p-4 text-sm font-semibold text-emerald-800">
+          {notice}
         </div>
       )}
 
