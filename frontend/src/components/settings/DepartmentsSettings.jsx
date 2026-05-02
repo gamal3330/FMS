@@ -65,16 +65,16 @@ export default function DepartmentsSettings({ notify }) {
   return (
     <div className="space-y-5">
       <form onSubmit={save} className="grid gap-3 rounded-md border border-slate-200 p-4 md:grid-cols-3">
-        <Input placeholder="Department Name Arabic" value={form.name_ar} onChange={(event) => setForm({ ...form, name_ar: event.target.value })} required />
-        <Input placeholder="Department Name English" value={form.name_en} onChange={(event) => setForm({ ...form, name_en: event.target.value })} required />
-        <Input placeholder="Code" value={form.code ?? ""} onChange={(event) => setForm({ ...form, code: event.target.value })} required />
-        <Input placeholder="Manager ID" value={form.manager_id ?? ""} onChange={(event) => setForm({ ...form, manager_id: event.target.value })} />
+        <Input placeholder="اسم الإدارة بالعربية" value={form.name_ar} onChange={(event) => setForm({ ...form, name_ar: event.target.value })} required />
+        <Input placeholder="اسم الإدارة بالإنجليزية" value={form.name_en} onChange={(event) => setForm({ ...form, name_en: event.target.value })} required />
+        <Input placeholder="رمز الإدارة" value={form.code ?? ""} onChange={(event) => setForm({ ...form, code: event.target.value })} required />
+        <Input placeholder="رقم المدير" value={form.manager_id ?? ""} onChange={(event) => setForm({ ...form, manager_id: event.target.value })} />
         <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.is_active} onChange={(event) => setForm({ ...form, is_active: event.target.checked })} /> Active</label>
         <Button type="submit" className="gap-2"><Plus className="h-4 w-4" /> {editingId ? "حفظ التعديل" : "إضافة إدارة"}</Button>
       </form>
       <div className="relative">
         <Search className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-        <Input value={search} onChange={(event) => setSearch(event.target.value)} onKeyUp={load} placeholder="Search Department" className="pr-10" />
+        <Input value={search} onChange={(event) => setSearch(event.target.value)} onKeyUp={load} placeholder="البحث عن إدارة" className="pr-10" />
       </div>
       {error && <p className="rounded-md bg-red-50 p-3 text-sm text-red-700">{error}</p>}
       <Table headers={["Arabic", "English", "Code", "Manager", "Status", "Actions"]}>

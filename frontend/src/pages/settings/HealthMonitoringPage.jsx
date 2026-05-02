@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Activity, AlertTriangle, CheckCircle2, Clock, Database, HardDrive, RefreshCw, Server, XCircle } from "lucide-react";
+import { Activity, AlertTriangle, CheckCircle2, Clock, Database, HardDrive, RefreshCw, Server, Trash2, XCircle } from "lucide-react";
 import { api, getErrorMessage } from "../../lib/axios";
 import { Card } from "../../components/ui/card";
 import { Button } from "../../components/ui/button";
@@ -34,6 +34,7 @@ export default function HealthMonitoringPage() {
   const [summary, setSummary] = useState(null);
   const [loading, setLoading] = useState(true);
   const [running, setRunning] = useState(false);
+  const [clearingLogs, setClearingLogs] = useState(false);
   const [error, setError] = useState("");
 
   async function load() {
@@ -59,6 +60,20 @@ export default function HealthMonitoringPage() {
       setError(getErrorMessage(error));
     } finally {
       setRunning(false);
+    }
+  }
+
+  async function clearLogs() {
+    if (!window.confirm("هل تريد محو السجلات المعروضة؟")) return;
+    setError("");
+    setClearingLogs(true);
+    try {
+      const { data } = await api.post("/health/clear-logs");
+      setSummary(data);
+    } catch (error) {
+      setError(getErrorMessage(error));
+    } finally {
+      setClearingLogs(false);
     }
   }
 
@@ -191,8 +206,17 @@ export default function HealthMonitoringPage() {
             </Card>
 
             <Card className="overflow-hidden">
-              <div className="border-b border-slate-200 p-4">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 p-4">
                 <h3 className="font-bold text-slate-950">السجلات</h3>
+                <button
+                  type="button"
+                  onClick={clearLogs}
+                  disabled={clearingLogs || loading}
+                  className="inline-flex h-9 items-center gap-2 rounded-md border border-red-200 px-3 text-xs font-bold text-red-700 transition hover:bg-red-50 disabled:opacity-60"
+                >
+                  <Trash2 className="h-4 w-4" />
+                  {clearingLogs ? "جاري المحو..." : "محو السجلات"}
+                </button>
               </div>
               <div className="divide-y divide-slate-100">
                 {(summary?.system_logs || []).map((log) => (

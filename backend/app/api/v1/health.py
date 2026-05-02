@@ -6,7 +6,7 @@ import shutil
 import time
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import func, select, text
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session
 
@@ -88,7 +88,7 @@ def latest_backup_file() -> Path | None:
 
 
 def count_log_errors_last_24h() -> int:
-    log_candidates = [Path.cwd() / "uvicorn.err.log", Path.cwd().parent / "backend" / "uvicorn.err.log"]
+    log_candidates = system_log_candidates()
     keywords = ("ERROR", "Traceback", "Exception", "CRITICAL")
     cutoff = now_local() - timedelta(hours=24)
     total = 0
@@ -108,7 +108,7 @@ def count_log_errors_last_24h() -> int:
 def recent_system_logs(db: Session, limit: int = 30) -> list[dict]:
     logs: list[dict] = []
     keywords = ("ERROR", "Traceback", "Exception", "CRITICAL", "sqlalchemy.exc")
-    log_candidates = [Path.cwd() / "uvicorn.err.log", Path.cwd().parent / "backend" / "uvicorn.err.log"]
+    log_candidates = system_log_candidates()
 
     for path in log_candidates:
         if not path.exists():
@@ -156,6 +156,33 @@ def recent_system_logs(db: Session, limit: int = 30) -> list[dict]:
         )
 
     return sorted(logs, key=lambda item: item.get("occurred_at") or "", reverse=True)[:limit]
+
+
+def system_log_candidates() -> list[Path]:
+    candidates = [Path.cwd() / "uvicorn.err.log", Path.cwd().parent / "backend" / "uvicorn.err.log"]
+    unique: list[Path] = []
+    seen: set[Path] = set()
+    for path in candidates:
+        resolved = path.resolve()
+        if resolved not in seen:
+            seen.add(resolved)
+            unique.append(path)
+    return unique
+
+
+def clear_displayed_logs(db: Session) -> dict[str, int]:
+    cleared_files = 0
+    for path in system_log_candidates():
+        if not path.exists():
+            continue
+        try:
+            path.write_text("", encoding="utf-8")
+            cleared_files += 1
+        except OSError:
+            continue
+
+    deleted_audit_logs = db.execute(delete(AuditLog).where(AuditLog.action.ilike("%error%"))).rowcount or 0
+    return {"cleared_files": cleared_files, "deleted_audit_logs": int(deleted_audit_logs)}
 
 
 def check_status_from_thresholds(value: int | float, warning: int | float, critical: int | float) -> str:
@@ -357,5 +384,14 @@ def health_summary(db: Session = Depends(get_db), _: User = HealthActor):
 def run_checks(db: Session = Depends(get_db), actor: User = HealthActor):
     summary = run_health_checks(db)
     write_audit(db, "health_checks_run", "system_health", actor=actor, metadata={"status": summary["status"]})
+    db.commit()
+    return enrich_summary(db, summary)
+
+
+@router.post("/clear-logs")
+def clear_logs(db: Session = Depends(get_db), actor: User = HealthActor):
+    result = clear_displayed_logs(db)
+    write_audit(db, "system_logs_cleared", "system_health", actor=actor, metadata=result)
+    summary = run_health_checks(db)
     db.commit()
     return enrich_summary(db, summary)

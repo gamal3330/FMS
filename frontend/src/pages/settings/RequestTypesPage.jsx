@@ -11,7 +11,7 @@ import RequestTypesTable from "../../components/request-types/RequestTypesTable"
 import WorkflowBuilder from "../../components/request-types/WorkflowBuilder";
 import WorkflowPreview from "../../components/request-types/WorkflowPreview";
 
-const tabs = ["البيانات الأساسية", "الحقول", "مسار الموافقات", "الإعدادات المتقدمة"];
+const tabs = ["البيانات الأساسية", "الحقول", "مسار الموافقات", "معاينة الموافقات"];
 
 export default function RequestTypesPage() {
   const [items, setItems] = useState([]);
@@ -84,15 +84,23 @@ export default function RequestTypesPage() {
     }
   }
 
-  async function previewWorkflow() {
+  async function previewWorkflow(showNotice = true) {
     if (!selected) return;
     try {
       setWorkflowPreview((await api.get(`/request-types/${selected.id}/workflow/preview`)).data.steps);
-      notify("تم تحديث معاينة المسار");
+      if (showNotice) notify("تم تحديث معاينة المسار");
     } catch (error) {
       setDialog({ type: "error", message: getErrorMessage(error) });
     }
   }
+
+  useEffect(() => {
+    if (!selected?.id) {
+      setWorkflowPreview([]);
+      return;
+    }
+    previewWorkflow(false);
+  }, [selected?.id]);
 
   return (
     <section className="space-y-6" dir="rtl">
@@ -147,8 +155,8 @@ export default function RequestTypesPage() {
           </div>
           {activeTab === "البيانات الأساسية" && <RequestTypeForm value={selected} onSubmit={saveType} onCancel={() => undefined} />}
           {activeTab === "الحقول" && <DynamicFieldsBuilder requestTypeId={selected.id} notify={notify} />}
-          {activeTab === "مسار الموافقات" && <WorkflowBuilder requestTypeId={selected.id} notify={notify} />}
-          {activeTab === "الإعدادات المتقدمة" && <WorkflowPreview steps={workflowPreview} />}
+          {activeTab === "مسار الموافقات" && <WorkflowBuilder requestTypeId={selected.id} notify={notify} onWorkflowChange={() => previewWorkflow(false)} />}
+          {activeTab === "معاينة الموافقات" && <WorkflowPreview steps={workflowPreview} />}
         </Card>
       )}
 

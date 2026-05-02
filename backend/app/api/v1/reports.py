@@ -56,12 +56,19 @@ def label(value, labels: dict[str, str]) -> str:
 
 def register_arabic_font() -> str:
     candidates = [
+        Path("/Library/Fonts/Tajawal-Regular.ttf"),
+        Path("/System/Library/Fonts/Supplemental/Tajawal-Regular.ttf"),
+        Path("/usr/share/fonts/truetype/tajawal/Tajawal-Regular.ttf"),
         Path("C:/Windows/Fonts/tajawal.ttf"),
         Path("C:/Windows/Fonts/Tajawal-Regular.ttf"),
+        Path("/System/Library/Fonts/Supplemental/Arial Unicode.ttf"),
+        Path("/Library/Fonts/Arial Unicode.ttf"),
+        Path("/System/Library/Fonts/Supplemental/Arial.ttf"),
         Path("C:/Windows/Fonts/arial.ttf"),
         Path("C:/Windows/Fonts/tahoma.ttf"),
         Path("C:/Windows/Fonts/calibri.ttf"),
-        Path("/usr/share/fonts/truetype/tajawal/Tajawal-Regular.ttf"),
+        Path("/System/Library/Fonts/GeezaPro.ttc"),
+        Path("/System/Library/Fonts/SFArabic.ttf"),
         Path("/usr/share/fonts/truetype/noto/NotoNaskhArabic-Regular.ttf"),
         Path("/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf"),
         Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
@@ -168,13 +175,24 @@ def build_pdf_report(items: Iterable[ServiceRequest]) -> BytesIO:
     pdf.setTitle("تقرير الطلبات")
 
     right = A4[0] - 40
+    left = 40
     y = 800
     pdf.setFont(font_name, 15)
     pdf.drawRightString(right, y, rtl("تقرير طلبات خدمات تقنية المعلومات"))
 
     y -= 30
     pdf.setFont(font_name, 10)
-    pdf.drawRightString(right, y, rtl("رقم الطلب | العنوان | الموظف | الحالة"))
+    columns = [
+        ("رقم الطلب", right),
+        ("العنوان", right - 95),
+        ("الموظف", right - 265),
+        ("الحالة", left + 90),
+    ]
+    for header, x in columns:
+        pdf.drawRightString(x, y, rtl(header))
+
+    y -= 8
+    pdf.line(left, y, right, y)
 
     for row in report_rows(items)[:80]:
         y -= 22
@@ -182,9 +200,15 @@ def build_pdf_report(items: Iterable[ServiceRequest]) -> BytesIO:
             pdf.showPage()
             y = 800
             pdf.setFont(font_name, 10)
+            for header, x in columns:
+                pdf.drawRightString(x, y, rtl(header))
+            y -= 8
+            pdf.line(left, y, right, y)
         request_number, title, employee_name, _, _, status, _, _ = row
-        line = f"{request_number} | {title[:35]} | {employee_name[:25]} | {status}"
-        pdf.drawRightString(right, y, rtl(line))
+        pdf.drawRightString(right, y, str(request_number)[:18])
+        pdf.drawRightString(right - 95, y, rtl(title[:32]))
+        pdf.drawRightString(right - 265, y, rtl(employee_name[:24]))
+        pdf.drawRightString(left + 90, y, rtl(status))
 
     pdf.save()
     stream.seek(0)
