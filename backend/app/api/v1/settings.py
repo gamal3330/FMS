@@ -1,8 +1,10 @@
 from datetime import datetime
 import json
+import os
 from pathlib import Path
 import shutil
 import sqlite3
+import subprocess
 import tempfile
 import zipfile
 
@@ -73,7 +75,7 @@ settings = get_settings()
 BACKUP_SETTINGS_CATEGORY = "database"
 BACKUP_SETTINGS_KEY = "backup_settings"
 DEFAULT_BACKUP_SETTINGS = BackupSettingsPayload().model_dump()
-LOCAL_UPDATES_DIR = Path(settings.upload_dir) / "local_updates"
+LOCAL_UPDATES_DIR = (Path.cwd() / settings.upload_dir / "local_updates").resolve()
 LOCAL_UPDATE_MAX_BYTES = 1024 * 1024 * 1024
 LOCAL_UPDATE_REQUIRED_ROOTS = {"backend", "frontend", "scripts"}
 PROJECT_ROOT = Path.cwd().parent if Path.cwd().name == "backend" else Path.cwd()
@@ -165,6 +167,13 @@ def local_updates_dir() -> Path:
     return LOCAL_UPDATES_DIR
 
 
+def display_path(path: Path) -> str:
+    try:
+        return str(path.resolve().relative_to(PROJECT_ROOT.resolve()))
+    except ValueError:
+        return str(path.resolve())
+
+
 def local_update_metadata_path(package_path: Path) -> Path:
     return package_path.with_suffix(".json")
 
@@ -240,7 +249,7 @@ def local_update_package_path(package_id: str) -> Path:
     safe_id = Path(package_id).name
     if safe_id != package_id:
         raise HTTPException(status_code=400, detail="معرف حزمة التحديث غير صالح")
-    path = local_updates_dir() / f"{safe_id}.zip"
+    path = (local_updates_dir() / f"{safe_id}.zip").resolve()
     if not path.exists():
         raise HTTPException(status_code=404, detail="حزمة التحديث غير موجودة")
     return path
@@ -334,10 +343,10 @@ def backup_path_if_exists(path: Path, rollback_root: Path, relative_path: Path) 
         return None
     backup_path = rollback_root / relative_path
     if backup_path.exists():
-        return str(backup_path.relative_to(PROJECT_ROOT))
+        return display_path(backup_path)
     backup_path.parent.mkdir(parents=True, exist_ok=True)
     copy_path(path, backup_path)
-    return str(backup_path.relative_to(PROJECT_ROOT))
+    return display_path(backup_path)
 
 
 def apply_update_directory(source_root: Path, target_root: Path, rollback_root: Path, preserve_names: set[str]) -> dict:
@@ -366,7 +375,7 @@ def apply_update_directory(source_root: Path, target_root: Path, rollback_root: 
             continue
         target_item = target_root / source_item.name
         copy_path(source_item, target_item)
-        copied.append(str(target_item.relative_to(PROJECT_ROOT)))
+        copied.append(display_path(target_item))
 
     return {"copied": copied, "removed": removed, "backed_up": backed_up}
 
@@ -386,7 +395,7 @@ def apply_local_update_package(package_path: Path) -> dict:
         database_backup = rollback_root / "database" / database_path.name
         database_backup.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(database_path, database_backup)
-        backup_files.append(str(database_backup.relative_to(PROJECT_ROOT)))
+        backup_files.append(display_path(database_backup))
 
     with tempfile.TemporaryDirectory(prefix="qib-update-apply-") as temp:
         temp_path = Path(temp)
@@ -413,13 +422,17 @@ def apply_local_update_package(package_path: Path) -> dict:
         "applied": True,
         "applied_at": datetime.now().isoformat(),
         "version": preflight["version"],
-        "rollback_path": str(rollback_root.relative_to(PROJECT_ROOT)),
+        "rollback_path": display_path(rollback_root),
         "database_backup": backup_files[0] if backup_files else None,
         "backup_files": backup_files,
         "applied_roots": applied_roots,
         "restart_required": True,
         "message": "تم تطبيق ملفات التحديث. أعد تشغيل النظام يدويًا لتفعيل التغييرات.",
     }
+
+
+def restart_backend_script_path() -> Path:
+    return PROJECT_ROOT / "scripts" / "restart-backend.sh"
 
 
 @router.get("/public-profile")
@@ -724,6 +737,34 @@ def apply_local_update(package_id: str, db: Session = Depends(get_db), actor: Us
     )
     db.commit()
     return result
+
+
+@router.post("/local-updates/restart")
+def restart_local_backend(db: Session = Depends(get_db), actor: User = Depends(require_roles(UserRole.SUPER_ADMIN))):
+    script_path = restart_backend_script_path()
+    if not script_path.exists():
+        raise HTTPException(status_code=409, detail="سكريبت إعادة التشغيل غير موجود على هذا الخادم")
+
+    env = os.environ.copy()
+    env["PROJECT_ROOT"] = str(PROJECT_ROOT)
+    env["CURRENT_BACKEND_PID"] = str(os.getpid())
+    env.setdefault("BACKEND_PORT", "8000")
+
+    try:
+        subprocess.Popen(
+            ["bash", str(script_path)],
+            cwd=str(PROJECT_ROOT),
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail="تعذر تشغيل سكريبت إعادة التشغيل") from exc
+
+    write_audit(db, "local_update_restart_requested", "system_update", actor=actor, metadata={"script": str(script_path)})
+    db.commit()
+    return {"message": "تم إرسال أمر إعادة التشغيل. انتظر عدة ثوان ثم حدّث الصفحة.", "restart_requested": True}
 
 
 @router.get("/database/reset-preview")

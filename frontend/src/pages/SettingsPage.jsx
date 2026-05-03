@@ -480,6 +480,7 @@ function LocalUpdateSettings({ notify }) {
   const [busy, setBusy] = useState(false);
   const [preflightBusy, setPreflightBusy] = useState("");
   const [applyBusy, setApplyBusy] = useState("");
+  const [restartBusy, setRestartBusy] = useState(false);
   const [preflightResult, setPreflightResult] = useState(null);
   const [applyResult, setApplyResult] = useState(null);
 
@@ -548,7 +549,23 @@ function LocalUpdateSettings({ notify }) {
     }
   }
 
+  async function restartBackend() {
+    if (!window.confirm("سيتم إعادة تشغيل خدمة الباكند الآن. قد يتوقف النظام لعدة ثوان. هل تريد المتابعة؟")) return;
+    setRestartBusy(true);
+    try {
+      const { data } = await api.post("/settings/local-updates/restart");
+      notify(data.message || "تم إرسال أمر إعادة التشغيل");
+      window.setTimeout(() => {
+        window.location.reload();
+      }, 6000);
+    } catch (error) {
+      notify(getErrorMessage(error), "error");
+      setRestartBusy(false);
+    }
+  }
+
   const packages = status?.packages || [];
+  const needsRestart = packages.some((item) => String(item.status || "").includes("بانتظار إعادة التشغيل")) || Boolean(applyResult?.restart_required);
 
   return (
     <div className="min-w-0 space-y-5">
@@ -582,7 +599,8 @@ function LocalUpdateSettings({ notify }) {
       </form>
 
       <div className="rounded-lg border border-amber-200 bg-amber-50/60 p-4">
-        <div className="flex items-start gap-3">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex items-start gap-3">
           <AlertTriangle className="mt-1 h-5 w-5 shrink-0 text-amber-700" />
           <div>
             <h4 className="font-bold text-slate-950">ملاحظة مهمة</h4>
@@ -590,6 +608,11 @@ function LocalUpdateSettings({ notify }) {
               تطبيق التحديث يستبدل الملفات فقط ولا يعيد تشغيل النظام تلقائيًا. أعد تشغيل الخدمة يدويًا بعد نجاح التطبيق.
             </p>
           </div>
+          </div>
+          <Button type="button" onClick={restartBackend} disabled={restartBusy || !needsRestart} className="gap-2 bg-slate-900 hover:bg-slate-800 disabled:opacity-50">
+            <RefreshCw className={`h-4 w-4 ${restartBusy ? "animate-spin" : ""}`} />
+            {restartBusy ? "جاري إعادة التشغيل..." : "إعادة تشغيل الباكند"}
+          </Button>
         </div>
       </div>
 
@@ -675,6 +698,12 @@ function LocalUpdateSettings({ notify }) {
             <MetricBox label="النسخة" value={applyResult.version || "غير محدد"} />
             <MetricBox label="مسار rollback" value={applyResult.rollback_path || "-"} />
             <MetricBox label="نسخة قاعدة البيانات" value={applyResult.database_backup || "-"} />
+          </div>
+          <div className="mt-4 flex justify-end">
+            <Button type="button" onClick={restartBackend} disabled={restartBusy} className="gap-2 bg-slate-900 hover:bg-slate-800">
+              <RefreshCw className={`h-4 w-4 ${restartBusy ? "animate-spin" : ""}`} />
+              {restartBusy ? "جاري إعادة التشغيل..." : "إعادة تشغيل الباكند الآن"}
+            </Button>
           </div>
         </div>
       )}
