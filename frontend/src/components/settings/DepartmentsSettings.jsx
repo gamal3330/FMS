@@ -64,35 +64,83 @@ export default function DepartmentsSettings({ notify }) {
 
   return (
     <div className="space-y-5">
-      <form onSubmit={save} className="grid gap-3 rounded-md border border-slate-200 p-4 md:grid-cols-3">
-        <Input placeholder="اسم الإدارة بالعربية" value={form.name_ar} onChange={(event) => setForm({ ...form, name_ar: event.target.value })} required />
-        <Input placeholder="اسم الإدارة بالإنجليزية" value={form.name_en} onChange={(event) => setForm({ ...form, name_en: event.target.value })} required />
-        <Input placeholder="رمز الإدارة" value={form.code ?? ""} onChange={(event) => setForm({ ...form, code: event.target.value })} required />
-        <Input placeholder="رقم المدير" value={form.manager_id ?? ""} onChange={(event) => setForm({ ...form, manager_id: event.target.value })} />
-        <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.is_active} onChange={(event) => setForm({ ...form, is_active: event.target.checked })} /> Active</label>
-        <Button type="submit" className="gap-2"><Plus className="h-4 w-4" /> {editingId ? "حفظ التعديل" : "إضافة إدارة"}</Button>
+      <form onSubmit={save} className="space-y-4 rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="flex items-center justify-between gap-3">
+          <h3 className="text-lg font-bold text-slate-950">{editingId ? "تعديل إدارة" : "إضافة إدارة"}</h3>
+          {editingId && (
+            <button
+              type="button"
+              onClick={() => {
+                setForm(empty);
+                setEditingId(null);
+              }}
+              className="rounded-md border border-slate-300 px-3 py-2 text-sm font-bold"
+            >
+              إلغاء التعديل
+            </button>
+          )}
+        </div>
+
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <Field label="اسم الإدارة بالعربية">
+            <Input value={form.name_ar} onChange={(event) => setForm({ ...form, name_ar: event.target.value })} required />
+          </Field>
+          <Field label="اسم الإدارة بالإنجليزية">
+            <Input value={form.name_en} onChange={(event) => setForm({ ...form, name_en: event.target.value })} required />
+          </Field>
+          <Field label="رمز الإدارة">
+            <Input value={form.code ?? ""} onChange={(event) => setForm({ ...form, code: event.target.value })} placeholder="مثال: hr" required />
+          </Field>
+          <Field label="رقم المدير">
+            <Input value={form.manager_id ?? ""} onChange={(event) => setForm({ ...form, manager_id: event.target.value })} placeholder="اختياري" />
+          </Field>
+          <label className="flex h-10 items-center gap-2 self-end rounded-md border border-slate-200 bg-white px-3 text-sm font-semibold">
+            <input type="checkbox" checked={form.is_active} onChange={(event) => setForm({ ...form, is_active: event.target.checked })} />
+            إدارة نشطة
+          </label>
+        </div>
+
+        <div className="flex justify-end">
+          <Button type="submit" className="gap-2">
+            <Plus className="h-4 w-4" />
+            {editingId ? "حفظ التعديل" : "إضافة إدارة"}
+          </Button>
+        </div>
       </form>
       <div className="relative">
         <Search className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
         <Input value={search} onChange={(event) => setSearch(event.target.value)} onKeyUp={load} placeholder="البحث عن إدارة" className="pr-10" />
       </div>
       {error && <p className="rounded-md bg-red-50 p-3 text-sm text-red-700">{error}</p>}
-      <Table headers={["Arabic", "English", "Code", "Manager", "Status", "Actions"]}>
+      <Table headers={["اسم الإدارة بالعربية", "اسم الإدارة بالإنجليزية", "رمز الإدارة", "رقم المدير", "الحالة", "الإجراء"]}>
         {items.map((item) => (
           <tr key={item.id}>
             <td className="p-3">{item.name_ar}</td>
             <td className="p-3">{item.name_en}</td>
             <td className="p-3">{item.code}</td>
             <td className="p-3">{item.manager_id ?? "-"}</td>
-            <td className="p-3">{item.is_active ? "Active" : "Inactive"}</td>
+            <td className="p-3">
+              <span className={`rounded-md px-3 py-1 text-xs font-bold ${item.is_active ? "bg-bank-50 text-bank-700" : "bg-slate-100 text-slate-500"}`}>
+                {item.is_active ? "نشطة" : "متوقفة"}
+              </span>
+            </td>
             <td className="flex gap-2 p-3">
-              <button onClick={() => { setEditingId(item.id); setForm({ ...item, manager_id: item.manager_id ?? "" }); }} className="rounded-md border px-3 py-1 text-xs">Edit</button>
-              <button onClick={() => remove(item.id)} className="rounded-md border border-red-200 px-3 py-1 text-xs text-red-700"><Trash2 className="h-3 w-3" /></button>
+              <button onClick={() => { setEditingId(item.id); setForm({ ...item, manager_id: item.manager_id ?? "" }); }} className="rounded-md border border-slate-200 px-3 py-1 text-xs font-bold text-slate-700 hover:bg-slate-50">تعديل</button>
+              <button onClick={() => remove(item.id)} className="rounded-md border border-red-200 px-3 py-1 text-xs text-red-700 hover:bg-red-50"><Trash2 className="h-3 w-3" /></button>
             </td>
           </tr>
         ))}
       </Table>
     </div>
+  );
+}
+
+function Field({ label, children }) {
+  return (
+    <label className="block space-y-2">
+      <span className="text-xs font-bold">{label}</span>
+      {children}
+    </label>
   );
 }
 

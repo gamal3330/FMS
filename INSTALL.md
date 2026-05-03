@@ -42,7 +42,7 @@ brew install python@3.12 node expat
 ### Ubuntu / Debian Linux
 
 ```bash
-sudo apt update
+a
 sudo apt install -y python3 python3-venv python3-pip nodejs npm
 ```
 
