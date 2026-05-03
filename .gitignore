@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+
+# Virtual environments
+backend/.venv/
+backend/.venv-local/
+backend/.venv-mac/
+backend/.venv312/
+.venv/
+
+# Node / frontend
+frontend/node_modules/
+frontend/dist/
+
+# Local env files
+backend/.env
+frontend/.env
+.env
+
+# Local databases and runtime files
+backend/*.db
+backend/*.sqlite
+backend/*.sqlite3
+backend/uploads/
+backend/backups/
+backend/*.log
+*.log
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
