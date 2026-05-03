@@ -1,13 +1,19 @@
 # تثبيت النظام محلياً
 
-هذه الصفحة مخصصة لتثبيت وتشغيل نظام إدارة طلبات الخدمات التقنية على جهاز تطوير محلي بأمر واحد.
+هذه الصفحة مخصصة لتثبيت وتشغيل نظام إدارة طلبات الخدمات التقنية على جهاز تطوير محلي بأمر واحد على macOS أو Linux أو Windows.
 
-## الأمر المختصر
+## الأمر المختصر حسب نظام التشغيل
 
-من مجلد المشروع الرئيسي شغّل:
+### macOS / Linux
 
 ```bash
 bash scripts/install-local.sh
+```
+
+### Windows PowerShell
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/install-local.ps1
 ```
 
 يقوم الأمر تلقائياً بـ:
@@ -21,11 +27,39 @@ bash scripts/install-local.sh
 
 ## المتطلبات
 
-- Python 3.12 مفضل.
+- Python 3.12 مفضل، ويعمل غالباً مع Python 3.11 أيضاً.
 - Node.js و npm.
 - اتصال إنترنت عند أول تشغيل لتحميل الاعتماديات.
 
-على macOS، إذا واجهت مشكلة في حزمة Python أو PDF العربي، استخدم Python 3.12:
+## تثبيت المتطلبات
+
+### macOS
+
+```bash
+brew install python@3.12 node expat
+```
+
+### Ubuntu / Debian Linux
+
+```bash
+sudo apt update
+sudo apt install -y python3 python3-venv python3-pip nodejs npm
+```
+
+إذا كانت نسخة Node.js قديمة في مستودعات النظام، استخدم نسخة LTS من موقع Node.js أو من NodeSource.
+
+### Windows
+
+ثبت:
+
+- Python 3.12 من `https://www.python.org/downloads/`
+- Node.js LTS من `https://nodejs.org/`
+
+ثم افتح PowerShell داخل مجلد المشروع وشغّل أمر Windows أعلاه.
+
+## ملاحظات خاصة بـ macOS
+
+إذا واجهت مشكلة في حزمة Python أو PDF العربي، استخدم Python 3.12 و `expat`:
 
 ```bash
 brew install python@3.12 expat
@@ -61,8 +95,17 @@ BACKEND_PORT=8010 FRONTEND_PORT=5180 bash scripts/install-local.sh
 
 إذا أردت تحديد Python يدوياً:
 
+### macOS / Linux
+
 ```bash
 PYTHON_BIN=/opt/homebrew/bin/python3.12 bash scripts/install-local.sh
+```
+
+### Windows PowerShell
+
+```powershell
+$env:PYTHON_BIN="python"
+powershell -ExecutionPolicy Bypass -File scripts/install-local.ps1
 ```
 
 ## إيقاف النظام

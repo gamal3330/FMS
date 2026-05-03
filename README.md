@@ -4,10 +4,16 @@
 
 ## التثبيت السريع
 
-للتثبيت والتشغيل المحلي بأمر واحد:
+للتثبيت والتشغيل المحلي بأمر واحد على macOS أو Linux:
 
 ```bash
 bash scripts/install-local.sh
+```
+
+وعلى Windows PowerShell:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/install-local.ps1
 ```
 
 للتفاصيل وخيارات التشغيل راجع [INSTALL.md](INSTALL.md).
