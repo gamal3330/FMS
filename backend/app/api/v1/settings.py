@@ -1,8 +1,10 @@
 from datetime import datetime
+import json
 from pathlib import Path
 import shutil
 import sqlite3
 import tempfile
+import zipfile
 
 from uuid import uuid4
 
@@ -71,6 +73,9 @@ settings = get_settings()
 BACKUP_SETTINGS_CATEGORY = "database"
 BACKUP_SETTINGS_KEY = "backup_settings"
 DEFAULT_BACKUP_SETTINGS = BackupSettingsPayload().model_dump()
+LOCAL_UPDATES_DIR = Path(settings.upload_dir) / "local_updates"
+LOCAL_UPDATE_MAX_BYTES = 250 * 1024 * 1024
+LOCAL_UPDATE_REQUIRED_ROOTS = {"backend", "frontend", "scripts"}
 
 
 def database_reset_plan() -> list[dict[str, int | str]]:
@@ -146,6 +151,82 @@ def logo_upload_dir() -> Path:
 
 def logo_url(filename: str) -> str:
     return f"{settings.api_v1_prefix}/settings/logo/{filename}"
+
+
+def local_updates_dir() -> Path:
+    LOCAL_UPDATES_DIR.mkdir(parents=True, exist_ok=True)
+    return LOCAL_UPDATES_DIR
+
+
+def local_update_metadata_path(package_path: Path) -> Path:
+    return package_path.with_suffix(".json")
+
+
+def safe_zip_member_name(name: str) -> bool:
+    path = Path(name)
+    return not path.is_absolute() and ".." not in path.parts and bool(path.parts)
+
+
+def read_zip_text(zipped: zipfile.ZipFile, name: str, limit: int = 64 * 1024) -> str | None:
+    try:
+        with zipped.open(name) as stream:
+            content = stream.read(limit + 1)
+    except KeyError:
+        return None
+    if len(content) > limit:
+        return None
+    return content.decode("utf-8", errors="replace").strip()
+
+
+def analyze_local_update_zip(path: Path) -> dict:
+    try:
+        with zipfile.ZipFile(path) as zipped:
+            entries = [item for item in zipped.infolist() if not item.is_dir()]
+            if not entries:
+                raise HTTPException(status_code=400, detail="ملف التحديث فارغ")
+
+            unsafe_entries = [item.filename for item in entries if not safe_zip_member_name(item.filename)]
+            if unsafe_entries:
+                raise HTTPException(status_code=400, detail="ملف التحديث يحتوي على مسارات غير آمنة")
+
+            roots = {Path(item.filename).parts[0] for item in entries if Path(item.filename).parts}
+            missing_roots = sorted(LOCAL_UPDATE_REQUIRED_ROOTS - roots)
+            total_uncompressed = sum(max(item.file_size, 0) for item in entries)
+
+            manifest = None
+            version = None
+            manifest_text = read_zip_text(zipped, "update-manifest.json")
+            if manifest_text:
+                try:
+                    manifest = json.loads(manifest_text)
+                    version = manifest.get("version") or manifest.get("release")
+                except json.JSONDecodeError:
+                    raise HTTPException(status_code=400, detail="ملف update-manifest.json غير صالح")
+            if not version:
+                version = read_zip_text(zipped, "version.txt", limit=1024)
+
+            return {
+                "valid": not missing_roots,
+                "missing_roots": missing_roots,
+                "roots": sorted(roots),
+                "files_count": len(entries),
+                "compressed_size_bytes": path.stat().st_size,
+                "uncompressed_size_bytes": total_uncompressed,
+                "version": version or "غير محدد",
+                "manifest": manifest,
+            }
+    except zipfile.BadZipFile as exc:
+        raise HTTPException(status_code=400, detail="الملف المرفوع ليس ملف ZIP صالح") from exc
+
+
+def list_local_update_packages() -> list[dict]:
+    packages = []
+    for metadata_path in sorted(local_updates_dir().glob("*.json"), reverse=True):
+        try:
+            packages.append(json.loads(metadata_path.read_text(encoding="utf-8")))
+        except (OSError, json.JSONDecodeError):
+            continue
+    return packages[:10]
 
 
 @router.get("/public-profile")
@@ -339,6 +420,59 @@ def get_database_status(_: User = SettingsActor):
         "size_bytes": database_path.stat().st_size if exists else 0,
         "updated_at": datetime.fromtimestamp(database_path.stat().st_mtime).isoformat() if exists else None,
     }
+
+
+@router.get("/local-updates/status")
+def get_local_updates_status(_: User = Depends(require_roles(UserRole.SUPER_ADMIN))):
+    return {
+        "required_roots": sorted(LOCAL_UPDATE_REQUIRED_ROOTS),
+        "max_size_bytes": LOCAL_UPDATE_MAX_BYTES,
+        "packages": list_local_update_packages(),
+    }
+
+
+@router.post("/local-updates/upload")
+async def upload_local_update_package(file: UploadFile = File(...), db: Session = Depends(get_db), actor: User = Depends(require_roles(UserRole.SUPER_ADMIN))):
+    filename = Path(file.filename or "").name
+    if not filename.lower().endswith(".zip"):
+        raise HTTPException(status_code=400, detail="يجب رفع ملف تحديث بصيغة ZIP")
+
+    update_dir = local_updates_dir()
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    package_id = f"{timestamp}-{uuid4().hex[:8]}"
+    package_path = update_dir / f"{package_id}.zip"
+    temp_path = update_dir / f"{package_id}.tmp"
+
+    size = 0
+    try:
+        with temp_path.open("wb") as buffer:
+            while chunk := await file.read(1024 * 1024):
+                size += len(chunk)
+                if size > LOCAL_UPDATE_MAX_BYTES:
+                    raise HTTPException(status_code=400, detail="ملف التحديث أكبر من الحد المسموح")
+                buffer.write(chunk)
+
+        analysis = analyze_local_update_zip(temp_path)
+        if not analysis["valid"]:
+            missing = "، ".join(analysis["missing_roots"])
+            raise HTTPException(status_code=400, detail=f"ملف التحديث غير مكتمل. المجلدات الناقصة: {missing}")
+
+        temp_path.rename(package_path)
+        metadata = {
+            "id": package_id,
+            "original_filename": filename,
+            "stored_filename": package_path.name,
+            "uploaded_at": datetime.now().isoformat(),
+            "uploaded_by": actor.full_name_ar or actor.email,
+            "status": "جاهز للفحص النهائي",
+            **analysis,
+        }
+        local_update_metadata_path(package_path).write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+        write_audit(db, "local_update_uploaded", "system_update", actor=actor, metadata={"package_id": package_id, "filename": filename, "version": metadata["version"]})
+        db.commit()
+        return metadata
+    finally:
+        temp_path.unlink(missing_ok=True)
 
 
 @router.get("/database/reset-preview")

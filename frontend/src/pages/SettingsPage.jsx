@@ -12,7 +12,8 @@ const tabs = [
   ["general", "الإعدادات العامة", Settings2],
   ["email", "البريد SMTP", Mail],
   ["security", "إعدادات الأمان", LockKeyhole],
-  ["database", "قاعدة البيانات", Database]
+  ["database", "قاعدة البيانات", Database],
+  ["localUpdates", "التحديث المحلي", Upload]
 ];
 
 export default function SettingsPage() {
@@ -49,6 +50,7 @@ export default function SettingsPage() {
           {active === "requestTypes" && <Panel title="أنواع الطلبات"><RequestTypesSettings notify={notify} /></Panel>}
           {active === "security" && <Panel title="إعدادات الأمان"><SecuritySettings notify={notify} /></Panel>}
           {active === "database" && <Panel title="قاعدة البيانات والنسخ الاحتياطي"><DatabaseSettings notify={notify} /></Panel>}
+          {active === "localUpdates" && <Panel title="التحديث المحلي للنظام"><LocalUpdateSettings notify={notify} /></Panel>}
         </Card>
       </div>
     </section>
@@ -468,6 +470,125 @@ function DatabaseSettings({ notify }) {
         </div>
       </form>
 
+    </div>
+  );
+}
+
+function LocalUpdateSettings({ notify }) {
+  const [status, setStatus] = useState(null);
+  const [file, setFile] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  async function loadStatus() {
+    try {
+      setStatus((await api.get("/settings/local-updates/status")).data);
+    } catch (error) {
+      notify(getErrorMessage(error), "error");
+    }
+  }
+
+  useEffect(() => {
+    loadStatus();
+  }, []);
+
+  async function uploadPackage(event) {
+    event.preventDefault();
+    if (!file) {
+      notify("اختر ملف التحديث أولًا.", "error");
+      return;
+    }
+
+    setBusy(true);
+    try {
+      const body = new FormData();
+      body.append("file", file);
+      const { data } = await api.post("/settings/local-updates/upload", body, { headers: { "Content-Type": "multipart/form-data" } });
+      setFile(null);
+      notify(`تم رفع حزمة التحديث وفحصها بنجاح. النسخة: ${data.version || "غير محدد"}`);
+      await loadStatus();
+    } catch (error) {
+      notify(getErrorMessage(error), "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const packages = status?.packages || [];
+
+  return (
+    <div className="space-y-5">
+      <div className="rounded-lg border border-bank-100 bg-bank-50/70 p-4">
+        <h4 className="font-bold text-slate-950">رفع حزمة تحديث محلية</h4>
+        <p className="mt-1 text-sm leading-6 text-slate-600">
+          هذه المرحلة ترفع ملف ZIP وتفحص بنيته فقط، ولا تستبدل ملفات النظام أو تعيد تشغيل الخدمة.
+        </p>
+        <div className="mt-3 grid gap-3 md:grid-cols-3">
+          <MetricBox label="الصيغة المطلوبة" value="ZIP" />
+          <MetricBox label="الحجم الأقصى" value={formatBytes(status?.max_size_bytes || 0)} />
+          <MetricBox label="المجلدات المطلوبة" value={(status?.required_roots || ["backend", "frontend", "scripts"]).join(" / ")} />
+        </div>
+      </div>
+
+      <form onSubmit={uploadPackage} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="grid gap-3 lg:grid-cols-[1fr_auto_auto]">
+          <input
+            type="file"
+            accept=".zip,application/zip"
+            onChange={(event) => setFile(event.target.files?.[0] || null)}
+            className="h-10 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+          />
+          <Button type="button" onClick={loadStatus} disabled={busy} className="gap-2 border border-slate-300 bg-white text-slate-700 hover:bg-slate-50">
+            <RefreshCw className="h-4 w-4" /> تحديث القائمة
+          </Button>
+          <Button type="submit" disabled={busy} className="gap-2">
+            <Upload className="h-4 w-4" /> {busy ? "جاري الرفع..." : "رفع وفحص"}
+          </Button>
+        </div>
+      </form>
+
+      <div className="rounded-lg border border-amber-200 bg-amber-50/60 p-4">
+        <div className="flex items-start gap-3">
+          <AlertTriangle className="mt-1 h-5 w-5 shrink-0 text-amber-700" />
+          <div>
+            <h4 className="font-bold text-slate-950">ملاحظة مهمة</h4>
+            <p className="mt-1 text-sm leading-6 text-slate-600">
+              تطبيق التحديث الفعلي سيتم إضافته كمرحلة لاحقة بعد تجهيز النسخ الاحتياطي والاسترجاع التلقائي.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div className="overflow-x-auto rounded-lg border border-slate-200">
+        <table className="w-full min-w-[760px] text-sm">
+          <thead className="bg-slate-50 text-xs font-bold text-slate-600">
+            <tr>
+              <th className="p-3 text-right">الملف</th>
+              <th className="p-3 text-right">النسخة</th>
+              <th className="p-3 text-right">وقت الرفع</th>
+              <th className="p-3 text-right">الحجم</th>
+              <th className="p-3 text-right">عدد الملفات</th>
+              <th className="p-3 text-right">الحالة</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100 bg-white">
+            {packages.map((item) => (
+              <tr key={item.id}>
+                <td className="p-3 font-semibold text-slate-900">{item.original_filename}</td>
+                <td className="p-3 text-slate-700">{item.version || "غير محدد"}</td>
+                <td className="p-3 text-slate-600">{formatDateTime(item.uploaded_at)}</td>
+                <td className="p-3 text-slate-600">{formatBytes(item.compressed_size_bytes || 0)}</td>
+                <td className="p-3 text-slate-600">{item.files_count || 0}</td>
+                <td className="p-3"><span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-bold text-emerald-700">{item.status || "جاهز"}</span></td>
+              </tr>
+            ))}
+            {packages.length === 0 && (
+              <tr>
+                <td colSpan="6" className="p-5 text-center text-sm text-slate-500">لا توجد حزم تحديث مرفوعة حتى الآن.</td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

@@ -371,6 +371,29 @@ class RequestPdfBuilder:
         self.centered_text(value, x, y, size)
         self.pdf.setFillColorRGB(0, 0, 0)
 
+    def centered_lines(self, value: object, x: float, y: float, max_chars: int = 14, max_lines: int = 2, size: int = 8, leading: int = 10, color: tuple[float, float, float] = (0.06, 0.09, 0.16)) -> int:
+        words = str(value or "-").split()
+        lines: list[str] = []
+        current = ""
+        for word in words:
+            candidate = f"{current} {word}".strip()
+            if len(candidate) > max_chars and current:
+                lines.append(current)
+                current = word
+            else:
+                current = candidate
+        if current:
+            lines.append(current)
+        if len(lines) > max_lines:
+            lines = lines[:max_lines]
+            lines[-1] = f"{lines[-1][:max_chars - 1]}…"
+
+        self.pdf.setFillColorRGB(*color)
+        for index, line in enumerate(lines or ["-"]):
+            self.centered_text(line, x, y - (index * leading), size)
+        self.pdf.setFillColorRGB(0, 0, 0)
+        return len(lines or ["-"])
+
     def header(self) -> None:
         form_data = self.request.form_data or {}
         request_type_title = form_data.get("request_type_label") or self.request.request_type or "طلب خدمة"
@@ -535,14 +558,15 @@ class RequestPdfBuilder:
             self.pdf.setFillColorRGB(0, 0, 0)
 
             role = label(step.role, ROLE_LABELS)
-            self.text(role[:18], x + 28, circle_y - 31, 8)
-            self.muted_text(label(step.action, ACTION_LABELS), x + 28, circle_y - 45, 7)
+            role_line_count = self.centered_lines(role, x, circle_y - 31, max_chars=16, max_lines=2, size=8, leading=10)
+            action_y = circle_y - 45 - ((role_line_count - 1) * 10)
+            self.centered_lines(label(step.action, ACTION_LABELS), x, action_y, max_chars=18, max_lines=1, size=7, color=(0.36, 0.42, 0.48))
             if step.acted_at or step.approver:
                 approver_name = "-"
                 if step.approver:
                     approver_name = step.approver.full_name_ar or step.approver.email or "-"
-                self.muted_text(f"بواسطة: {approver_name}"[:34], x + 28, circle_y - 59, 6)
-                self.muted_text(f"في: {format_pdf_datetime(step.acted_at, self.tz)}", x + 28, circle_y - 71, 6)
+                self.centered_lines(f"بواسطة: {approver_name}", x, action_y - 14, max_chars=22, max_lines=1, size=6, color=(0.36, 0.42, 0.48))
+                self.centered_lines(f"في: {format_pdf_datetime(step.acted_at, self.tz)}", x, action_y - 26, max_chars=22, max_lines=1, size=6, color=(0.36, 0.42, 0.48))
 
         self.y -= 120
 

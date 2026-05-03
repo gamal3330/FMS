@@ -670,7 +670,7 @@ function ProgressStep({
       <div className={`z-[1] flex h-11 w-11 items-center justify-center rounded-full border-4 bg-white shadow-sm ${state.ring}`}>
         {state.icon}
       </div>
-      <p className={`mt-3 w-full truncate text-xs font-bold ${state.text}`}>{roleLabels[step.role] ?? step.role}</p>
+      <p className={`mt-3 min-h-8 w-full whitespace-normal break-words text-xs font-bold leading-4 ${state.text}`}>{roleLabels[step.role] ?? step.role}</p>
       <p className="mt-1 text-[11px] text-slate-500">{state.label}</p>
     </div>
   );
@@ -693,7 +693,7 @@ function ProgressStepMobile({
     <div className="flex items-center gap-3 rounded-md border border-slate-200 p-3">
       <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full border-4 bg-white ${state.ring}`}>{state.icon}</div>
       <div className="min-w-0">
-        <p className={`truncate text-sm font-bold ${state.text}`}>{roleLabels[step.role] ?? step.role}</p>
+        <p className={`whitespace-normal break-words text-sm font-bold leading-5 ${state.text}`}>{roleLabels[step.role] ?? step.role}</p>
         <p className="text-xs text-slate-500">{state.label}</p>
       </div>
     </div>
