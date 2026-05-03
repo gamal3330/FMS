@@ -47,6 +47,16 @@ function Invoke-Python($PythonCommand, $Arguments) {
   }
 }
 
+function Test-PythonVersion($PythonCommand) {
+  $script = @"
+import sys
+if sys.version_info < (3, 11) or sys.version_info >= (3, 13):
+    print(f"نسخة Python الحالية {sys.version.split()[0]} غير مناسبة. استخدم Python 3.11 أو 3.12، ويفضل 3.12.")
+    raise SystemExit(1)
+"@
+  Invoke-Python $PythonCommand @("-c", $script)
+}
+
 function Ensure-EnvFiles {
   $BackendEnv = Join-Path $BackendDir ".env"
   $FrontendEnv = Join-Path $FrontendDir ".env"
@@ -70,6 +80,7 @@ SEED_ADMIN_PASSWORD=Admin@12345
 
 function Install-Backend($PythonCommand) {
   Write-Step "تجهيز بيئة Python..."
+  Test-PythonVersion $PythonCommand
   Invoke-Python $PythonCommand @("-m", "venv", (Join-Path $BackendDir ".venv-local"))
   $VenvPython = Join-Path $BackendDir ".venv-local\Scripts\python.exe"
   & $VenvPython -m pip install --upgrade pip
@@ -85,6 +96,17 @@ function Install-Frontend {
 }
 
 function Start-Services {
+  $BackendBusy = Get-NetTCPConnection -LocalPort $BackendPort -State Listen -ErrorAction SilentlyContinue
+  if ($BackendBusy) {
+    Write-Host "المنفذ $BackendPort مستخدم بالفعل. أوقف الخدمة الحالية أو اختر منفذاً آخر عبر BACKEND_PORT." -ForegroundColor Red
+    exit 1
+  }
+  $FrontendBusy = Get-NetTCPConnection -LocalPort $FrontendPort -State Listen -ErrorAction SilentlyContinue
+  if ($FrontendBusy) {
+    Write-Host "المنفذ $FrontendPort مستخدم بالفعل. أوقف الخدمة الحالية أو اختر منفذاً آخر عبر FRONTEND_PORT." -ForegroundColor Red
+    exit 1
+  }
+
   Write-Step "تشغيل الخلفية على http://localhost:$BackendPort"
   $BackendPython = Join-Path $BackendDir ".venv-local\Scripts\uvicorn.exe"
   $BackendProcess = Start-Process -FilePath $BackendPython -ArgumentList "app.main:app", "--host", "0.0.0.0", "--port", $BackendPort -WorkingDirectory $BackendDir -PassThru

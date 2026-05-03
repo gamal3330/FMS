@@ -20,6 +20,16 @@ require_command() {
   fi
 }
 
+validate_python() {
+  local python_bin="$1"
+  "$python_bin" - <<'PY'
+import sys
+if sys.version_info < (3, 11) or sys.version_info >= (3, 13):
+    print(f"نسخة Python الحالية {sys.version.split()[0]} غير مناسبة. استخدم Python 3.11 أو 3.12، ويفضل 3.12.")
+    raise SystemExit(1)
+PY
+}
+
 pick_python() {
   if [ -n "$PYTHON_BIN" ]; then
     echo "$PYTHON_BIN"
@@ -68,6 +78,7 @@ EOF
 install_backend() {
   local python_bin="$1"
   blue "تجهيز بيئة Python..."
+  validate_python "$python_bin"
   "$python_bin" -m venv "$BACKEND_DIR/.venv-local"
   "$BACKEND_DIR/.venv-local/bin/python" -m pip install --upgrade pip
   "$BACKEND_DIR/.venv-local/bin/python" -m pip install -r "$BACKEND_DIR/requirements.txt"
@@ -84,6 +95,15 @@ start_services() {
   local dyld_prefix=()
   if [ -d "$expat_lib" ]; then
     dyld_prefix=(env "DYLD_LIBRARY_PATH=$expat_lib")
+  fi
+
+  if lsof -iTCP:"$BACKEND_PORT" -sTCP:LISTEN >/dev/null 2>&1; then
+    red "المنفذ ${BACKEND_PORT} مستخدم بالفعل. أوقف الخدمة الحالية أو اختر منفذاً آخر عبر BACKEND_PORT."
+    exit 1
+  fi
+  if lsof -iTCP:"$FRONTEND_PORT" -sTCP:LISTEN >/dev/null 2>&1; then
+    red "المنفذ ${FRONTEND_PORT} مستخدم بالفعل. أوقف الخدمة الحالية أو اختر منفذاً آخر عبر FRONTEND_PORT."
+    exit 1
   fi
 
   blue "تشغيل الخلفية على http://localhost:${BACKEND_PORT}"
