@@ -263,7 +263,7 @@ export function Layout({
         </div>
       </aside>
 
-      <main className={`transition-all duration-200 ${sidebarCollapsed ? "lg:mr-20" : "lg:mr-72"}`}>
+      <main className={`min-w-0 overflow-x-hidden transition-all duration-200 ${sidebarCollapsed ? "lg:mr-20" : "lg:mr-72"}`}>
         <header className="sticky top-0 z-10 border-b border-slate-200 bg-white/95 px-5 py-4 backdrop-blur">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
@@ -304,7 +304,7 @@ export function Layout({
             </div>
           </div>
         </header>
-        <div className="p-5">{children}</div>
+        <div className="min-w-0 max-w-full p-5">{children}</div>
       </main>
     </div>
   );

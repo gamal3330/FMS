@@ -1,0 +1,12 @@
+{
+  "version": "1.0.0-local",
+  "release": "local-update",
+  "application": "QIB IT Service Portal",
+  "package_type": "full",
+  "required_roots": [
+    "backend",
+    "frontend",
+    "scripts"
+  ],
+  "notes": "Local update package manifest. Update this file before creating a new ZIP release."
+}

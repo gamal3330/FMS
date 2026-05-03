@@ -25,7 +25,7 @@ export default function SettingsPage() {
   }
 
   return (
-    <section className="space-y-6" dir="rtl">
+    <section className="min-w-0 max-w-full space-y-6" dir="rtl">
       <FeedbackDialog open={Boolean(dialog.message)} type={dialog.type} message={dialog.message} onClose={() => setDialog({ ...dialog, message: "" })} />
       <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
         <p className="text-sm font-semibold text-bank-700">لوحة الإدارة</p>
@@ -33,8 +33,8 @@ export default function SettingsPage() {
         <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">إدارة إعدادات النظام والصلاحيات وسير العمل</p>
       </div>
 
-      <div className="grid gap-5 xl:grid-cols-[300px_1fr]">
-        <Card className="p-3">
+      <div className="grid min-w-0 gap-5 xl:grid-cols-[300px_minmax(0,1fr)]">
+        <Card className="min-w-0 p-3">
           <nav className="space-y-1">
             {tabs.map(([key, label, Icon]) => (
               <button key={key} onClick={() => setActive(key)} className={`flex h-11 w-full items-center gap-3 rounded-md px-3 text-right text-sm font-semibold ${active === key ? "bg-bank-50 text-bank-700" : "text-slate-600 hover:bg-slate-50"}`}>
@@ -44,7 +44,7 @@ export default function SettingsPage() {
             ))}
           </nav>
         </Card>
-        <Card className="p-5">
+        <Card className="min-w-0 overflow-hidden p-5">
           {active === "general" && <Panel title="الإعدادات العامة"><GeneralSettings notify={notify} /></Panel>}
           {active === "email" && <Panel title="إعدادات البريد SMTP"><EmailSettings notify={notify} /></Panel>}
           {active === "requestTypes" && <Panel title="أنواع الطلبات"><RequestTypesSettings notify={notify} /></Panel>}
@@ -58,7 +58,7 @@ export default function SettingsPage() {
 }
 
 function Panel({ title, children }) {
-  return <div><h3 className="mb-5 text-xl font-bold text-slate-950">{title}</h3>{children}</div>;
+  return <div className="min-w-0"><h3 className="mb-5 text-xl font-bold text-slate-950">{title}</h3>{children}</div>;
 }
 
 function RequestTypesSettings({ notify }) {
@@ -478,6 +478,10 @@ function LocalUpdateSettings({ notify }) {
   const [status, setStatus] = useState(null);
   const [file, setFile] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [preflightBusy, setPreflightBusy] = useState("");
+  const [applyBusy, setApplyBusy] = useState("");
+  const [preflightResult, setPreflightResult] = useState(null);
+  const [applyResult, setApplyResult] = useState(null);
 
   async function loadStatus() {
     try {
@@ -513,29 +517,60 @@ function LocalUpdateSettings({ notify }) {
     }
   }
 
+  async function runPreflight(item) {
+    setPreflightBusy(item.id);
+    setPreflightResult(null);
+    try {
+      const { data } = await api.post(`/settings/local-updates/${item.id}/preflight`);
+      setPreflightResult(data);
+      notify(data.ready ? "الحزمة جاهزة للتطبيق" : data.summary, data.ready ? "success" : "error");
+      await loadStatus();
+    } catch (error) {
+      notify(getErrorMessage(error), "error");
+    } finally {
+      setPreflightBusy("");
+    }
+  }
+
+  async function applyPackage(item) {
+    if (!window.confirm("سيتم تطبيق ملفات التحديث بدون إعادة تشغيل تلقائي. تم حفظ نسخة احتياطية؟")) return;
+    setApplyBusy(item.id);
+    setApplyResult(null);
+    try {
+      const { data } = await api.post(`/settings/local-updates/${item.id}/apply`);
+      setApplyResult(data);
+      notify("تم تطبيق ملفات التحديث. أعد تشغيل النظام يدويًا لتفعيل التغييرات.");
+      await loadStatus();
+    } catch (error) {
+      notify(getErrorMessage(error), "error");
+    } finally {
+      setApplyBusy("");
+    }
+  }
+
   const packages = status?.packages || [];
 
   return (
-    <div className="space-y-5">
-      <div className="rounded-lg border border-bank-100 bg-bank-50/70 p-4">
+    <div className="min-w-0 space-y-5">
+      <div className="min-w-0 rounded-lg border border-bank-100 bg-bank-50/70 p-4">
         <h4 className="font-bold text-slate-950">رفع حزمة تحديث محلية</h4>
         <p className="mt-1 text-sm leading-6 text-slate-600">
           هذه المرحلة ترفع ملف ZIP وتفحص بنيته فقط، ولا تستبدل ملفات النظام أو تعيد تشغيل الخدمة.
         </p>
-        <div className="mt-3 grid gap-3 md:grid-cols-3">
+        <div className="mt-3 grid min-w-0 gap-3 md:grid-cols-3">
           <MetricBox label="الصيغة المطلوبة" value="ZIP" />
           <MetricBox label="الحجم الأقصى" value={formatBytes(status?.max_size_bytes || 0)} />
           <MetricBox label="المجلدات المطلوبة" value={(status?.required_roots || ["backend", "frontend", "scripts"]).join(" / ")} />
         </div>
       </div>
 
-      <form onSubmit={uploadPackage} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-        <div className="grid gap-3 lg:grid-cols-[1fr_auto_auto]">
+      <form onSubmit={uploadPackage} className="min-w-0 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="grid min-w-0 gap-3 lg:grid-cols-[minmax(0,1fr)_auto_auto]">
           <input
             type="file"
             accept=".zip,application/zip"
             onChange={(event) => setFile(event.target.files?.[0] || null)}
-            className="h-10 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+            className="h-10 min-w-0 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
           />
           <Button type="button" onClick={loadStatus} disabled={busy} className="gap-2 border border-slate-300 bg-white text-slate-700 hover:bg-slate-50">
             <RefreshCw className="h-4 w-4" /> تحديث القائمة
@@ -552,14 +587,14 @@ function LocalUpdateSettings({ notify }) {
           <div>
             <h4 className="font-bold text-slate-950">ملاحظة مهمة</h4>
             <p className="mt-1 text-sm leading-6 text-slate-600">
-              تطبيق التحديث الفعلي سيتم إضافته كمرحلة لاحقة بعد تجهيز النسخ الاحتياطي والاسترجاع التلقائي.
+              تطبيق التحديث يستبدل الملفات فقط ولا يعيد تشغيل النظام تلقائيًا. أعد تشغيل الخدمة يدويًا بعد نجاح التطبيق.
             </p>
           </div>
         </div>
       </div>
 
-      <div className="overflow-x-auto rounded-lg border border-slate-200">
-        <table className="w-full min-w-[760px] text-sm">
+      <div className="max-w-full overflow-x-auto rounded-lg border border-slate-200">
+        <table className="w-full min-w-[900px] text-sm">
           <thead className="bg-slate-50 text-xs font-bold text-slate-600">
             <tr>
               <th className="p-3 text-right">الملف</th>
@@ -568,6 +603,7 @@ function LocalUpdateSettings({ notify }) {
               <th className="p-3 text-right">الحجم</th>
               <th className="p-3 text-right">عدد الملفات</th>
               <th className="p-3 text-right">الحالة</th>
+              <th className="p-3 text-right">الإجراء</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100 bg-white">
@@ -579,16 +615,69 @@ function LocalUpdateSettings({ notify }) {
                 <td className="p-3 text-slate-600">{formatBytes(item.compressed_size_bytes || 0)}</td>
                 <td className="p-3 text-slate-600">{item.files_count || 0}</td>
                 <td className="p-3"><span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-bold text-emerald-700">{item.status || "جاهز"}</span></td>
+                <td className="p-3">
+                  <div className="flex flex-wrap gap-2">
+                    <Button type="button" onClick={() => runPreflight(item)} disabled={Boolean(preflightBusy) || Boolean(applyBusy)} className="h-9 gap-2 border border-slate-300 bg-white px-3 text-xs text-slate-700 hover:bg-slate-50">
+                      <RefreshCw className={`h-3.5 w-3.5 ${preflightBusy === item.id ? "animate-spin" : ""}`} />
+                      {preflightBusy === item.id ? "جاري الفحص..." : "فحص قابلية التطبيق"}
+                    </Button>
+                    <Button type="button" onClick={() => applyPackage(item)} disabled={Boolean(preflightBusy) || Boolean(applyBusy) || !item.last_preflight?.ready} className="h-9 gap-2 bg-amber-700 px-3 text-xs hover:bg-amber-800 disabled:opacity-50">
+                      <Upload className="h-3.5 w-3.5" />
+                      {applyBusy === item.id ? "جاري التطبيق..." : "تطبيق التحديث"}
+                    </Button>
+                  </div>
+                </td>
               </tr>
             ))}
             {packages.length === 0 && (
               <tr>
-                <td colSpan="6" className="p-5 text-center text-sm text-slate-500">لا توجد حزم تحديث مرفوعة حتى الآن.</td>
+                <td colSpan="7" className="p-5 text-center text-sm text-slate-500">لا توجد حزم تحديث مرفوعة حتى الآن.</td>
               </tr>
             )}
           </tbody>
         </table>
       </div>
+
+      {preflightResult && (
+        <div className={`rounded-lg border p-4 ${preflightResult.ready ? "border-emerald-200 bg-emerald-50/70" : "border-red-200 bg-red-50/70"}`}>
+          <div className="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+              <h4 className={`font-bold ${preflightResult.ready ? "text-emerald-900" : "text-red-900"}`}>{preflightResult.summary}</h4>
+              <p className="mt-1 text-sm leading-6 text-slate-600">
+                النسخة: {preflightResult.version || "غير محدد"} - الملفات: {preflightResult.files_count || 0} - الحجم بعد الفك: {formatBytes(preflightResult.uncompressed_size_bytes || 0)}
+              </p>
+            </div>
+            <span className={`rounded-full px-3 py-1 text-xs font-bold ${preflightResult.ready ? "bg-emerald-100 text-emerald-800" : "bg-red-100 text-red-800"}`}>
+              {preflightResult.ready ? "جاهزة" : "غير جاهزة"}
+            </span>
+          </div>
+          <div className="mt-4 grid gap-2 md:grid-cols-2">
+            {(preflightResult.checks || []).map((check) => (
+              <div key={check.name} className="rounded-md border border-white/80 bg-white p-3">
+                <p className={`text-sm font-bold ${check.passed ? "text-emerald-800" : "text-red-800"}`}>{check.passed ? "نجح" : "لم ينجح"} - {check.name}</p>
+                <p className="mt-1 text-xs leading-5 text-slate-600">{check.message}</p>
+              </div>
+            ))}
+          </div>
+          {(preflightResult.warnings || []).length > 0 && (
+            <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+              {preflightResult.warnings.join(" ")}
+            </div>
+          )}
+        </div>
+      )}
+
+      {applyResult && (
+        <div className="rounded-lg border border-emerald-200 bg-emerald-50/70 p-4">
+          <h4 className="font-bold text-emerald-900">تم تطبيق التحديث بدون إعادة تشغيل تلقائي</h4>
+          <p className="mt-1 text-sm leading-6 text-slate-600">{applyResult.message}</p>
+          <div className="mt-3 grid gap-3 md:grid-cols-3">
+            <MetricBox label="النسخة" value={applyResult.version || "غير محدد"} />
+            <MetricBox label="مسار rollback" value={applyResult.rollback_path || "-"} />
+            <MetricBox label="نسخة قاعدة البيانات" value={applyResult.database_backup || "-"} />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -598,6 +687,6 @@ function SimpleTable({ headers, rows }) { return <div className="overflow-x-auto
 function EmailField({ label, value, onChange, type = "text" }) { return <label className="block space-y-2 text-sm font-medium text-slate-700">{label}<Input type={type} value={value ?? ""} onChange={(event) => onChange(event.target.value)} /></label>; }
 function Toggle({ label, checked, onChange }) { return <label className="flex min-h-11 items-center justify-between gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 text-sm font-semibold text-slate-700"><span>{label}</span><input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} className="h-4 w-4 accent-bank-700" /></label>; }
 function LabeledInput({ label, ...props }) { return <label className="block space-y-2 text-sm font-medium text-slate-700">{label}<Input {...props} /></label>; }
-function MetricBox({ label, value }) { return <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm"><p className="text-xs font-bold text-slate-500">{label}</p><p className="mt-2 break-words text-lg font-black text-slate-950">{value}</p></div>; }
+function MetricBox({ label, value }) { return <div className="min-w-0 rounded-lg border border-slate-200 bg-white p-4 shadow-sm"><p className="text-xs font-bold text-slate-500">{label}</p><p className="mt-2 break-words text-lg font-black text-slate-950">{value}</p></div>; }
 function formatBytes(value) { if (!value) return "0 B"; const units = ["B", "KB", "MB", "GB"]; const index = Math.min(Math.floor(Math.log(value) / Math.log(1024)), units.length - 1); return `${(value / Math.pow(1024, index)).toFixed(index ? 1 : 0)} ${units[index]}`; }
 function formatDateTime(value) { return formatSystemDateTime(value); }

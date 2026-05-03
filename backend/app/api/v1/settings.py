@@ -74,8 +74,15 @@ BACKUP_SETTINGS_CATEGORY = "database"
 BACKUP_SETTINGS_KEY = "backup_settings"
 DEFAULT_BACKUP_SETTINGS = BackupSettingsPayload().model_dump()
 LOCAL_UPDATES_DIR = Path(settings.upload_dir) / "local_updates"
-LOCAL_UPDATE_MAX_BYTES = 250 * 1024 * 1024
+LOCAL_UPDATE_MAX_BYTES = 1024 * 1024 * 1024
 LOCAL_UPDATE_REQUIRED_ROOTS = {"backend", "frontend", "scripts"}
+PROJECT_ROOT = Path.cwd().parent if Path.cwd().name == "backend" else Path.cwd()
+LOCAL_UPDATE_PRESERVE_NAMES = {
+    "backend": {".env", ".env.example", ".venv", ".venv-mac", ".venv312", "qib_local.db", "uploads", "backups", "uvicorn.err.log", "uvicorn.out.log"},
+    "frontend": {"node_modules", "dist", ".env", ".env.local"},
+    "scripts": set(),
+}
+LOCAL_UPDATE_ROOT_FILES = {"version.txt", "update-manifest.json", "README.md", "INSTALL.md", "docker-compose.yml"}
 
 
 def database_reset_plan() -> list[dict[str, int | str]]:
@@ -227,6 +234,192 @@ def list_local_update_packages() -> list[dict]:
         except (OSError, json.JSONDecodeError):
             continue
     return packages[:10]
+
+
+def local_update_package_path(package_id: str) -> Path:
+    safe_id = Path(package_id).name
+    if safe_id != package_id:
+        raise HTTPException(status_code=400, detail="معرف حزمة التحديث غير صالح")
+    path = local_updates_dir() / f"{safe_id}.zip"
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="حزمة التحديث غير موجودة")
+    return path
+
+
+def add_preflight_check(checks: list[dict], name: str, passed: bool, message: str) -> None:
+    checks.append({"name": name, "passed": passed, "message": message})
+
+
+def run_local_update_preflight(package_path: Path) -> dict:
+    analysis = analyze_local_update_zip(package_path)
+    checks: list[dict] = []
+    warnings: list[str] = []
+
+    add_preflight_check(
+        checks,
+        "بنية الحزمة",
+        analysis["valid"],
+        "المجلدات الأساسية موجودة" if analysis["valid"] else f"المجلدات الناقصة: {', '.join(analysis['missing_roots'])}",
+    )
+
+    with tempfile.TemporaryDirectory(prefix="qib-update-preflight-") as temp:
+        temp_path = Path(temp)
+        with zipfile.ZipFile(package_path) as zipped:
+            zipped.extractall(temp_path)
+
+        def exists(relative_path: str) -> bool:
+            return (temp_path / relative_path).exists()
+
+        add_preflight_check(checks, "ملف نسخة التحديث", exists("version.txt") or exists("update-manifest.json"), "تم العثور على ملف تعريف النسخة" if exists("version.txt") or exists("update-manifest.json") else "يفضل إضافة version.txt أو update-manifest.json")
+        add_preflight_check(checks, "متطلبات الباكند", exists("backend/requirements.txt"), "backend/requirements.txt موجود" if exists("backend/requirements.txt") else "ملف backend/requirements.txt غير موجود")
+        add_preflight_check(checks, "مدخل الباكند", exists("backend/app/main.py"), "backend/app/main.py موجود" if exists("backend/app/main.py") else "ملف backend/app/main.py غير موجود")
+        add_preflight_check(checks, "ملف الواجهة", exists("frontend/package.json"), "frontend/package.json موجود" if exists("frontend/package.json") else "ملف frontend/package.json غير موجود")
+        add_preflight_check(checks, "سكربتات التشغيل", exists("scripts/install-local.sh") or exists("scripts/install-local.ps1"), "تم العثور على سكربت تثبيت محلي" if exists("scripts/install-local.sh") or exists("scripts/install-local.ps1") else "يفضل وجود scripts/install-local.sh أو scripts/install-local.ps1")
+
+        package_json_path = temp_path / "frontend/package.json"
+        package_json_valid = False
+        if package_json_path.exists():
+            try:
+                json.loads(package_json_path.read_text(encoding="utf-8"))
+                package_json_valid = True
+            except json.JSONDecodeError:
+                package_json_valid = False
+        add_preflight_check(checks, "صحة package.json", package_json_valid, "ملف package.json صالح" if package_json_valid else "ملف frontend/package.json غير صالح أو غير موجود")
+
+        manifest_path = temp_path / "update-manifest.json"
+        if manifest_path.exists():
+            try:
+                json.loads(manifest_path.read_text(encoding="utf-8"))
+                add_preflight_check(checks, "صحة ملف التعريف", True, "update-manifest.json صالح")
+            except json.JSONDecodeError:
+                add_preflight_check(checks, "صحة ملف التعريف", False, "update-manifest.json غير صالح")
+
+    disk_free = shutil.disk_usage(Path.cwd()).free
+    required_space = int(analysis["uncompressed_size_bytes"] * 1.5)
+    has_space = disk_free > required_space
+    add_preflight_check(
+        checks,
+        "مساحة التخزين",
+        has_space,
+        f"المتاح {disk_free} بايت، والمطلوب التقريبي {required_space} بايت",
+    )
+    if analysis["version"] == "غير محدد":
+        warnings.append("لم يتم تحديد رقم النسخة داخل الحزمة.")
+
+    failed_checks = [check for check in checks if not check["passed"]]
+    return {
+        "package_id": package_path.stem,
+        "ready": len(failed_checks) == 0,
+        "checked_at": datetime.now().isoformat(),
+        "version": analysis["version"],
+        "files_count": analysis["files_count"],
+        "compressed_size_bytes": analysis["compressed_size_bytes"],
+        "uncompressed_size_bytes": analysis["uncompressed_size_bytes"],
+        "checks": checks,
+        "warnings": warnings,
+        "summary": "الحزمة جاهزة للتطبيق" if not failed_checks else f"يوجد {len(failed_checks)} فحص لم ينجح",
+    }
+
+
+def copy_path(source: Path, destination: Path) -> None:
+    if source.is_dir():
+        shutil.copytree(source, destination)
+    else:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+
+
+def backup_path_if_exists(path: Path, rollback_root: Path, relative_path: Path) -> str | None:
+    if not path.exists():
+        return None
+    backup_path = rollback_root / relative_path
+    if backup_path.exists():
+        return str(backup_path.relative_to(PROJECT_ROOT))
+    backup_path.parent.mkdir(parents=True, exist_ok=True)
+    copy_path(path, backup_path)
+    return str(backup_path.relative_to(PROJECT_ROOT))
+
+
+def apply_update_directory(source_root: Path, target_root: Path, rollback_root: Path, preserve_names: set[str]) -> dict:
+    target_root.mkdir(parents=True, exist_ok=True)
+    copied: list[str] = []
+    removed: list[str] = []
+    backed_up: list[str] = []
+
+    source_names = {item.name for item in source_root.iterdir()}
+    for target_item in target_root.iterdir():
+        if target_item.name in preserve_names:
+            continue
+        relative = target_item.relative_to(PROJECT_ROOT)
+        backup = backup_path_if_exists(target_item, rollback_root, relative)
+        if backup:
+            backed_up.append(backup)
+        if target_item.is_dir():
+            shutil.rmtree(target_item)
+        else:
+            target_item.unlink()
+        if target_item.name not in source_names:
+            removed.append(str(relative))
+
+    for source_item in source_root.iterdir():
+        if source_item.name in preserve_names:
+            continue
+        target_item = target_root / source_item.name
+        copy_path(source_item, target_item)
+        copied.append(str(target_item.relative_to(PROJECT_ROOT)))
+
+    return {"copied": copied, "removed": removed, "backed_up": backed_up}
+
+
+def apply_local_update_package(package_path: Path) -> dict:
+    preflight = run_local_update_preflight(package_path)
+    if not preflight["ready"]:
+        raise HTTPException(status_code=409, detail="لا يمكن تطبيق التحديث قبل نجاح فحص قابلية التطبيق")
+
+    rollback_root = local_updates_dir() / "rollbacks" / f"{package_path.stem}-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    rollback_root.mkdir(parents=True, exist_ok=True)
+    backup_files: list[str] = []
+    applied_roots: dict[str, dict] = {}
+
+    database_path = sqlite_database_path()
+    if database_path.exists():
+        database_backup = rollback_root / "database" / database_path.name
+        database_backup.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(database_path, database_backup)
+        backup_files.append(str(database_backup.relative_to(PROJECT_ROOT)))
+
+    with tempfile.TemporaryDirectory(prefix="qib-update-apply-") as temp:
+        temp_path = Path(temp)
+        with zipfile.ZipFile(package_path) as zipped:
+            zipped.extractall(temp_path)
+
+        for root_name in sorted(LOCAL_UPDATE_REQUIRED_ROOTS):
+            source_root = temp_path / root_name
+            target_root = PROJECT_ROOT / root_name
+            applied_roots[root_name] = apply_update_directory(source_root, target_root, rollback_root, LOCAL_UPDATE_PRESERVE_NAMES.get(root_name, set()))
+
+        for filename in sorted(LOCAL_UPDATE_ROOT_FILES):
+            source_file = temp_path / filename
+            if not source_file.exists():
+                continue
+            target_file = PROJECT_ROOT / filename
+            backup = backup_path_if_exists(target_file, rollback_root, Path(filename))
+            if backup:
+                backup_files.append(backup)
+            copy_path(source_file, target_file)
+
+    return {
+        "package_id": package_path.stem,
+        "applied": True,
+        "applied_at": datetime.now().isoformat(),
+        "version": preflight["version"],
+        "rollback_path": str(rollback_root.relative_to(PROJECT_ROOT)),
+        "database_backup": backup_files[0] if backup_files else None,
+        "backup_files": backup_files,
+        "applied_roots": applied_roots,
+        "restart_required": True,
+        "message": "تم تطبيق ملفات التحديث. أعد تشغيل النظام يدويًا لتفعيل التغييرات.",
+    }
 
 
 @router.get("/public-profile")
@@ -473,6 +666,64 @@ async def upload_local_update_package(file: UploadFile = File(...), db: Session 
         return metadata
     finally:
         temp_path.unlink(missing_ok=True)
+
+
+@router.post("/local-updates/{package_id}/preflight")
+def preflight_local_update_package(package_id: str, db: Session = Depends(get_db), actor: User = Depends(require_roles(UserRole.SUPER_ADMIN))):
+    package_path = local_update_package_path(package_id)
+    result = run_local_update_preflight(package_path)
+
+    metadata_path = local_update_metadata_path(package_path)
+    if metadata_path.exists():
+        try:
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            metadata = {"id": package_id, "stored_filename": package_path.name}
+    else:
+        metadata = {"id": package_id, "stored_filename": package_path.name}
+
+    metadata["last_preflight"] = result
+    metadata["status"] = "جاهز للتطبيق" if result["ready"] else "يحتاج معالجة قبل التطبيق"
+    metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    write_audit(
+        db,
+        "local_update_preflight_checked",
+        "system_update",
+        actor=actor,
+        metadata={"package_id": package_id, "ready": result["ready"], "summary": result["summary"]},
+    )
+    db.commit()
+    return result
+
+
+@router.post("/local-updates/{package_id}/apply")
+def apply_local_update(package_id: str, db: Session = Depends(get_db), actor: User = Depends(require_roles(UserRole.SUPER_ADMIN))):
+    package_path = local_update_package_path(package_id)
+    result = apply_local_update_package(package_path)
+
+    metadata_path = local_update_metadata_path(package_path)
+    if metadata_path.exists():
+        try:
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            metadata = {"id": package_id, "stored_filename": package_path.name}
+    else:
+        metadata = {"id": package_id, "stored_filename": package_path.name}
+
+    metadata["last_apply"] = result
+    metadata["status"] = "تم التطبيق - بانتظار إعادة التشغيل"
+    metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    write_audit(
+        db,
+        "local_update_applied",
+        "system_update",
+        actor=actor,
+        metadata={"package_id": package_id, "version": result["version"], "rollback_path": result["rollback_path"]},
+    )
+    db.commit()
+    return result
 
 
 @router.get("/database/reset-preview")
