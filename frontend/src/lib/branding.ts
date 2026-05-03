@@ -1,3 +1,5 @@
+import { API_BASE } from "./api";
+
 const DEFAULT_BRAND_COLOR = "#0d6337";
 
 export function applyBranding(settings: { system_name?: string; logo_url?: string | null; brand_color?: string | null; timezone?: string | null }) {
@@ -5,11 +7,20 @@ export function applyBranding(settings: { system_name?: string; logo_url?: strin
     localStorage.setItem("qib_system_name", settings.system_name);
     document.title = settings.system_name;
   }
-  if (settings.logo_url) localStorage.setItem("qib_logo_url", settings.logo_url);
-  else if ("logo_url" in settings) localStorage.removeItem("qib_logo_url");
+  if (settings.logo_url) {
+    localStorage.setItem("qib_logo_url", settings.logo_url);
+    applyFavicon(settings.logo_url);
+  } else if ("logo_url" in settings) {
+    localStorage.removeItem("qib_logo_url");
+    applyFavicon("");
+  }
   if (settings.timezone) localStorage.setItem("qib_timezone", settings.timezone);
   applyBrandColor(settings.brand_color || localStorage.getItem("qib_brand_color") || DEFAULT_BRAND_COLOR);
   window.dispatchEvent(new Event("qib-settings-updated"));
+}
+
+export function applyStoredFavicon() {
+  applyFavicon(localStorage.getItem("qib_logo_url") || "");
 }
 
 export function applyBrandColor(hex: string) {
@@ -21,6 +32,40 @@ export function applyBrandColor(hex: string) {
   root.style.setProperty("--bank-600", hexToRgbString(mixWithWhite(normalized, 0.08)));
   root.style.setProperty("--bank-700", hexToRgbString(normalized));
   root.style.setProperty("--bank-900", hexToRgbString(mixWithBlack(normalized, 0.45)));
+}
+
+function applyFavicon(logoUrl: string) {
+  const href = resolveAssetUrl(logoUrl);
+  const icon = getOrCreateIconLink("icon");
+  const shortcutIcon = getOrCreateIconLink("shortcut icon");
+  const appleIcon = getOrCreateIconLink("apple-touch-icon");
+
+  if (!href) {
+    icon.removeAttribute("href");
+    shortcutIcon.removeAttribute("href");
+    appleIcon.removeAttribute("href");
+    return;
+  }
+
+  icon.href = href;
+  shortcutIcon.href = href;
+  appleIcon.href = href;
+}
+
+function getOrCreateIconLink(rel: string) {
+  const selector = rel === "icon" ? "link[rel='icon']" : `link[rel='${rel}']`;
+  const existing = document.head.querySelector<HTMLLinkElement>(selector);
+  if (existing) return existing;
+  const link = document.createElement("link");
+  link.rel = rel;
+  document.head.appendChild(link);
+  return link;
+}
+
+function resolveAssetUrl(url: string) {
+  if (!url) return "";
+  if (/^https?:\/\//.test(url) || url.startsWith("data:")) return url;
+  return `${API_BASE.replace(/\/api\/v1\/?$/, "")}${url}`;
 }
 
 function hexToRgbString(hex: string) {

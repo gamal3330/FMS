@@ -63,6 +63,13 @@ ROLE_LABELS = {
     "execution": "التنفيذ",
 }
 FIELD_LABELS = {
+    "source_ip": "عنوان المصدر",
+    "destination_ip": "عنوان الوجهة",
+    "destination_port": "منفذ الوجهة",
+    "nat_port": "منفذ NAT",
+    "asset_tag": "رقم الجهاز",
+    "current_location": "الموقع الحالي",
+    "new_location": "الموقع الجديد",
     "assigned_section": "القسم المختص",
     "administrative_section": "القسم المختص",
     "assigned_section_label": "القسم المختص",
@@ -71,6 +78,14 @@ FIELD_LABELS = {
     "request_type_label": "نوع الطلب",
     "reason": "المبرر",
     "issue_description": "وصف المشكلة",
+}
+PDF_HIDDEN_FORM_KEYS = {
+    "request_type_code",
+    "request_type_label",
+    "assigned_section",
+    "administrative_section",
+    "assigned_section_label",
+    "administrative_section_label",
 }
 
 ALLOWED_CONTENT_TYPES = {
@@ -167,11 +182,19 @@ def enrich_request_list(db: Session, requests: list[ServiceRequest]) -> list[Ser
 
 def register_pdf_font() -> str:
     candidates = [
+        Path("/Library/Fonts/Tajawal-Regular.ttf"),
+        Path("/System/Library/Fonts/Supplemental/Tajawal-Regular.ttf"),
+        Path("/usr/share/fonts/truetype/tajawal/Tajawal-Regular.ttf"),
         Path("C:/Windows/Fonts/tajawal.ttf"),
         Path("C:/Windows/Fonts/Tajawal-Regular.ttf"),
+        Path("/System/Library/Fonts/Supplemental/Arial Unicode.ttf"),
+        Path("/Library/Fonts/Arial Unicode.ttf"),
+        Path("/System/Library/Fonts/Supplemental/Arial.ttf"),
         Path("C:/Windows/Fonts/arial.ttf"),
         Path("C:/Windows/Fonts/tahoma.ttf"),
         Path("C:/Windows/Fonts/calibri.ttf"),
+        Path("/System/Library/Fonts/GeezaPro.ttc"),
+        Path("/System/Library/Fonts/SFArabic.ttf"),
         Path("/usr/share/fonts/truetype/noto/NotoNaskhArabic-Regular.ttf"),
         Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
     ]
@@ -187,8 +210,31 @@ def rtl(text: object) -> str:
     return get_display(arabic_reshaper.reshape(str(text or "")))
 
 
+def hex_to_rgb(hex_value: str | None, fallback: tuple[float, float, float] = (0.05, 0.39, 0.22)) -> tuple[float, float, float]:
+    if not hex_value or not isinstance(hex_value, str) or not hex_value.startswith("#") or len(hex_value) != 7:
+        return fallback
+    try:
+        return tuple(int(hex_value[index : index + 2], 16) / 255 for index in (1, 3, 5))
+    except ValueError:
+        return fallback
+
+
 def label(value: object, labels: dict[str, str]) -> str:
     return labels.get(str(value or ""), str(value or ""))
+
+
+def pdf_form_pairs(form_data: dict) -> list[tuple[str, object]]:
+    pairs: list[tuple[str, object]] = []
+    seen_labels = {"نوع الطلب", "القسم المختص"}
+    for key, value in form_data.items():
+        if key in PDF_HIDDEN_FORM_KEYS or value in (None, ""):
+            continue
+        field_label = FIELD_LABELS.get(key, key.replace("_", " "))
+        if field_label in seen_labels:
+            continue
+        seen_labels.add(field_label)
+        pairs.append((field_label, value))
+    return pairs
 
 
 def system_timezone(db: Session) -> ZoneInfo:
@@ -220,31 +266,46 @@ class RequestPdfBuilder:
         self.request = service_request
         self.actor = actor
         self.db = db
+        self.general = db.scalar(select(SettingsGeneral).limit(1))
         self.stream = BytesIO()
         self.pdf = canvas.Canvas(self.stream, pagesize=A4)
         self.font = register_pdf_font()
         self.tz = system_timezone(db)
         self.width, self.height = A4
-        self.left = 38
-        self.right = self.width - 38
-        self.y = self.height - 38
+        self.left = 36
+        self.right = self.width - 36
+        self.content_width = self.right - self.left
+        self.brand = hex_to_rgb(self.general.brand_color if self.general else None)
+        self.brand_dark = tuple(max(channel * 0.62, 0) for channel in self.brand)
+        self.brand_soft = tuple(channel + (1 - channel) * 0.88 for channel in self.brand)
+        self.y = self.height - 36
         self.pdf.setTitle(f"Request {service_request.request_number}")
 
     def page_break(self, needed: int = 70) -> None:
         if self.y < needed:
+            self.footer()
             self.pdf.showPage()
-            self.y = self.height - 38
+            self.y = self.height - 36
+            self.page_header()
 
     def text(self, value: object, x: float, y: float, size: int = 11) -> None:
         self.pdf.setFont(self.font, size)
         self.pdf.drawRightString(x, y, rtl(value))
+
+    def left_text(self, value: object, x: float, y: float, size: int = 10) -> None:
+        self.pdf.setFont(self.font, size)
+        self.pdf.drawString(x, y, str(value or ""))
+
+    def centered_text(self, value: object, x: float, y: float, size: int = 10) -> None:
+        self.pdf.setFont(self.font, size)
+        self.pdf.drawCentredString(x, y, rtl(value))
 
     def muted_text(self, value: object, x: float, y: float, size: int = 10) -> None:
         self.pdf.setFillColorRGB(0.36, 0.42, 0.48)
         self.text(value, x, y, size)
         self.pdf.setFillColorRGB(0, 0, 0)
 
-    def wrapped(self, value: object, x: float, y: float, max_chars: int = 78, size: int = 11, leading: int = 16) -> float:
+    def wrapped(self, value: object, x: float, y: float, max_chars: int = 78, size: int = 11, leading: int = 16, color: tuple[float, float, float] = (0.08, 0.12, 0.18)) -> float:
         words = str(value or "-").split()
         lines: list[str] = []
         current = ""
@@ -257,59 +318,151 @@ class RequestPdfBuilder:
                 current = candidate
         if current:
             lines.append(current)
+        self.pdf.setFillColorRGB(*color)
         for line in lines or ["-"]:
             self.page_break(55)
             self.text(line, x, y, size)
             y -= leading
+        self.pdf.setFillColorRGB(0, 0, 0)
         return y
 
+    def page_header(self) -> None:
+        self.pdf.setFillColorRGB(*self.brand)
+        self.pdf.rect(0, self.height - 8, self.width, 8, fill=1, stroke=0)
+        self.pdf.setFillColorRGB(0.45, 0.5, 0.58)
+        self.pdf.setFont(self.font, 8)
+        self.pdf.drawString(self.left, self.height - 24, str(self.request.request_number or ""))
+        self.text(self.general.system_name if self.general else "النظام", self.right, self.height - 24, 8)
+        self.pdf.setStrokeColorRGB(0.9, 0.92, 0.95)
+        self.pdf.line(self.left, self.height - 31, self.right, self.height - 31)
+        self.pdf.setFillColorRGB(0, 0, 0)
+        self.y = self.height - 48
+
+    def footer(self) -> None:
+        self.pdf.setStrokeColorRGB(0.9, 0.92, 0.95)
+        self.pdf.line(self.left, 26, self.right, 26)
+        self.pdf.setFillColorRGB(0.45, 0.5, 0.58)
+        self.text(f"طُبع بواسطة: {self.actor.full_name_ar or self.actor.email}", self.right, 14, 8)
+        self.left_text(f"Page {self.pdf.getPageNumber()}", self.left, 14, 8)
+        self.pdf.setFillColorRGB(0, 0, 0)
+
+    def status_pill(self, value: str, x: float, y: float, width: float = 86) -> None:
+        status = str(self.request.status or "")
+        if status in {"rejected", "cancelled"}:
+            fill = (0.99, 0.9, 0.9)
+            text_color = (0.72, 0.11, 0.11)
+        elif status in {"completed", "closed", "approved"}:
+            fill = self.brand_soft
+            text_color = self.brand_dark
+        elif status in {"pending_approval", "in_implementation"}:
+            fill = (1.0, 0.96, 0.82)
+            text_color = (0.62, 0.36, 0.02)
+        else:
+            fill = (0.94, 0.96, 0.98)
+            text_color = (0.24, 0.3, 0.38)
+        self.pdf.setFillColorRGB(*fill)
+        self.pdf.roundRect(x - width, y - 13, width, 24, 10, fill=1, stroke=0)
+        self.pdf.setFillColorRGB(*text_color)
+        self.centered_text(value, x - (width / 2), y - 4, 9)
+        self.pdf.setFillColorRGB(0, 0, 0)
+
+    def centered_muted_text(self, value: object, x: float, y: float, size: int = 8) -> None:
+        self.pdf.setFillColorRGB(0.45, 0.5, 0.58)
+        self.centered_text(value, x, y, size)
+        self.pdf.setFillColorRGB(0, 0, 0)
+
     def header(self) -> None:
+        form_data = self.request.form_data or {}
+        request_type_title = form_data.get("request_type_label") or self.request.request_type or "طلب خدمة"
+        self.pdf.setFillColorRGB(*self.brand)
+        self.pdf.rect(0, self.height - 86, self.width, 86, fill=1, stroke=0)
+
         logo_path = logo_file_path(self.db)
         if logo_path:
             try:
-                self.pdf.drawImage(ImageReader(str(logo_path)), self.left, self.y - 38, width=78, height=38, preserveAspectRatio=True, mask="auto")
+                self.pdf.drawImage(ImageReader(str(logo_path)), self.left, self.height - 70, width=86, height=42, preserveAspectRatio=True, mask="auto")
             except Exception:
                 pass
-        general = self.db.scalar(select(SettingsGeneral).limit(1))
-        self.text(general.system_name if general else "النظام", self.right, self.y, 14)
-        self.y -= 24
-        self.text(f"رقم الطلب: {self.request.request_number}", self.right, self.y, 18)
-        self.y -= 25
-        self.muted_text(f"تاريخ الطباعة: {format_pdf_datetime(datetime.now(timezone.utc), self.tz)}", self.right, self.y, 10)
-        self.y -= 17
-        self.muted_text(f"طُبع بواسطة: {self.actor.full_name_ar or self.actor.email}", self.right, self.y, 10)
-        self.y -= 24
-        self.pdf.line(self.left, self.y, self.right, self.y)
-        self.y -= 18
+
+        self.pdf.setFillColorRGB(1, 1, 1)
+        self.text(self.general.system_name if self.general else "النظام", self.right, self.height - 31, 13)
+        self.text(f"نموذج {request_type_title}", self.right, self.height - 58, 20)
+        self.pdf.setFillColorRGB(0.88, 0.96, 0.91)
+        self.text(f"تاريخ الطباعة: {format_pdf_datetime(datetime.now(timezone.utc), self.tz)}", self.right, self.height - 75, 9)
+        self.pdf.setFillColorRGB(0, 0, 0)
+
+        self.y = self.height - 112
+        self.pdf.setFillColorRGB(1, 1, 1)
+        self.pdf.setStrokeColorRGB(0.88, 0.91, 0.94)
+        self.pdf.roundRect(self.left, self.y - 72, self.content_width, 72, 7, fill=1, stroke=1)
+        self.pdf.setFillColorRGB(0.45, 0.5, 0.58)
+        self.text("رقم الطلب", self.right - 16, self.y - 22, 9)
+        self.text("عنوان الطلب", self.right - 16, self.y - 50, 9)
+        self.pdf.setFillColorRGB(0.06, 0.09, 0.16)
+        self.text(self.request.request_number, self.right - 92, self.y - 22, 13)
+        self.text(self.request.title, self.right - 92, self.y - 50, 12)
+        status_x = self.left + 112
+        status_width = 96
+        self.status_pill(label(self.request.status, STATUS_LABELS), status_x, self.y - 27, status_width)
+        self.centered_muted_text("الحالة", status_x - (status_width / 2), self.y - 51, 8)
+        self.y -= 96
 
     def section(self, title: str) -> None:
         self.page_break(90)
-        self.pdf.setFillColorRGB(0.93, 0.97, 0.95)
-        self.pdf.roundRect(self.left, self.y - 23, self.right - self.left, 30, 5, fill=1, stroke=0)
+        self.pdf.setFillColorRGB(*self.brand_soft)
+        self.pdf.roundRect(self.left, self.y - 27, self.content_width, 32, 6, fill=1, stroke=0)
+        self.pdf.setFillColorRGB(*self.brand_dark)
+        self.pdf.circle(self.right - 18, self.y - 11, 4, fill=1, stroke=0)
+        self.text(title, self.right - 32, self.y - 16, 12)
         self.pdf.setFillColorRGB(0, 0, 0)
-        self.text(title, self.right - 12, self.y - 15, 13)
-        self.y -= 42
+        self.y -= 44
 
     def pair(self, key: str, value: object) -> None:
-        self.page_break(52)
-        self.muted_text(f"{key}:", self.right, self.y, 10)
-        self.y = self.wrapped(value, self.right - 140, self.y, max_chars=52, size=11)
-        self.y -= 4
+        self.page_break(72)
+        self.field_box(key, value, self.left, self.y, self.content_width)
+        self.y -= 64
 
     def pairs(self, values: list[tuple[str, object]]) -> None:
-        for key, value in values:
-            self.pair(key, value)
+        index = 0
+        while index < len(values):
+            first = values[index]
+            second = values[index + 1] if index + 1 < len(values) else None
+            self.page_break(72)
+            row_top = self.y
+            if second:
+                gap = 12
+                box_width = (self.content_width - gap) / 2
+                self.field_box(first[0], first[1], self.right - box_width, row_top, box_width)
+                self.field_box(second[0], second[1], self.left, row_top, box_width)
+            else:
+                self.field_box(first[0], first[1], self.left, row_top, self.content_width)
+            self.y -= 64
+            index += 2
+
+    def field_box(self, key: str, value: object, x: float, y: float, width: float) -> None:
+        self.pdf.setFillColorRGB(0.98, 0.99, 1)
+        self.pdf.setStrokeColorRGB(0.88, 0.91, 0.94)
+        self.pdf.roundRect(x, y - 52, width, 52, 5, fill=1, stroke=1)
+        self.pdf.setFillColorRGB(0.45, 0.5, 0.58)
+        self.text(key, x + width - 12, y - 17, 8)
+        self.pdf.setFillColorRGB(0.06, 0.09, 0.16)
+        text = str(value or "-")
+        self.text(text[:44], x + width - 12, y - 36, 10)
+        self.pdf.setFillColorRGB(0, 0, 0)
+
+    def note_box(self, title: str, value: object) -> None:
+        self.page_break(110)
+        self.pdf.setFillColorRGB(0.98, 0.99, 1)
+        self.pdf.setStrokeColorRGB(0.88, 0.91, 0.94)
+        self.pdf.roundRect(self.left, self.y - 92, self.content_width, 92, 6, fill=1, stroke=1)
+        self.pdf.setFillColorRGB(*self.brand_dark)
+        self.text(title, self.right - 14, self.y - 20, 11)
+        self.y = self.wrapped(value, self.right - 14, self.y - 42, max_chars=86, size=10, leading=14)
+        self.y -= 18
 
     def build(self) -> BytesIO:
         self.header()
         steps = sorted(self.request.approvals or [], key=lambda step: step.step_order)
-
-        self.section("مسار الموافقات ومبرر العمل")
-        self.draw_approval_circles(steps)
-        self.y -= 12
-        self.text("مبرر العمل:", self.right, self.y, 12)
-        self.y -= 18
-        self.y = self.wrapped(self.request.business_justification or "لا يوجد مبرر مسجل.", self.right, self.y, max_chars=82, size=11)
 
         self.section("بيانات الطلب")
         form_data = self.request.form_data or {}
@@ -324,10 +477,14 @@ class RequestPdfBuilder:
             ("تاريخ الإنشاء", format_pdf_datetime(self.request.created_at, self.tz)),
             ("القسم المختص", form_data.get("assigned_section_label") or form_data.get("administrative_section_label") or form_data.get("assigned_section") or "-"),
         ]
-        for key, value in form_data.items():
-            values.append((FIELD_LABELS.get(key, key), value))
+        values.extend(pdf_form_pairs(form_data))
         self.pairs(values)
 
+        self.section("مسار الموافقات")
+        self.draw_approval_circles(steps)
+        self.note_box("مبرر العمل", self.request.business_justification or "لا يوجد مبرر مسجل.")
+
+        self.footer()
         self.pdf.save()
         self.stream.seek(0)
         return self.stream

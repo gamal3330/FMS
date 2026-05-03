@@ -1,7 +1,7 @@
 import { FormEvent, useEffect, useState } from "react";
 import { Eye, EyeOff, Landmark, LockKeyhole } from "lucide-react";
 import { API_BASE } from "../lib/api";
-import { applyBrandColor, applyBranding } from "../lib/branding";
+import { applyBrandColor, applyBranding, applyStoredFavicon } from "../lib/branding";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 
@@ -26,6 +26,7 @@ export function Login({ onLogin }: { onLogin: (token: string) => void }) {
 
   useEffect(() => {
     applyBrandColor(localStorage.getItem("qib_brand_color") || "#0d6337");
+    applyStoredFavicon();
   }, []);
 
   useEffect(() => {

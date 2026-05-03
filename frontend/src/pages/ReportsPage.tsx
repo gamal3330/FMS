@@ -1,9 +1,9 @@
 import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
-import { Download, FileSpreadsheet, Filter, RefreshCw } from "lucide-react";
+import { Download, ExternalLink, Eye, FileSpreadsheet, Filter, RefreshCw, X } from "lucide-react";
 import { Card } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { api } from "../lib/axios";
-import { apiFetch, ServiceRequest } from "../lib/api";
+import { API_BASE, apiFetch, ServiceRequest } from "../lib/api";
 import { formatSystemDate } from "../lib/datetime";
 
 const statusLabels: Record<string, string> = {
@@ -39,6 +39,8 @@ export function ReportsPage() {
   const [requestTypes, setRequestTypes] = useState<ActiveRequestType[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isExporting, setIsExporting] = useState("");
+  const [pdfAction, setPdfAction] = useState<{ id: number; action: "preview" | "download" } | null>(null);
+  const [viewedRequest, setViewedRequest] = useState<ServiceRequest | null>(null);
   const [error, setError] = useState("");
 
   async function loadRequests(event?: FormEvent) {
@@ -112,12 +114,75 @@ export function ReportsPage() {
     }
   }
 
+  async function handleRequestPdf(request: ServiceRequest, action: "preview" | "download") {
+    setPdfAction({ id: request.id, action });
+    setError("");
+    try {
+      const token = localStorage.getItem("qib_token");
+      const response = await fetch(`${API_BASE}/requests/${request.id}/print.pdf`, {
+        headers: {
+          ...(token ? { Authorization: `Bearer ${token}` } : {})
+        }
+      });
+      if (!response.ok) throw new Error("print_failed");
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      if (action === "preview") {
+        const opened = window.open(url, "_blank", "noopener,noreferrer");
+        if (!opened) {
+          const link = document.createElement("a");
+          link.href = url;
+          link.download = `${request.request_number || "request"}.pdf`;
+          link.click();
+        }
+        window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      } else {
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = `${request.request_number || "request"}.pdf`;
+        link.click();
+        URL.revokeObjectURL(url);
+      }
+    } catch {
+      setError("تعذر تجهيز ملف PDF. تحقق من صلاحياتك أو اتصال الخادم.");
+    } finally {
+      setPdfAction(null);
+    }
+  }
+
   function typeLabel(request: ServiceRequest) {
     return request.form_data?.request_type_label || (request.request_type_id ? requestTypeById.get(request.request_type_id) : "") || request.request_type;
   }
 
   return (
     <div className="space-y-5" dir="rtl">
+      {viewedRequest && (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm" role="dialog" aria-modal="true">
+          <div className="max-h-[88vh] w-full max-w-3xl overflow-y-auto rounded-lg border border-slate-200 bg-white p-5 shadow-xl">
+            <div className="mb-5 flex items-start justify-between gap-4">
+              <div>
+                <p className="text-sm font-semibold text-bank-700">{viewedRequest.request_number}</p>
+                <h3 className="mt-2 text-xl font-bold text-slate-950">{viewedRequest.title}</h3>
+                <p className="mt-1 text-sm text-slate-500">{viewedRequest.requester.full_name_ar} - {formatSystemDate(viewedRequest.created_at)}</p>
+              </div>
+              <button type="button" onClick={() => setViewedRequest(null)} className="flex h-9 w-9 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100" aria-label="إغلاق">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <div className="grid gap-3 md:grid-cols-2">
+              <Info label="نوع الطلب" value={typeLabel(viewedRequest)} />
+              <Info label="الحالة" value={statusLabels[viewedRequest.status] ?? viewedRequest.status} />
+              <Info label="الموظف" value={viewedRequest.requester.full_name_ar} />
+              <Info label="الإدارة" value={viewedRequest.department?.name_ar ?? "-"} />
+              <Info label="مبرر العمل" value={viewedRequest.business_justification || "-"} wide />
+              {Object.entries(viewedRequest.form_data ?? {})
+                .filter(([key]) => !["request_type_code", "request_type_label", "assigned_section", "administrative_section", "assigned_section_label", "administrative_section_label"].includes(key))
+                .map(([key, value]) => <Info key={key} label={key.replace(/_/g, " ")} value={String(value || "-")} />)}
+            </div>
+          </div>
+        </div>
+      )}
+
       <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
         <p className="text-sm font-semibold text-bank-700">التقارير</p>
         <h2 className="mt-2 text-2xl font-bold text-slate-950">تقارير الطلبات</h2>
@@ -162,18 +227,17 @@ export function ReportsPage() {
           <div className="flex flex-wrap gap-2">
             <Button type="button" onClick={() => loadRequests()} disabled={isLoading} className="gap-2"><RefreshCw className={`h-4 w-4 ${isLoading ? "animate-spin" : ""}`} /> تحديث</Button>
             <button type="button" onClick={() => exportReport("xlsx")} disabled={Boolean(isExporting)} className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-300 px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"><FileSpreadsheet className="h-4 w-4" /> Excel</button>
-            <button type="button" onClick={() => exportReport("pdf")} disabled={Boolean(isExporting)} className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-300 px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"><Download className="h-4 w-4" /> PDF</button>
           </div>
         </div>
         {error && <p className="mb-4 rounded-md bg-red-50 p-3 text-sm font-semibold text-red-700">{error}</p>}
         <div className="overflow-x-auto rounded-md border border-slate-200">
           <table className="w-full min-w-[940px] text-sm">
             <thead className="bg-slate-50 text-xs font-bold text-slate-500">
-              <tr>{["رقم الطلب", "العنوان", "الموظف", "نوع الطلب", "الحالة", "التاريخ"].map((header) => <th key={header} className="p-3 text-right">{header}</th>)}</tr>
+              <tr>{["رقم الطلب", "العنوان", "الموظف", "نوع الطلب", "الحالة", "التاريخ", "الإجراءات"].map((header) => <th key={header} className="p-3 text-right">{header}</th>)}</tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {isLoading && <tr><td colSpan={6} className="p-6 text-center text-slate-500">جار تحميل التقرير...</td></tr>}
-              {!isLoading && filteredRequests.length === 0 && <tr><td colSpan={6} className="p-6 text-center text-slate-500">لا توجد نتائج مطابقة.</td></tr>}
+              {isLoading && <tr><td colSpan={7} className="p-6 text-center text-slate-500">جار تحميل التقرير...</td></tr>}
+              {!isLoading && filteredRequests.length === 0 && <tr><td colSpan={7} className="p-6 text-center text-slate-500">لا توجد نتائج مطابقة.</td></tr>}
               {!isLoading && filteredRequests.map((request) => (
                 <tr key={request.id} className="hover:bg-slate-50">
                   <td className="p-3 font-semibold text-bank-700">{request.request_number}</td>
@@ -182,6 +246,36 @@ export function ReportsPage() {
                   <td className="p-3">{typeLabel(request)}</td>
                   <td className="p-3">{statusLabels[request.status] ?? request.status}</td>
                   <td className="p-3">{formatSystemDate(request.created_at)}</td>
+                  <td className="p-3">
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setViewedRequest(request)}
+                        className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-300 px-3 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
+                      >
+                        <Eye className="h-4 w-4" />
+                        عرض
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleRequestPdf(request, "preview")}
+                        disabled={pdfAction?.id === request.id}
+                        className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-300 px-3 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-60"
+                      >
+                        <ExternalLink className="h-4 w-4" />
+                        {pdfAction?.id === request.id && pdfAction.action === "preview" ? "جاري المعاينة..." : "معاينة"}
+                      </button>
+                    <button
+                      type="button"
+                        onClick={() => handleRequestPdf(request, "download")}
+                        disabled={pdfAction?.id === request.id}
+                      className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-300 px-3 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-60"
+                    >
+                        <Download className="h-4 w-4" />
+                        {pdfAction?.id === request.id && pdfAction.action === "download" ? "جاري التحميل..." : "تحميل"}
+                    </button>
+                    </div>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -198,4 +292,13 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
 
 function Metric({ label, value }: { label: string; value: number }) {
   return <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm"><p className="text-sm text-slate-500">{label}</p><p className="mt-2 text-3xl font-bold text-slate-950">{value}</p></div>;
+}
+
+function Info({ label, value, wide = false }: { label: string; value: string; wide?: boolean }) {
+  return (
+    <div className={`rounded-md border border-slate-200 bg-slate-50 p-3 ${wide ? "md:col-span-2" : ""}`}>
+      <p className="text-xs font-semibold text-slate-500">{label}</p>
+      <p className="mt-1 break-words text-sm font-bold leading-6 text-slate-950">{value}</p>
+    </div>
+  );
 }

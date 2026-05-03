@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Activity, AlertTriangle, CheckCircle2, Clock, Database, HardDrive, RefreshCw, Server, XCircle } from "lucide-react";
+import { Activity, AlertTriangle, CheckCircle2, Clock, Database, HardDrive, RefreshCw, Server, Trash2, XCircle } from "lucide-react";
 import { api, getErrorMessage } from "../../lib/axios";
 import { Card } from "../../components/ui/card";
 import { Button } from "../../components/ui/button";
@@ -34,10 +34,13 @@ export default function HealthMonitoringPage() {
   const [summary, setSummary] = useState(null);
   const [loading, setLoading] = useState(true);
   const [running, setRunning] = useState(false);
+  const [clearingLogs, setClearingLogs] = useState(false);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
 
   async function load() {
     setError("");
+    setNotice("");
     setLoading(true);
     try {
       const { data } = await api.get("/health/summary");
@@ -51,6 +54,7 @@ export default function HealthMonitoringPage() {
 
   async function runChecks() {
     setError("");
+    setNotice("");
     setRunning(true);
     try {
       const { data } = await api.post("/health/run-checks");
@@ -59,6 +63,22 @@ export default function HealthMonitoringPage() {
       setError(getErrorMessage(error));
     } finally {
       setRunning(false);
+    }
+  }
+
+  async function clearLogs() {
+    if (!window.confirm("هل تريد محو السجلات المعروضة؟")) return;
+    setError("");
+    setNotice("");
+    setClearingLogs(true);
+    try {
+      const { data } = await api.post("/health/clear-logs");
+      setSummary(data);
+      setNotice("تم محو السجلات بنجاح.");
+    } catch (error) {
+      setError(getErrorMessage(error));
+    } finally {
+      setClearingLogs(false);
     }
   }
 
@@ -145,6 +165,11 @@ export default function HealthMonitoringPage() {
           {error}
         </div>
       )}
+      {notice && (
+        <div className="rounded-md border border-emerald-200 bg-emerald-50 p-4 text-sm font-semibold text-emerald-800">
+          {notice}
+        </div>
+      )}
 
       {loading ? (
         <div className="rounded-lg border border-slate-200 bg-white p-8 text-center text-sm text-slate-600">جاري تحميل بيانات صحة النظام...</div>
@@ -191,8 +216,17 @@ export default function HealthMonitoringPage() {
             </Card>
 
             <Card className="overflow-hidden">
-              <div className="border-b border-slate-200 p-4">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 p-4">
                 <h3 className="font-bold text-slate-950">السجلات</h3>
+                <button
+                  type="button"
+                  onClick={clearLogs}
+                  disabled={clearingLogs || loading}
+                  className="inline-flex h-9 items-center gap-2 rounded-md border border-red-200 px-3 text-xs font-bold text-red-700 transition hover:bg-red-50 disabled:opacity-60"
+                >
+                  <Trash2 className="h-4 w-4" />
+                  {clearingLogs ? "جاري المحو..." : "محو السجلات"}
+                </button>
               </div>
               <div className="divide-y divide-slate-100">
                 {(summary?.system_logs || []).map((log) => (

@@ -2,7 +2,7 @@ import { Activity, BarChart3, Bell, Building2, FileText, KeyRound, LayoutDashboa
 import { ReactNode, useEffect, useRef, useState } from "react";
 import { NavLink } from "react-router-dom";
 import { API_BASE, apiFetch, CurrentUser, ServiceRequest } from "../lib/api";
-import { applyBrandColor, applyBranding } from "../lib/branding";
+import { applyBrandColor, applyBranding, applyStoredFavicon } from "../lib/branding";
 import FeedbackDialog from "./ui/FeedbackDialog";
 
 const baseNav = [
@@ -74,6 +74,7 @@ export function Layout({
 
   useEffect(() => {
     applyBrandColor(localStorage.getItem("qib_brand_color") || "#0d6337");
+    applyStoredFavicon();
   }, []);
 
   useEffect(() => {
@@ -190,73 +191,75 @@ export function Layout({
         </div>
       )}
 
-      <aside className={`fixed right-0 top-0 hidden h-full border-l border-slate-200 bg-white transition-all duration-200 lg:block ${sidebarCollapsed ? "w-20 p-4" : "w-72 p-5"}`}>
-        <div className={`mb-8 flex items-start gap-3 ${sidebarCollapsed ? "justify-center" : "justify-between"}`}>
-          <div className={sidebarCollapsed ? "hidden" : "min-w-0"}>
-            {logoUrl ? (
-              <img src={resolveAssetUrl(logoUrl)} alt="شعار النظام" className="mb-3 h-12 w-auto max-w-[180px] object-contain" />
-            ) : (
-              <p className="text-xs font-semibold uppercase tracking-widest text-bank-700">QIB</p>
-            )}
-            <h1 className="mt-2 text-xl font-bold leading-8 text-slate-950">{systemName}</h1>
-          </div>
-          <button
-            type="button"
-            onClick={() => setSidebarCollapsed((value) => !value)}
-            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-50 hover:text-bank-700"
-            aria-label={sidebarCollapsed ? "توسيع القائمة الجانبية" : "طي القائمة الجانبية"}
-            title={sidebarCollapsed ? "توسيع القائمة" : "طي القائمة"}
-          >
-            {sidebarCollapsed ? <PanelRightOpen className="h-5 w-5" /> : <PanelRightClose className="h-5 w-5" />}
-          </button>
-        </div>
-
-        <nav className="space-y-2">
-          {nav.map(({ label, href, icon: Icon }) => (
-            <NavLink
-              key={label}
-              to={href}
-              aria-label={label}
-              title={sidebarCollapsed ? label : undefined}
-              className={({ isActive }) =>
-                `flex h-11 w-full items-center rounded-md text-sm font-medium transition ${sidebarCollapsed ? "justify-center px-0" : "gap-3 px-3 text-right"} ${
-                  isActive ? "bg-bank-50 text-bank-700" : "text-slate-600 hover:bg-slate-100 hover:text-slate-950"
-                }`
-              }
-            >
-              <Icon className="h-4 w-4 shrink-0" />
-              {!sidebarCollapsed && <span>{label}</span>}
-            </NavLink>
-          ))}
-        </nav>
-
-        <div className={`absolute bottom-5 ${sidebarCollapsed ? "left-4 right-4" : "left-5 right-5"}`}>
-          <div className={`mb-4 flex items-center rounded-md bg-slate-50 ${sidebarCollapsed ? "justify-center p-2" : "gap-3 p-3"}`} title={sidebarCollapsed ? currentUser?.full_name_ar ?? "مستخدم النظام" : undefined}>
-            <UserCircle className="h-8 w-8 shrink-0 text-slate-500" />
+      <aside className={`fixed right-0 top-0 hidden h-full border-l border-slate-200 bg-white transition-all duration-200 lg:block ${sidebarCollapsed ? "w-20" : "w-72"}`}>
+        <div className={`flex h-full flex-col overflow-hidden ${sidebarCollapsed ? "px-4 py-4" : "px-5 py-5"}`}>
+          <div className={`mb-6 flex shrink-0 items-start gap-3 ${sidebarCollapsed ? "justify-center" : "justify-between"}`}>
             <div className={sidebarCollapsed ? "hidden" : "min-w-0"}>
-              <p className="truncate text-sm font-semibold text-slate-900">{currentUser?.full_name_ar ?? "مستخدم النظام"}</p>
-              <p className="truncate text-xs text-slate-500">{currentUser ? roleLabels[currentUser.role] ?? currentUser.role : ""}</p>
-              <p className="mt-1 truncate text-xs text-slate-500">{currentUser?.department?.name_ar ?? "لا توجد إدارة"}</p>
+              {logoUrl ? (
+                <img src={resolveAssetUrl(logoUrl)} alt="شعار النظام" className="mb-3 h-12 w-auto max-w-[180px] object-contain" />
+              ) : (
+                <p className="text-xs font-semibold uppercase tracking-widest text-bank-700">QIB</p>
+              )}
+              <h1 className="mt-2 text-xl font-bold leading-8 text-slate-950">{systemName}</h1>
             </div>
+            <button
+              type="button"
+              onClick={() => setSidebarCollapsed((value) => !value)}
+              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-50 hover:text-bank-700"
+              aria-label={sidebarCollapsed ? "توسيع القائمة الجانبية" : "طي القائمة الجانبية"}
+              title={sidebarCollapsed ? "توسيع القائمة" : "طي القائمة"}
+            >
+              {sidebarCollapsed ? <PanelRightOpen className="h-5 w-5" /> : <PanelRightClose className="h-5 w-5" />}
+            </button>
           </div>
-          <button
-            onClick={() => setPasswordDialogOpen(true)}
-            className={`mb-2 flex w-full items-center rounded-md text-sm text-slate-600 hover:bg-bank-50 hover:text-bank-700 ${sidebarCollapsed ? "h-10 justify-center px-0" : "gap-2 px-3 py-2"}`}
-            aria-label="تغيير كلمة المرور"
-            title={sidebarCollapsed ? "تغيير كلمة المرور" : undefined}
-          >
-            <KeyRound className="h-4 w-4 shrink-0" />
-            {!sidebarCollapsed && <span>تغيير كلمة المرور</span>}
-          </button>
-          <button
-            onClick={onLogout}
-            className={`flex w-full items-center rounded-md text-sm text-slate-500 hover:bg-red-50 hover:text-red-700 ${sidebarCollapsed ? "h-10 justify-center px-0" : "gap-2 px-3 py-2"}`}
-            aria-label="تسجيل الخروج"
-            title={sidebarCollapsed ? "تسجيل الخروج" : undefined}
-          >
-            <LogOut className="h-4 w-4 shrink-0" />
-            {!sidebarCollapsed && <span>تسجيل الخروج</span>}
-          </button>
+
+          <nav className="min-h-0 flex-1 space-y-2 overflow-y-auto overflow-x-hidden pb-4">
+            {nav.map(({ label, href, icon: Icon }) => (
+              <NavLink
+                key={label}
+                to={href}
+                aria-label={label}
+                title={sidebarCollapsed ? label : undefined}
+                className={({ isActive }) =>
+                  `flex h-11 w-full items-center rounded-md text-sm font-medium transition ${sidebarCollapsed ? "justify-center px-0" : "gap-3 px-3 text-right"} ${
+                    isActive ? "bg-bank-50 text-bank-700" : "text-slate-600 hover:bg-slate-100 hover:text-slate-950"
+                  }`
+                }
+              >
+                <Icon className="h-4 w-4 shrink-0" />
+                {!sidebarCollapsed && <span>{label}</span>}
+              </NavLink>
+            ))}
+          </nav>
+
+          <div className="shrink-0 border-t border-slate-100 pt-4">
+            <div className={`mb-4 flex items-center rounded-md bg-slate-50 ${sidebarCollapsed ? "justify-center p-2" : "gap-3 p-3"}`} title={sidebarCollapsed ? currentUser?.full_name_ar ?? "مستخدم النظام" : undefined}>
+              <UserCircle className="h-8 w-8 shrink-0 text-slate-500" />
+              <div className={sidebarCollapsed ? "hidden" : "min-w-0"}>
+                <p className="truncate text-sm font-semibold text-slate-900">{currentUser?.full_name_ar ?? "مستخدم النظام"}</p>
+                <p className="truncate text-xs text-slate-500">{currentUser ? roleLabels[currentUser.role] ?? currentUser.role : ""}</p>
+                <p className="mt-1 truncate text-xs text-slate-500">{currentUser?.department?.name_ar ?? "لا توجد إدارة"}</p>
+              </div>
+            </div>
+            <button
+              onClick={() => setPasswordDialogOpen(true)}
+              className={`mb-2 flex w-full items-center rounded-md text-sm text-slate-600 hover:bg-bank-50 hover:text-bank-700 ${sidebarCollapsed ? "h-10 justify-center px-0" : "gap-2 px-3 py-2"}`}
+              aria-label="تغيير كلمة المرور"
+              title={sidebarCollapsed ? "تغيير كلمة المرور" : undefined}
+            >
+              <KeyRound className="h-4 w-4 shrink-0" />
+              {!sidebarCollapsed && <span>تغيير كلمة المرور</span>}
+            </button>
+            <button
+              onClick={onLogout}
+              className={`flex w-full items-center rounded-md text-sm text-slate-500 hover:bg-red-50 hover:text-red-700 ${sidebarCollapsed ? "h-10 justify-center px-0" : "gap-2 px-3 py-2"}`}
+              aria-label="تسجيل الخروج"
+              title={sidebarCollapsed ? "تسجيل الخروج" : undefined}
+            >
+              <LogOut className="h-4 w-4 shrink-0" />
+              {!sidebarCollapsed && <span>تسجيل الخروج</span>}
+            </button>
+          </div>
         </div>
       </aside>
 

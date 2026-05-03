@@ -6,7 +6,7 @@ import WorkflowStepForm from "./WorkflowStepForm";
 
 const empty = { step_name_ar: "", step_name_en: "", step_type: "direct_manager", approver_role_id: "", approver_user_id: "", is_mandatory: true, can_reject: true, can_return_for_edit: false, sla_hours: 8, escalation_user_id: "", sort_order: 1, is_active: true };
 
-export default function WorkflowBuilder({ requestTypeId, notify }) {
+export default function WorkflowBuilder({ requestTypeId, notify, onWorkflowChange }) {
   const [workflow, setWorkflow] = useState(null);
   const [form, setForm] = useState(empty);
   const [editingId, setEditingId] = useState(null);
@@ -16,7 +16,9 @@ export default function WorkflowBuilder({ requestTypeId, notify }) {
   async function load() {
     if (!requestTypeId) return;
     try {
-      setWorkflow((await api.get(`/request-types/${requestTypeId}/workflow`)).data);
+      const { data } = await api.get(`/request-types/${requestTypeId}/workflow`);
+      setWorkflow(data);
+      onWorkflowChange?.();
     } catch (error) {
       const message = getErrorMessage(error);
       setError(message);
