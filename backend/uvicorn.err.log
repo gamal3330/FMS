@@ -1,6 +1,0 @@
-INFO:     Started server process [37715]
-INFO:     Waiting for application startup.
-INFO:     Application startup complete.
-INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
-/Users/gamal/Documents/FMS/backend/app/api/v1/settings.py:93: SAWarning: Cannot correctly sort tables; there are unresolvable cycles between tables "departments, users", which is usually caused by mutually dependent foreign key constraints.  Foreign key constraints involving these tables will not be considered; this warning may raise an error in a future release.
-  for table in reversed(Base.metadata.sorted_tables):
