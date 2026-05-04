@@ -1,4 +1,95 @@
-# تثبيت النظام محلياً
+# تثبيت النظام
+
+## التشغيل على خادم باستخدام Docker
+
+هذه هي الطريقة المفضلة عند نقل النظام إلى خادم جديد مثل AWS EC2، لأنها تشغل قاعدة البيانات والباكند والواجهة بنفس البيئة بدون تثبيت Python و Node يدوياً داخل الخادم.
+
+### المتطلبات على الخادم
+
+- Docker
+- Docker Compose Plugin
+- Git
+
+على Ubuntu:
+
+```bash
+sudo apt update
+sudo apt install -y git docker.io docker-compose-plugin
+sudo systemctl enable docker
+sudo systemctl start docker
+sudo usermod -aG docker $USER
+```
+
+بعد الأمر الأخير، اخرج من SSH وادخل مرة أخرى حتى تعمل صلاحية Docker بدون `sudo`.
+
+### تنزيل وتشغيل النظام
+
+```bash
+git clone رابط_المستودع FMS
+cd FMS
+bash scripts/deploy-docker.sh
+```
+
+في أول تشغيل سيقوم السكربت بإنشاء ملف `.env` من `.env.docker.example` ثم يتوقف حتى تراجع كلمات المرور. عدّل الملف:
+
+```bash
+nano .env
+```
+
+غيّر خصوصاً:
+
+```env
+POSTGRES_PASSWORD=change-this-postgres-password
+SECRET_KEY=change-this-to-a-long-random-secret
+CORS_ORIGINS=http://SERVER_IP
+FRONTEND_PORT=80
+```
+
+ثم شغّل:
+
+```bash
+bash scripts/deploy-docker.sh
+```
+
+افتح النظام:
+
+```text
+http://SERVER_IP
+```
+
+### أوامر مفيدة
+
+```bash
+docker compose ps
+docker compose logs -f
+docker compose restart
+docker compose down
+docker compose up -d --build
+```
+
+### تحديث النظام على الخادم
+
+```bash
+cd ~/FMS
+git pull
+docker compose up -d --build
+```
+
+### النسخ الاحتياطي لقاعدة PostgreSQL
+
+```bash
+docker compose exec postgres pg_dump -U qib qib_it_portal > backup.sql
+```
+
+استرجاع نسخة:
+
+```bash
+cat backup.sql | docker compose exec -T postgres psql -U qib qib_it_portal
+```
+
+---
+
+# تثبيت النظام محلياً للتطوير
 
 هذه الصفحة مخصصة لتثبيت وتشغيل نظام إدارة طلبات الخدمات التقنية على جهاز تطوير محلي بأمر واحد على macOS أو Linux أو Windows.
 
@@ -42,7 +133,7 @@ brew install python@3.12 node expat
 ### Ubuntu / Debian Linux
 
 ```bash
-a
+sudo apt update
 sudo apt install -y python3 python3-venv python3-pip nodejs npm
 ```
 

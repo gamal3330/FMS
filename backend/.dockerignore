@@ -1,0 +1,13 @@
+.env
+.venv
+.venv-local
+.venv-mac
+.venv312
+__pycache__
+*.pyc
+qib_local.db
+uploads
+backups
+uvicorn.err.log
+uvicorn.out.log
+.pytest_cache

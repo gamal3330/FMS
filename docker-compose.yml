@@ -1,48 +1,56 @@
 services:
   postgres:
     image: postgres:16-alpine
+    restart: unless-stopped
     environment:
-      POSTGRES_DB: qib_it_portal
-      POSTGRES_USER: qib
-      POSTGRES_PASSWORD: qib
+      POSTGRES_DB: ${POSTGRES_DB:-qib_it_portal}
+      POSTGRES_USER: ${POSTGRES_USER:-qib}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-this-postgres-password}
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U qib -d qib_it_portal"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-qib} -d ${POSTGRES_DB:-qib_it_portal}"]
       interval: 10s
       timeout: 5s
       retries: 5
 
   backend:
     build: ./backend
+    restart: unless-stopped
     environment:
-      DATABASE_URL: postgresql+psycopg://qib:qib@postgres:5432/qib_it_portal
-      SECRET_KEY: change-this-in-production
-      CORS_ORIGINS: http://172.16.23.37:5173,http://172.16.23.37
-      SEED_ADMIN_EMAIL: admin@qib.internal-bank.qa
-      SEED_ADMIN_PASSWORD: Admin@12345
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-qib}:${POSTGRES_PASSWORD:-change-this-postgres-password}@postgres:5432/${POSTGRES_DB:-qib_it_portal}
+      SECRET_KEY: ${SECRET_KEY:-change-this-in-production}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost,http://127.0.0.1}
+      SEED_ADMIN_EMAIL: ${SEED_ADMIN_EMAIL:-admin@qib.internal-bank.qa}
+      SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:-Admin@12345}
+      UPLOAD_DIR: /app/uploads
     depends_on:
       postgres:
         condition: service_healthy
-    ports:
-      - "8000:8000"
+    expose:
+      - "8000"
     volumes:
       - backend_uploads:/app/uploads
+      - backend_backups:/app/backups
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
 
   frontend:
     build:
       context: ./frontend
       args:
-        VITE_API_BASE_URL: http://172.16.23.37:8000/api/v1
-    environment:
-      VITE_API_BASE_URL: http://172.16.23.37:8000/api/v1
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-/api/v1}
+    restart: unless-stopped
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     ports:
-      - "5173:80"
+      - "${FRONTEND_PORT:-80}:80"
 
 volumes:
   postgres_data:
   backend_uploads:
+  backend_backups:
