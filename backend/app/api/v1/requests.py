@@ -279,6 +279,18 @@ class RequestPdfBuilder:
         self.text(value, x, y, size)
         self.pdf.setFillColorRGB(0, 0, 0)
 
+    def ltr_muted_text(self, value: object, x: float, y: float, size: int = 9) -> None:
+        self.pdf.setFillColorRGB(0.88, 0.96, 0.91)
+        self.left_text(value, x, y, size)
+        self.pdf.setFillColorRGB(0, 0, 0)
+
+    def summary_item(self, title: str, value: object, x: float, y: float, width: float, value_size: int = 12) -> None:
+        self.pdf.setFillColorRGB(0.45, 0.5, 0.58)
+        self.text(title, x + width - 12, y - 24, 9)
+        self.pdf.setFillColorRGB(0.06, 0.09, 0.16)
+        self.text(str(value or "-")[:38], x + width - 12, y - 50, value_size)
+        self.pdf.setFillColorRGB(0, 0, 0)
+
     def wrapped(self, value: object, x: float, y: float, max_chars: int = 78, size: int = 11, leading: int = 16, color: tuple[float, float, float] = (0.08, 0.12, 0.18)) -> float:
         words = str(value or "-").split()
         lines: list[str] = []
@@ -371,38 +383,47 @@ class RequestPdfBuilder:
     def header(self) -> None:
         form_data = self.request.form_data or {}
         request_type_title = form_data.get("request_type_label") or self.request.request_type or "طلب خدمة"
+        printed_at = datetime.now(timezone.utc).astimezone(self.tz).strftime("%Y-%m-%d  %H:%M")
         self.pdf.setFillColorRGB(*self.brand)
-        self.pdf.rect(0, self.height - 86, self.width, 86, fill=1, stroke=0)
+        self.pdf.rect(0, self.height - 92, self.width, 92, fill=1, stroke=0)
 
         logo_path = logo_file_path(self.db)
         if logo_path:
             try:
-                self.pdf.drawImage(ImageReader(str(logo_path)), self.left, self.height - 70, width=86, height=42, preserveAspectRatio=True, mask="auto")
+                self.pdf.drawImage(ImageReader(str(logo_path)), self.left + 4, self.height - 71, width=92, height=44, preserveAspectRatio=True, mask="auto")
             except Exception:
                 pass
 
         self.pdf.setFillColorRGB(1, 1, 1)
-        self.text(self.general.system_name if self.general else "النظام", self.right, self.height - 31, 13)
-        self.text(f"نموذج {request_type_title}", self.right, self.height - 58, 20)
+        self.text(self.general.system_name if self.general else "النظام", self.right, self.height - 30, 13)
+        self.text(f"نموذج {request_type_title}"[:46], self.right, self.height - 58, 21)
         self.pdf.setFillColorRGB(0.88, 0.96, 0.91)
-        self.text(f"تاريخ الطباعة: {format_pdf_datetime(datetime.now(timezone.utc), self.tz)}", self.right, self.height - 75, 9)
+        self.text("تاريخ الطباعة", self.right, self.height - 77, 9)
+        self.ltr_muted_text(printed_at, self.right - 154, self.height - 77, 9)
         self.pdf.setFillColorRGB(0, 0, 0)
 
-        self.y = self.height - 112
+        self.y = self.height - 122
         self.pdf.setFillColorRGB(1, 1, 1)
         self.pdf.setStrokeColorRGB(0.88, 0.91, 0.94)
-        self.pdf.roundRect(self.left, self.y - 72, self.content_width, 72, 7, fill=1, stroke=1)
-        self.pdf.setFillColorRGB(0.45, 0.5, 0.58)
-        self.text("رقم الطلب", self.right - 16, self.y - 22, 9)
-        self.text("عنوان الطلب", self.right - 16, self.y - 50, 9)
-        self.pdf.setFillColorRGB(0.06, 0.09, 0.16)
-        self.text(self.request.request_number, self.right - 92, self.y - 22, 13)
-        self.text(self.request.title, self.right - 92, self.y - 50, 12)
-        status_x = self.left + 112
-        status_width = 96
-        self.status_pill(label(self.request.status, STATUS_LABELS), status_x, self.y - 27, status_width)
-        self.centered_muted_text("الحالة", status_x - (status_width / 2), self.y - 51, 8)
-        self.y -= 96
+        self.pdf.roundRect(self.left, self.y - 80, self.content_width, 80, 7, fill=1, stroke=1)
+
+        status_width = 124
+        gap = 12
+        item_width = (self.content_width - status_width - (gap * 2)) / 2
+        number_x = self.right - item_width
+        title_x = number_x - gap - item_width
+        status_x = self.left
+
+        self.summary_item("رقم الطلب", self.request.request_number, number_x, self.y, item_width, 15)
+        self.summary_item("عنوان الطلب", self.request.title, title_x, self.y, item_width, 12)
+
+        self.pdf.setStrokeColorRGB(0.9, 0.92, 0.95)
+        self.pdf.line(title_x - (gap / 2), self.y - 64, title_x - (gap / 2), self.y - 16)
+        self.pdf.line(number_x - (gap / 2), self.y - 64, number_x - (gap / 2), self.y - 16)
+
+        self.centered_muted_text("الحالة", status_x + (status_width / 2), self.y - 24, 9)
+        self.status_pill(label(self.request.status, STATUS_LABELS), status_x + status_width - 16, self.y - 52, 102)
+        self.y -= 104
 
     def section(self, title: str) -> None:
         self.page_break(90)
