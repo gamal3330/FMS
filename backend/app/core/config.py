@@ -13,6 +13,9 @@ class Settings(BaseSettings):
     upload_dir: str = "uploads"
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
     request_slow_ms: int = 1000
+    db_pool_size: int = 10
+    db_max_overflow: int = 20
+    db_pool_recycle_seconds: int = 1800
     system_version_file: str = "../version.txt"
     update_manifest_file: str = "../update-manifest.json"
     updates_dir: str = "../updates"

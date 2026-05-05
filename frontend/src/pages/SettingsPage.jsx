@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { AlertTriangle, CheckCircle2, Database, Download, History, LockKeyhole, Mail, PackageCheck, RefreshCw, RotateCcw, Settings2, Upload } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Database, Download, History, LockKeyhole, Mail, PackageCheck, RefreshCw, Settings2, Upload } from "lucide-react";
 import { api, getErrorMessage } from "../lib/axios";
 import { Card } from "../components/ui/card";
 import { Button } from "../components/ui/button";
@@ -234,8 +234,6 @@ function DatabaseSettings({ notify }) {
   });
   const [file, setFile] = useState(null);
   const [restoreConfirmation, setRestoreConfirmation] = useState("");
-  const [resetConfirmation, setResetConfirmation] = useState("");
-  const [resetPreview, setResetPreview] = useState(null);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
 
@@ -256,18 +254,9 @@ function DatabaseSettings({ notify }) {
     }
   }
 
-  async function loadResetPreview() {
-    try {
-      setResetPreview((await api.get("/settings/database/reset-preview")).data);
-    } catch (error) {
-      notify(getErrorMessage(error), "error");
-    }
-  }
-
   useEffect(() => {
     loadStatus();
     loadBackupSettings();
-    loadResetPreview();
   }, []);
 
   async function saveBackupSettings(event) {
@@ -288,8 +277,8 @@ function DatabaseSettings({ notify }) {
   }
 
   async function downloadBackup() {
-    if (status && status.maintenance_supported === false) {
-      notify(status.maintenance_message || "هذه العملية غير متاحة لنوع قاعدة البيانات الحالي.", "error");
+    if (status && status.backup_supported === false) {
+      notify("النسخ الاحتياطي غير مدعوم لنوع قاعدة البيانات الحالي.", "error");
       return;
     }
     setBusy("backup");
@@ -297,7 +286,7 @@ function DatabaseSettings({ notify }) {
     try {
       const response = await api.get("/settings/database/backup", { responseType: "blob" });
       const disposition = response.headers["content-disposition"] || "";
-      const filename = disposition.match(/filename="?([^"]+)"?/)?.[1] || "qib-database-backup.db";
+      const filename = disposition.match(/filename="?([^"]+)"?/)?.[1] || "qib-database-backup.dump";
       const url = URL.createObjectURL(response.data);
       const link = document.createElement("a");
       link.href = url;
@@ -315,8 +304,8 @@ function DatabaseSettings({ notify }) {
 
   async function restoreBackup(event) {
     event.preventDefault();
-    if (status && status.maintenance_supported === false) {
-      notify(status.maintenance_message || "هذه العملية غير متاحة لنوع قاعدة البيانات الحالي.", "error");
+    if (status && status.restore_supported === false) {
+      notify("الاسترداد المباشر متاح فقط لـ SQLite. لاسترداد PostgreSQL استخدم pg_restore من السيرفر.", "error");
       return;
     }
     if (!file) {
@@ -341,35 +330,19 @@ function DatabaseSettings({ notify }) {
     }
   }
 
-  async function resetDatabase(event) {
-    event.preventDefault();
-    const tableCount = resetPreview?.table_count ?? 0;
-    const totalRows = resetPreview?.total_rows ?? 0;
-    if (!window.confirm(`سيتم حذف بيانات ${tableCount} جدول بإجمالي ${totalRows} سجل، ثم إعادة إنشاء بيانات البداية فقط. هل تريد المتابعة؟`)) return;
-    setBusy("reset");
-    setError("");
-    try {
-      await api.post("/settings/database/reset", { confirmation: resetConfirmation });
-      setResetConfirmation("");
-      notify("تمت إعادة ضبط قاعدة البيانات");
-      localStorage.removeItem("qib_token");
-      window.location.href = "/login";
-    } catch (error) {
-      notify(getErrorMessage(error), "error");
-    } finally {
-      setBusy("");
-    }
-  }
-
   return (
     <div className="space-y-5">
       <div className="grid gap-3 md:grid-cols-3">
         <MetricBox label="نوع القاعدة" value={status?.engine || "-"} />
-        <MetricBox label={status?.maintenance_supported === false ? "اسم القاعدة" : "حجم الملف"} value={status?.maintenance_supported === false ? status?.database_name || "-" : formatBytes(status?.size_bytes || 0)} />
-        <MetricBox label={status?.maintenance_supported === false ? "الخادم" : "آخر تحديث"} value={status?.maintenance_supported === false ? status?.database_path || "-" : formatDateTime(status?.updated_at)} />
+        <MetricBox label="اسم القاعدة" value={status?.database_name || "-"} />
+        <MetricBox label="الحجم التقريبي" value={formatBytes(status?.size_bytes || 0)} />
+      </div>
+      <div className="grid gap-3 md:grid-cols-2">
+        <MetricBox label="الخادم / المسار" value={status?.database_path || "-"} />
+        <MetricBox label="آخر تحديث" value={formatDateTime(status?.updated_at)} />
       </div>
 
-      {status?.maintenance_supported === false && (
+      {status?.maintenance_message && (
         <div className="rounded-lg border border-amber-200 bg-amber-50/70 p-4">
           <div className="flex items-start gap-3">
             <AlertTriangle className="mt-1 h-5 w-5 shrink-0 text-amber-700" />
@@ -412,13 +385,13 @@ function DatabaseSettings({ notify }) {
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <div>
             <h4 className="font-bold text-slate-950">تصدير نسخة احتياطية</h4>
-            <p className="mt-1 text-sm leading-6 text-slate-500">يتم إنشاء ملف نسخة من قاعدة البيانات الحالية وتنزيله مباشرة.</p>
+            <p className="mt-1 text-sm leading-6 text-slate-500">يدعم SQLite عبر نسخ الملف وPostgreSQL عبر pg_dump بصيغة dump قابلة للاسترداد من السيرفر.</p>
           </div>
           <div className="flex flex-wrap gap-2">
             <Button type="button" onClick={loadStatus} disabled={Boolean(busy)} className="gap-2 border border-slate-300 bg-white text-slate-700 hover:bg-slate-50">
               <RefreshCw className="h-4 w-4" /> تحديث
             </Button>
-            <Button type="button" onClick={downloadBackup} disabled={Boolean(busy) || status?.maintenance_supported === false} className="gap-2">
+            <Button type="button" onClick={downloadBackup} disabled={Boolean(busy) || status?.backup_supported === false} className="gap-2">
               <Download className="h-4 w-4" /> تنزيل نسخة
             </Button>
           </div>
@@ -430,65 +403,17 @@ function DatabaseSettings({ notify }) {
           <AlertTriangle className="mt-1 h-5 w-5 shrink-0 text-amber-700" />
           <div>
             <h4 className="font-bold text-slate-950">استرداد نسخة احتياطية</h4>
-            <p className="mt-1 text-sm leading-6 text-slate-600">سيتم استبدال قاعدة البيانات الحالية بالملف المرفوع بعد التحقق من سلامته.</p>
+            <p className="mt-1 text-sm leading-6 text-slate-600">
+              الاسترداد من الواجهة متاح فقط لـ SQLite. قواعد PostgreSQL يجب استردادها من السيرفر باستخدام pg_restore بعد أخذ نسخة احتياطية.
+            </p>
           </div>
         </div>
         <div className="grid gap-3 lg:grid-cols-[1fr_220px_auto]">
-          <input type="file" accept=".db,.sqlite,.sqlite3" disabled={status?.maintenance_supported === false} onChange={(event) => setFile(event.target.files?.[0] || null)} className="h-10 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm disabled:opacity-60" />
-          <Input placeholder="اكتب: استرداد النسخة" value={restoreConfirmation} disabled={status?.maintenance_supported === false} onChange={(event) => setRestoreConfirmation(event.target.value)} />
-          <Button type="submit" disabled={busy === "restore" || status?.maintenance_supported === false} className="gap-2 bg-amber-700 hover:bg-amber-800">
+          <input type="file" accept=".db,.sqlite,.sqlite3" disabled={status?.restore_supported === false} onChange={(event) => setFile(event.target.files?.[0] || null)} className="h-10 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm disabled:opacity-60" />
+          <Input placeholder="اكتب: استرداد النسخة" value={restoreConfirmation} disabled={status?.restore_supported === false} onChange={(event) => setRestoreConfirmation(event.target.value)} />
+          <Button type="submit" disabled={busy === "restore" || status?.restore_supported === false} className="gap-2 bg-amber-700 hover:bg-amber-800">
             <Upload className="h-4 w-4" /> استرداد
           </Button>
-        </div>
-      </form>
-
-      <form onSubmit={resetDatabase} className="rounded-lg border border-red-200 bg-red-50 p-4">
-        <div className="mb-4 flex items-start gap-3">
-          <AlertTriangle className="mt-1 h-5 w-5 shrink-0 text-red-700" />
-          <div>
-            <h4 className="font-bold text-red-900">إعادة ضبط جميع بيانات النظام</h4>
-            <p className="mt-1 text-sm leading-6 text-red-700">هذه العملية تحذف بيانات قاعدة البيانات وتعيد إنشاء حساب المدير والبيانات الأساسية فقط.</p>
-          </div>
-        </div>
-        <div className="mb-4 rounded-md border border-red-200 bg-white p-3">
-          <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <p className="text-sm font-bold text-red-900">الجداول التي سيتم حذف بياناتها</p>
-              <p className="mt-1 text-xs text-red-700">
-                {resetPreview ? `${resetPreview.table_count} جدول - ${resetPreview.total_rows} سجل حالي` : "جار تحميل قائمة الجداول..."}
-              </p>
-            </div>
-            <button type="button" onClick={loadResetPreview} disabled={Boolean(busy)} className="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-red-200 bg-white px-3 text-xs font-bold text-red-700 hover:bg-red-50 disabled:opacity-60">
-              <RefreshCw className="h-3.5 w-3.5" /> تحديث القائمة
-            </button>
-          </div>
-          <div className="max-h-56 overflow-auto rounded-md border border-red-100">
-            <table className="w-full min-w-[420px] text-sm">
-              <thead className="bg-red-50 text-xs font-bold text-red-700">
-                <tr>
-                  <th className="p-2 text-right">الجدول</th>
-                  <th className="p-2 text-right">عدد السجلات الحالية</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-red-50">
-                {(resetPreview?.tables || []).map((item) => (
-                  <tr key={item.table}>
-                    <td className="p-2 font-mono text-xs text-slate-700">{item.table}</td>
-                    <td className="p-2 font-semibold text-slate-700">{item.rows}</td>
-                  </tr>
-                ))}
-                {resetPreview && resetPreview.tables.length === 0 && (
-                  <tr><td colSpan="2" className="p-3 text-center text-sm text-slate-500">لا توجد جداول ضمن خطة الحذف</td></tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
-        <div className="grid gap-3 lg:grid-cols-[1fr_auto]">
-          <Input placeholder="اكتب: حذف جميع البيانات" value={resetConfirmation} onChange={(event) => setResetConfirmation(event.target.value)} />
-          <button type="submit" disabled={busy === "reset"} className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-red-700 px-4 text-sm font-semibold text-white hover:bg-red-800 disabled:opacity-60">
-            <RotateCcw className="h-4 w-4" /> إعادة الضبط
-          </button>
         </div>
       </form>
 

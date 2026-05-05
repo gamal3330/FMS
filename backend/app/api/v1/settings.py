@@ -89,15 +89,6 @@ LOCAL_UPDATE_PRESERVE_NAMES = {
 LOCAL_UPDATE_ROOT_FILES = {"version.txt", "update-manifest.json", "README.md", "INSTALL.md", "docker-compose.yml"}
 
 
-def database_reset_plan() -> list[dict[str, int | str]]:
-    plan = []
-    with engine.connect() as connection:
-        for table in reversed(Base.metadata.sorted_tables):
-            count = connection.execute(text(f'SELECT COUNT(*) FROM "{table.name}"')).scalar_one()
-            plan.append({"table": table.name, "rows": int(count or 0)})
-    return plan
-
-
 def require_super_admin_token(token: str = Depends(oauth2_scheme)) -> dict:
     try:
       payload = decode_access_token(token)
@@ -111,12 +102,71 @@ def require_super_admin_token(token: str = Depends(oauth2_scheme)) -> dict:
 def sqlite_database_path() -> Path:
     url = make_url(settings.database_url)
     if url.drivername != "sqlite":
-        raise HTTPException(status_code=409, detail="النسخ الاحتياطي والاسترداد من هذه الشاشة متاحان فقط عند استخدام SQLite")
+        raise HTTPException(status_code=409, detail="هذه العملية متاحة فقط عند استخدام SQLite")
     database = url.database
     if not database:
         raise HTTPException(status_code=409, detail="SQLite database path is not configured")
     path = Path(database)
     return path if path.is_absolute() else Path.cwd() / path
+
+
+def database_engine_name() -> str:
+    return make_url(settings.database_url).drivername.split("+", 1)[0].lower()
+
+
+def backup_output_dir() -> Path:
+    directory = Path(settings.upload_dir) / "database_backups"
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory
+
+
+def postgresql_dump_command(output_path: Path) -> tuple[list[str], dict[str, str]]:
+    url = make_url(settings.database_url)
+    if database_engine_name() != "postgresql":
+        raise HTTPException(status_code=409, detail="نوع قاعدة البيانات غير مدعوم للنسخ الاحتياطي")
+    if not shutil.which("pg_dump"):
+        raise HTTPException(status_code=409, detail="أداة pg_dump غير مثبتة على الخادم. أعد بناء Docker بعد التحديث أو ثبّت postgresql-client.")
+
+    command = ["pg_dump", "--format=custom", "--no-owner", "--no-privileges", "--file", str(output_path)]
+    if url.host:
+        command.extend(["--host", url.host])
+    if url.port:
+        command.extend(["--port", str(url.port)])
+    if url.username:
+        command.extend(["--username", url.username])
+    if url.database:
+        command.extend(["--dbname", url.database])
+
+    env = os.environ.copy()
+    if url.password:
+        env["PGPASSWORD"] = url.password
+    return command, env
+
+
+def create_database_backup_file() -> tuple[Path, dict]:
+    engine_name = database_engine_name()
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    backup_dir = backup_output_dir()
+
+    if engine_name == "sqlite":
+        database_path = sqlite_database_path()
+        if not database_path.exists():
+            raise HTTPException(status_code=404, detail="ملف قاعدة البيانات غير موجود")
+        backup_path = backup_dir / f"{database_path.stem}-backup-{timestamp}{database_path.suffix or '.db'}"
+        shutil.copy2(database_path, backup_path)
+        return backup_path, {"engine": "SQLite", "method": "file-copy"}
+
+    if engine_name == "postgresql":
+        database_name = make_url(settings.database_url).database or "database"
+        backup_path = backup_dir / f"{database_name}-backup-{timestamp}.dump"
+        command, env = postgresql_dump_command(backup_path)
+        result = subprocess.run(command, env=env, cwd=str(PROJECT_ROOT), capture_output=True, text=True, timeout=300)
+        if result.returncode != 0:
+            backup_path.unlink(missing_ok=True)
+            raise HTTPException(status_code=500, detail=f"فشل إنشاء نسخة PostgreSQL: {result.stderr.strip() or result.stdout.strip()}")
+        return backup_path, {"engine": "PostgreSQL", "method": "pg_dump-custom"}
+
+    raise HTTPException(status_code=409, detail=f"نوع قاعدة البيانات {engine_name} غير مدعوم للنسخ الاحتياطي من الواجهة")
 
 
 def validate_sqlite_backup(path: Path) -> None:
@@ -646,18 +696,27 @@ def update_security_policy(payload: SecurityPolicyPayload, db: Session = Depends
 
 
 @router.get("/database/status")
-def get_database_status(_: User = SettingsActor):
+def get_database_status(db: Session = Depends(get_db), _: User = SettingsActor):
     url = make_url(settings.database_url)
-    if url.drivername != "sqlite":
+    engine_name = database_engine_name()
+    if engine_name != "sqlite":
+        size_bytes = 0
+        if engine_name == "postgresql":
+            try:
+                size_bytes = int(db.execute(text("SELECT pg_database_size(current_database())")).scalar_one() or 0)
+            except Exception:
+                size_bytes = 0
         return {
-            "engine": url.drivername.split("+", 1)[0].upper(),
+            "engine": engine_name.upper(),
             "database_name": url.database or "-",
-            "database_path": url.host or "-",
+            "database_path": f"{url.host or '-'}:{url.port or ''}".rstrip(":"),
             "exists": True,
-            "size_bytes": 0,
+            "size_bytes": size_bytes,
             "updated_at": None,
-            "maintenance_supported": False,
-            "maintenance_message": "النسخ الاحتياطي والاسترداد من هذه الشاشة متاحان فقط لقواعد SQLite. عند استخدام PostgreSQL استخدم أوامر pg_dump أو نسخ Docker.",
+            "backup_supported": engine_name in {"postgresql"},
+            "restore_supported": False,
+            "maintenance_supported": True,
+            "maintenance_message": "النسخ الاحتياطي متاح من هذه الشاشة. الاسترداد المباشر متاح فقط لقواعد SQLite لتجنب استبدال بيانات الإنتاج بالخطأ.",
         }
 
     database_path = sqlite_database_path()
@@ -669,6 +728,8 @@ def get_database_status(_: User = SettingsActor):
         "exists": exists,
         "size_bytes": database_path.stat().st_size if exists else 0,
         "updated_at": datetime.fromtimestamp(database_path.stat().st_mtime).isoformat() if exists else None,
+        "backup_supported": True,
+        "restore_supported": True,
         "maintenance_supported": True,
         "maintenance_message": None,
     }
@@ -818,16 +879,6 @@ def restart_local_backend(db: Session = Depends(get_db), actor: User = Depends(r
     return {"message": "تم إرسال أمر إعادة التشغيل. انتظر عدة ثوان ثم حدّث الصفحة.", "restart_requested": True}
 
 
-@router.get("/database/reset-preview")
-def get_database_reset_preview(_: dict = Depends(require_super_admin_token)):
-    tables = database_reset_plan()
-    return {
-        "tables": tables,
-        "table_count": len(tables),
-        "total_rows": sum(item["rows"] for item in tables),
-    }
-
-
 @router.get("/database/backup-settings", response_model=BackupSettingsRead)
 def get_backup_settings(db: Session = Depends(get_db), _: User = SettingsActor):
     item = db.scalar(select(PortalSetting).where(PortalSetting.category == BACKUP_SETTINGS_CATEGORY, PortalSetting.setting_key == BACKUP_SETTINGS_KEY))
@@ -851,19 +902,11 @@ def update_backup_settings(payload: BackupSettingsPayload, db: Session = Depends
 
 @router.get("/database/backup")
 def download_database_backup(actor: User = Depends(require_roles(UserRole.SUPER_ADMIN))):
-    database_path = sqlite_database_path()
-    if not database_path.exists():
-        raise HTTPException(status_code=404, detail="Database file not found")
-
-    backup_dir = database_path.parent / "backups"
-    backup_dir.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    backup_path = backup_dir / f"{database_path.stem}-backup-{timestamp}{database_path.suffix}"
-    shutil.copy2(database_path, backup_path)
+    backup_path, details = create_database_backup_file()
 
     db = SessionLocal()
     try:
-        write_audit(db, "database_backup_exported", "database", actor=actor, metadata={"filename": backup_path.name})
+        write_audit(db, "database_backup_exported", "database", actor=actor, metadata={"filename": backup_path.name, **details})
         db.commit()
     finally:
         db.close()
@@ -882,6 +925,8 @@ async def restore_database_backup(
     file: UploadFile = File(...),
     _: dict = Depends(require_super_admin_token),
 ):
+    if database_engine_name() != "sqlite":
+        raise HTTPException(status_code=409, detail="استرداد قاعدة البيانات من الواجهة متاح فقط لـ SQLite. استخدم pg_restore لاسترداد PostgreSQL بشكل آمن.")
     if confirmation.strip() != "استرداد النسخة":
         raise HTTPException(status_code=400, detail="Confirmation text is invalid")
 
@@ -902,26 +947,6 @@ async def restore_database_backup(
         temp_path.unlink(missing_ok=True)
 
     return {"message": "Database backup restored successfully"}
-
-
-@router.post("/database/reset")
-def reset_database(payload: dict, _: dict = Depends(require_super_admin_token)):
-    if payload.get("confirmation", "").strip() != "حذف جميع البيانات":
-        raise HTTPException(status_code=400, detail="Confirmation text is invalid")
-
-    if engine.dialect.name == "sqlite":
-        with engine.begin() as connection:
-            connection.execute(text("PRAGMA foreign_keys=OFF"))
-            for table in reversed(Base.metadata.sorted_tables):
-                connection.execute(table.delete())
-            connection.execute(text("PRAGMA foreign_keys=ON"))
-    else:
-        with engine.begin() as connection:
-            for table in reversed(Base.metadata.sorted_tables):
-                connection.execute(table.delete())
-
-    reseed_database()
-    return {"message": "Database reset successfully"}
 
 
 @workflows_router.get("")

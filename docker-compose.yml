@@ -17,6 +17,13 @@ services:
   backend:
     build: ./backend
     restart: unless-stopped
+    command: >
+      uvicorn app.main:app
+      --host 0.0.0.0
+      --port 8000
+      --workers ${BACKEND_WORKERS:-2}
+      --proxy-headers
+      --forwarded-allow-ips '*'
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-qib}:${POSTGRES_PASSWORD:-change-this-postgres-password}@postgres:5432/${POSTGRES_DB:-qib_it_portal}
       SECRET_KEY: ${SECRET_KEY:-change-this-in-production}
@@ -24,6 +31,10 @@ services:
       SEED_ADMIN_EMAIL: ${SEED_ADMIN_EMAIL:-admin@qib.internal-bank.qa}
       SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:-Admin@12345}
       UPLOAD_DIR: /app/uploads
+      REQUEST_SLOW_MS: ${REQUEST_SLOW_MS:-500}
+      DB_POOL_SIZE: ${DB_POOL_SIZE:-10}
+      DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-20}
+      DB_POOL_RECYCLE_SECONDS: ${DB_POOL_RECYCLE_SECONDS:-1800}
     depends_on:
       postgres:
         condition: service_healthy
