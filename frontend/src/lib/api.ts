@@ -1,4 +1,4 @@
-export const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000/api/v1";
+export const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "/api/v1";
 
 export type RequestStatus = "draft" | "submitted" | "pending_approval" | "returned_for_edit" | "approved" | "rejected" | "in_implementation" | "completed" | "closed" | "cancelled";
 

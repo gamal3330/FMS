@@ -10,6 +10,46 @@
     <link rel="icon" />
     <link rel="apple-touch-icon" />
     <title>نظام إدارة النماذج</title>
+    <script>
+      (function () {
+        var fallback = "#0d6337";
+        var color = localStorage.getItem("qib_brand_color") || fallback;
+        if (!/^#[0-9A-Fa-f]{6}$/.test(color)) color = fallback;
+
+        function mix(first, second, amount) {
+          var a = first.replace("#", "");
+          var b = second.replace("#", "");
+          return (
+            "#" +
+            [0, 2, 4]
+              .map(function (index) {
+                var firstValue = parseInt(a.slice(index, index + 2), 16);
+                var secondValue = parseInt(b.slice(index, index + 2), 16);
+                return Math.round(firstValue * (1 - amount) + secondValue * amount)
+                  .toString(16)
+                  .padStart(2, "0");
+              })
+              .join("")
+          );
+        }
+
+        function rgb(hex) {
+          var value = hex.replace("#", "");
+          return [
+            parseInt(value.slice(0, 2), 16),
+            parseInt(value.slice(2, 4), 16),
+            parseInt(value.slice(4, 6), 16)
+          ].join(" ");
+        }
+
+        var root = document.documentElement;
+        root.style.setProperty("--bank-50", rgb(mix(color, "#ffffff", 0.93)));
+        root.style.setProperty("--bank-100", rgb(mix(color, "#ffffff", 0.82)));
+        root.style.setProperty("--bank-600", rgb(mix(color, "#ffffff", 0.08)));
+        root.style.setProperty("--bank-700", rgb(color));
+        root.style.setProperty("--bank-900", rgb(mix(color, "#000000", 0.45)));
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>
