@@ -1,17 +1,12 @@
 from datetime import date, datetime, time
 from io import BytesIO
-from pathlib import Path
 from typing import Iterable
 
-import arabic_reshaper
-from bidi.algorithm import get_display
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font
 from reportlab.lib.pagesizes import A4
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
@@ -22,12 +17,11 @@ from app.models.enums import UserRole
 from app.models.request import ServiceRequest
 from app.models.user import User
 from app.services.audit import write_audit
+from app.services.pdf_fonts import register_arabic_pdf_font, rtl_text
 
 router = APIRouter(prefix="/reports", tags=["Reports"])
 
 REPORT_ROLES = (UserRole.IT_MANAGER, UserRole.SUPER_ADMIN, UserRole.EXECUTIVE)
-ARABIC_FONT = "ArabicReportFont"
-
 STATUS_LABELS = {
     "draft": "مسودة",
     "submitted": "مرسل",
@@ -52,38 +46,6 @@ EXCEL_HEADERS = ["رقم الطلب", "العنوان", "الموظف", "الإ�
 
 def label(value, labels: dict[str, str]) -> str:
     return labels.get(str(value), str(value or ""))
-
-
-def register_arabic_font() -> str:
-    candidates = [
-        Path("/Library/Fonts/Tajawal-Regular.ttf"),
-        Path("/System/Library/Fonts/Supplemental/Tajawal-Regular.ttf"),
-        Path("/usr/share/fonts/truetype/tajawal/Tajawal-Regular.ttf"),
-        Path("C:/Windows/Fonts/tajawal.ttf"),
-        Path("C:/Windows/Fonts/Tajawal-Regular.ttf"),
-        Path("/System/Library/Fonts/Supplemental/Arial Unicode.ttf"),
-        Path("/Library/Fonts/Arial Unicode.ttf"),
-        Path("/System/Library/Fonts/Supplemental/Arial.ttf"),
-        Path("C:/Windows/Fonts/arial.ttf"),
-        Path("C:/Windows/Fonts/tahoma.ttf"),
-        Path("C:/Windows/Fonts/calibri.ttf"),
-        Path("/System/Library/Fonts/GeezaPro.ttc"),
-        Path("/System/Library/Fonts/SFArabic.ttf"),
-        Path("/usr/share/fonts/truetype/noto/NotoNaskhArabic-Regular.ttf"),
-        Path("/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf"),
-        Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
-    ]
-    for path in candidates:
-        if path.exists():
-            if ARABIC_FONT not in pdfmetrics.getRegisteredFontNames():
-                pdfmetrics.registerFont(TTFont(ARABIC_FONT, str(path)))
-            return ARABIC_FONT
-    return "Helvetica"
-
-
-def rtl(text: object) -> str:
-    value = str(text or "")
-    return get_display(arabic_reshaper.reshape(value))
 
 
 def filtered_requests_stmt(
@@ -171,14 +133,14 @@ def build_excel_report(items: Iterable[ServiceRequest]) -> BytesIO:
 def build_pdf_report(items: Iterable[ServiceRequest]) -> BytesIO:
     stream = BytesIO()
     pdf = canvas.Canvas(stream, pagesize=A4)
-    font_name = register_arabic_font()
+    font_name = register_arabic_pdf_font()
     pdf.setTitle("تقرير الطلبات")
 
     right = A4[0] - 40
     left = 40
     y = 800
     pdf.setFont(font_name, 15)
-    pdf.drawRightString(right, y, rtl("تقرير طلبات خدمات تقنية المعلومات"))
+    pdf.drawRightString(right, y, rtl_text("تقرير طلبات خدمات تقنية المعلومات"))
 
     y -= 30
     pdf.setFont(font_name, 10)
@@ -189,7 +151,7 @@ def build_pdf_report(items: Iterable[ServiceRequest]) -> BytesIO:
         ("الحالة", left + 90),
     ]
     for header, x in columns:
-        pdf.drawRightString(x, y, rtl(header))
+        pdf.drawRightString(x, y, rtl_text(header))
 
     y -= 8
     pdf.line(left, y, right, y)
@@ -201,14 +163,14 @@ def build_pdf_report(items: Iterable[ServiceRequest]) -> BytesIO:
             y = 800
             pdf.setFont(font_name, 10)
             for header, x in columns:
-                pdf.drawRightString(x, y, rtl(header))
+                pdf.drawRightString(x, y, rtl_text(header))
             y -= 8
             pdf.line(left, y, right, y)
         request_number, title, employee_name, _, _, status, _, _ = row
         pdf.drawRightString(right, y, str(request_number)[:18])
-        pdf.drawRightString(right - 95, y, rtl(title[:32]))
-        pdf.drawRightString(right - 265, y, rtl(employee_name[:24]))
-        pdf.drawRightString(left + 90, y, rtl(status))
+        pdf.drawRightString(right - 95, y, rtl_text(title[:32]))
+        pdf.drawRightString(right - 265, y, rtl_text(employee_name[:24]))
+        pdf.drawRightString(left + 90, y, rtl_text(status))
 
     pdf.save()
     stream.seek(0)

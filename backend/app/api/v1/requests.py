@@ -4,14 +4,10 @@ from pathlib import Path
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
-import arabic_reshaper
-from bidi.algorithm import get_display
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from fastapi.responses import FileResponse, StreamingResponse
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.utils import ImageReader
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session, selectinload
@@ -25,6 +21,7 @@ from app.models.settings import RequestTypeField, RequestTypeSetting, SettingsGe
 from app.models.user import User
 from app.schemas.request import ApprovalDecision, AttachmentRead, CommentCreate, ServiceRequestCreate, ServiceRequestRead, ServiceRequestUpdate
 from app.services.audit import write_audit
+from app.services.pdf_fonts import register_arabic_pdf_font, rtl_text
 from app.services.workflow import (
     IMPLEMENTATION_STEP_ROLES,
     advance_workflow,
@@ -37,7 +34,6 @@ from app.api.v1.request_type_management import create_snapshot_steps, validate_f
 
 router = APIRouter(prefix="/requests", tags=["Service Requests"])
 settings = get_settings()
-PDF_FONT = "ArabicRequestPdfFont"
 
 STATUS_LABELS = {
     "draft": "مسودة",
@@ -181,33 +177,11 @@ def enrich_request_list(db: Session, requests: list[ServiceRequest]) -> list[Ser
 
 
 def register_pdf_font() -> str:
-    candidates = [
-        Path("/Library/Fonts/Tajawal-Regular.ttf"),
-        Path("/System/Library/Fonts/Supplemental/Tajawal-Regular.ttf"),
-        Path("/usr/share/fonts/truetype/tajawal/Tajawal-Regular.ttf"),
-        Path("C:/Windows/Fonts/tajawal.ttf"),
-        Path("C:/Windows/Fonts/Tajawal-Regular.ttf"),
-        Path("/System/Library/Fonts/Supplemental/Arial Unicode.ttf"),
-        Path("/Library/Fonts/Arial Unicode.ttf"),
-        Path("/System/Library/Fonts/Supplemental/Arial.ttf"),
-        Path("C:/Windows/Fonts/arial.ttf"),
-        Path("C:/Windows/Fonts/tahoma.ttf"),
-        Path("C:/Windows/Fonts/calibri.ttf"),
-        Path("/System/Library/Fonts/GeezaPro.ttc"),
-        Path("/System/Library/Fonts/SFArabic.ttf"),
-        Path("/usr/share/fonts/truetype/noto/NotoNaskhArabic-Regular.ttf"),
-        Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
-    ]
-    for path in candidates:
-        if path.exists():
-            if PDF_FONT not in pdfmetrics.getRegisteredFontNames():
-                pdfmetrics.registerFont(TTFont(PDF_FONT, str(path)))
-            return PDF_FONT
-    return "Helvetica"
+    return register_arabic_pdf_font()
 
 
 def rtl(text: object) -> str:
-    return get_display(arabic_reshaper.reshape(str(text or "")))
+    return rtl_text(text)
 
 
 def hex_to_rgb(hex_value: str | None, fallback: tuple[float, float, float] = (0.05, 0.39, 0.22)) -> tuple[float, float, float]:
