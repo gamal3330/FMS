@@ -224,7 +224,8 @@ def format_pdf_datetime(value: datetime | None, tz: ZoneInfo) -> str:
         return "-"
     if value.tzinfo is None:
         value = value.replace(tzinfo=timezone.utc)
-    return value.astimezone(tz).strftime("%Y/%m/%d %H:%M")
+    formatted = value.astimezone(tz).strftime("%Y/%m/%d %I:%M %p")
+    return formatted.replace("AM", "ص").replace("PM", "م")
 
 
 def logo_file_path(db: Session) -> Path | None:
@@ -383,7 +384,7 @@ class RequestPdfBuilder:
     def header(self) -> None:
         form_data = self.request.form_data or {}
         request_type_title = form_data.get("request_type_label") or self.request.request_type or "طلب خدمة"
-        printed_at = datetime.now(timezone.utc).astimezone(self.tz).strftime("%Y-%m-%d  %H:%M")
+        printed_at = format_pdf_datetime(datetime.now(timezone.utc), self.tz)
         self.pdf.setFillColorRGB(*self.brand)
         self.pdf.rect(0, self.height - 92, self.width, 92, fill=1, stroke=0)
 
