@@ -1,4 +1,4 @@
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timezone
 from io import BytesIO
 from typing import Iterable
 
@@ -15,9 +15,20 @@ from app.api.deps import require_roles
 from app.db.session import get_db
 from app.models.enums import UserRole
 from app.models.request import ServiceRequest
+from app.models.settings import SettingsGeneral
 from app.models.user import User
 from app.services.audit import write_audit
-from app.services.pdf_fonts import register_arabic_pdf_font, rtl_text
+from app.services.pdf_fonts import register_arabic_pdf_font
+from app.services.pdf_template import (
+    draw_cover_header,
+    draw_footer,
+    draw_ltr_text,
+    draw_page_header,
+    draw_section_header,
+    draw_text,
+    format_pdf_datetime,
+    pdf_theme,
+)
 
 router = APIRouter(prefix="/reports", tags=["Reports"])
 
@@ -130,48 +141,79 @@ def build_excel_report(items: Iterable[ServiceRequest]) -> BytesIO:
     return stream
 
 
-def build_pdf_report(items: Iterable[ServiceRequest]) -> BytesIO:
+def build_pdf_report(items: Iterable[ServiceRequest], db: Session, actor: User) -> BytesIO:
+    items = list(items)
     stream = BytesIO()
     pdf = canvas.Canvas(stream, pagesize=A4)
     font_name = register_arabic_pdf_font()
+    general = db.scalar(select(SettingsGeneral).limit(1))
+    theme = pdf_theme(general)
     pdf.setTitle("تقرير الطلبات")
 
-    right = A4[0] - 40
-    left = 40
-    y = 800
-    pdf.setFont(font_name, 15)
-    pdf.drawRightString(right, y, rtl_text("تقرير طلبات خدمات تقنية المعلومات"))
+    left = 36
+    right = A4[0] - 36
+    actor_name = actor.full_name_ar or actor.email
 
-    y -= 30
-    pdf.setFont(font_name, 10)
+    y = draw_cover_header(
+        pdf,
+        theme,
+        font_name,
+        "تقرير طلبات خدمات تقنية المعلومات",
+        f"تاريخ الطباعة: {format_pdf_datetime(datetime.now(timezone.utc), theme.timezone)}",
+    )
+    y = draw_section_header(pdf, theme, font_name, "ملخص التقرير", left, right, y)
+
+    summary_gap = 12
+    summary_width = (right - left - summary_gap) / 2
+    pdf.setFillColorRGB(0.98, 0.99, 1)
+    pdf.setStrokeColorRGB(0.88, 0.91, 0.94)
+    pdf.roundRect(right - summary_width, y - 52, summary_width, 52, 5, fill=1, stroke=1)
+    pdf.roundRect(left, y - 52, summary_width, 52, 5, fill=1, stroke=1)
+    draw_text(pdf, font_name, "عدد الطلبات", right - 12, y - 17, 8, (0.45, 0.5, 0.58))
+    draw_ltr_text(pdf, font_name, str(len(items)), right - summary_width + 16, y - 36, 13, (0.06, 0.09, 0.16))
+    draw_text(pdf, font_name, "تم إنشاء التقرير بواسطة", left + summary_width - 12, y - 17, 8, (0.45, 0.5, 0.58))
+    draw_text(pdf, font_name, actor_name, left + summary_width - 12, y - 36, 10, (0.06, 0.09, 0.16))
+    y -= 76
+
+    y = draw_section_header(pdf, theme, font_name, "قائمة الطلبات", left, right, y)
+
     columns = [
-        ("رقم الطلب", right),
-        ("العنوان", right - 95),
-        ("الموظف", right - 265),
-        ("الحالة", left + 90),
+        ("رقم الطلب", right - 8, 92),
+        ("العنوان", right - 112, 150),
+        ("الموظف", right - 274, 116),
+        ("الحالة", right - 402, 82),
+        ("التاريخ", left + 92, 86),
     ]
-    for header, x in columns:
-        pdf.drawRightString(x, y, rtl_text(header))
 
-    y -= 8
-    pdf.line(left, y, right, y)
+    def draw_table_header(current_y: float) -> float:
+        pdf.setFillColorRGB(0.96, 0.98, 1)
+        pdf.setStrokeColorRGB(0.88, 0.91, 0.94)
+        pdf.roundRect(left, current_y - 28, right - left, 28, 5, fill=1, stroke=1)
+        for header, x, _ in columns:
+            draw_text(pdf, font_name, header, x, current_y - 18, 8, (0.45, 0.5, 0.58))
+        return current_y - 34
 
-    for row in report_rows(items)[:80]:
-        y -= 22
-        if y < 45:
+    y = draw_table_header(y)
+    for item in items[:80]:
+        if y < 58:
+            draw_footer(pdf, font_name, f"طُبع بواسطة: {actor_name}", left, right)
             pdf.showPage()
-            y = 800
-            pdf.setFont(font_name, 10)
-            for header, x in columns:
-                pdf.drawRightString(x, y, rtl_text(header))
-            y -= 8
-            pdf.line(left, y, right, y)
-        request_number, title, employee_name, _, _, status, _, _ = row
-        pdf.drawRightString(right, y, str(request_number)[:18])
-        pdf.drawRightString(right - 95, y, rtl_text(title[:32]))
-        pdf.drawRightString(right - 265, y, rtl_text(employee_name[:24]))
-        pdf.drawRightString(left + 90, y, rtl_text(status))
+            y = draw_page_header(pdf, theme, font_name, "تقرير الطلبات")
+            y = draw_table_header(y)
 
+        requester_name = item.requester.full_name_ar if getattr(item, "requester", None) else "-"
+        created_at = item.created_at if isinstance(item.created_at, datetime) else None
+        pdf.setStrokeColorRGB(0.92, 0.94, 0.96)
+        pdf.line(left, y - 7, right, y - 7)
+        draw_ltr_text(pdf, font_name, str(item.request_number or "")[:18], right - 95, y + 5, 9, (0.06, 0.09, 0.16))
+        draw_text(pdf, font_name, str(item.title or "-")[:34], right - 112, y + 5, 9, (0.06, 0.09, 0.16))
+        draw_text(pdf, font_name, requester_name[:24], right - 274, y + 5, 9, (0.06, 0.09, 0.16))
+        status_value = getattr(item.status, "value", item.status)
+        draw_text(pdf, font_name, label(status_value, STATUS_LABELS), right - 402, y + 5, 9, theme.brand_dark)
+        draw_ltr_text(pdf, font_name, format_pdf_datetime(created_at, theme.timezone), left + 8, y + 5, 8, (0.36, 0.42, 0.48))
+        y -= 24
+
+    draw_footer(pdf, font_name, f"طُبع بواسطة: {actor_name}", left, right)
     pdf.save()
     stream.seek(0)
     return stream
@@ -209,7 +251,7 @@ def export_pdf(
     request_type_id: int | None = Query(default=None),
 ):
     items = db.scalars(filtered_requests_stmt(from_date, to_date, employee_id, request_type, request_type_id).limit(80)).all()
-    stream = build_pdf_report(items)
+    stream = build_pdf_report(items, db, actor)
     write_audit(db, "report_exported_pdf", "report", actor=actor)
     db.commit()
     return StreamingResponse(stream, media_type="application/pdf", headers={"Content-Disposition": "attachment; filename=qib-requests.pdf"})

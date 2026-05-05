@@ -2,12 +2,10 @@ from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
 from uuid import uuid4
-from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from fastapi.responses import FileResponse, StreamingResponse
 from reportlab.lib.pagesizes import A4
-from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session, selectinload
@@ -22,6 +20,15 @@ from app.models.user import User
 from app.schemas.request import ApprovalDecision, AttachmentRead, CommentCreate, ServiceRequestCreate, ServiceRequestRead, ServiceRequestUpdate
 from app.services.audit import write_audit
 from app.services.pdf_fonts import register_arabic_pdf_font, rtl_text
+from app.services.pdf_template import (
+    draw_cover_header,
+    draw_field_box,
+    draw_footer,
+    draw_page_header,
+    draw_section_header,
+    format_pdf_datetime,
+    pdf_theme,
+)
 from app.services.workflow import (
     IMPLEMENTATION_STEP_ROLES,
     advance_workflow,
@@ -184,15 +191,6 @@ def rtl(text: object) -> str:
     return rtl_text(text)
 
 
-def hex_to_rgb(hex_value: str | None, fallback: tuple[float, float, float] = (0.05, 0.39, 0.22)) -> tuple[float, float, float]:
-    if not hex_value or not isinstance(hex_value, str) or not hex_value.startswith("#") or len(hex_value) != 7:
-        return fallback
-    try:
-        return tuple(int(hex_value[index : index + 2], 16) / 255 for index in (1, 3, 5))
-    except ValueError:
-        return fallback
-
-
 def label(value: object, labels: dict[str, str]) -> str:
     return labels.get(str(value or ""), str(value or ""))
 
@@ -211,31 +209,6 @@ def pdf_form_pairs(form_data: dict) -> list[tuple[str, object]]:
     return pairs
 
 
-def system_timezone(db: Session) -> ZoneInfo:
-    general = db.scalar(select(SettingsGeneral).limit(1))
-    try:
-        return ZoneInfo(general.timezone if general and general.timezone else "Asia/Qatar")
-    except Exception:
-        return ZoneInfo("Asia/Qatar")
-
-
-def format_pdf_datetime(value: datetime | None, tz: ZoneInfo) -> str:
-    if not value:
-        return "-"
-    if value.tzinfo is None:
-        value = value.replace(tzinfo=timezone.utc)
-    formatted = value.astimezone(tz).strftime("%Y/%m/%d %I:%M %p")
-    return formatted.replace("AM", "ص").replace("PM", "م")
-
-
-def logo_file_path(db: Session) -> Path | None:
-    general = db.scalar(select(SettingsGeneral).limit(1))
-    if not general or not general.logo_url:
-        return None
-    path = Path(settings.upload_dir) / "logos" / Path(general.logo_url).name
-    return path if path.exists() and path.suffix.lower() in {".png", ".jpg", ".jpeg"} else None
-
-
 class RequestPdfBuilder:
     def __init__(self, service_request: ServiceRequest, actor: User, db: Session):
         self.request = service_request
@@ -245,14 +218,14 @@ class RequestPdfBuilder:
         self.stream = BytesIO()
         self.pdf = canvas.Canvas(self.stream, pagesize=A4)
         self.font = register_pdf_font()
-        self.tz = system_timezone(db)
+        self.theme = pdf_theme(self.general)
+        self.tz = self.theme.timezone
         self.width, self.height = A4
         self.left = 36
         self.right = self.width - 36
         self.content_width = self.right - self.left
-        self.brand = hex_to_rgb(self.general.brand_color if self.general else None)
-        self.brand_dark = tuple(max(channel * 0.62, 0) for channel in self.brand)
-        self.brand_soft = tuple(channel + (1 - channel) * 0.88 for channel in self.brand)
+        self.brand_dark = self.theme.brand_dark
+        self.brand_soft = self.theme.brand_soft
         self.y = self.height - 36
         self.pdf.setTitle(f"Request {service_request.request_number}")
 
@@ -267,10 +240,6 @@ class RequestPdfBuilder:
         self.pdf.setFont(self.font, size)
         self.pdf.drawRightString(x, y, rtl(value))
 
-    def left_text(self, value: object, x: float, y: float, size: int = 10) -> None:
-        self.pdf.setFont(self.font, size)
-        self.pdf.drawString(x, y, str(value or ""))
-
     def centered_text(self, value: object, x: float, y: float, size: int = 10) -> None:
         self.pdf.setFont(self.font, size)
         self.pdf.drawCentredString(x, y, rtl(value))
@@ -278,11 +247,6 @@ class RequestPdfBuilder:
     def muted_text(self, value: object, x: float, y: float, size: int = 10) -> None:
         self.pdf.setFillColorRGB(0.36, 0.42, 0.48)
         self.text(value, x, y, size)
-        self.pdf.setFillColorRGB(0, 0, 0)
-
-    def ltr_muted_text(self, value: object, x: float, y: float, size: int = 9) -> None:
-        self.pdf.setFillColorRGB(0.88, 0.96, 0.91)
-        self.left_text(value, x, y, size)
         self.pdf.setFillColorRGB(0, 0, 0)
 
     def summary_item(self, title: str, value: object, x: float, y: float, width: float, value_size: int = 12) -> None:
@@ -314,24 +278,10 @@ class RequestPdfBuilder:
         return y
 
     def page_header(self) -> None:
-        self.pdf.setFillColorRGB(*self.brand)
-        self.pdf.rect(0, self.height - 8, self.width, 8, fill=1, stroke=0)
-        self.pdf.setFillColorRGB(0.45, 0.5, 0.58)
-        self.pdf.setFont(self.font, 8)
-        self.pdf.drawString(self.left, self.height - 24, str(self.request.request_number or ""))
-        self.text(self.general.system_name if self.general else "النظام", self.right, self.height - 24, 8)
-        self.pdf.setStrokeColorRGB(0.9, 0.92, 0.95)
-        self.pdf.line(self.left, self.height - 31, self.right, self.height - 31)
-        self.pdf.setFillColorRGB(0, 0, 0)
-        self.y = self.height - 48
+        self.y = draw_page_header(self.pdf, self.theme, self.font, str(self.request.request_number or ""))
 
     def footer(self) -> None:
-        self.pdf.setStrokeColorRGB(0.9, 0.92, 0.95)
-        self.pdf.line(self.left, 26, self.right, 26)
-        self.pdf.setFillColorRGB(0.45, 0.5, 0.58)
-        self.text(f"طُبع بواسطة: {self.actor.full_name_ar or self.actor.email}", self.right, 14, 8)
-        self.left_text(f"Page {self.pdf.getPageNumber()}", self.left, 14, 8)
-        self.pdf.setFillColorRGB(0, 0, 0)
+        draw_footer(self.pdf, self.font, f"طُبع بواسطة: {self.actor.full_name_ar or self.actor.email}", self.left, self.right)
 
     def status_pill(self, value: str, x: float, y: float, width: float = 86) -> None:
         status = str(self.request.status or "")
@@ -385,25 +335,7 @@ class RequestPdfBuilder:
         form_data = self.request.form_data or {}
         request_type_title = form_data.get("request_type_label") or self.request.request_type or "طلب خدمة"
         printed_at = format_pdf_datetime(datetime.now(timezone.utc), self.tz)
-        self.pdf.setFillColorRGB(*self.brand)
-        self.pdf.rect(0, self.height - 92, self.width, 92, fill=1, stroke=0)
-
-        logo_path = logo_file_path(self.db)
-        if logo_path:
-            try:
-                self.pdf.drawImage(ImageReader(str(logo_path)), self.left + 4, self.height - 71, width=92, height=44, preserveAspectRatio=True, mask="auto")
-            except Exception:
-                pass
-
-        self.pdf.setFillColorRGB(1, 1, 1)
-        self.text(self.general.system_name if self.general else "النظام", self.right, self.height - 30, 13)
-        self.text(f"نموذج {request_type_title}"[:46], self.right, self.height - 58, 21)
-        self.pdf.setFillColorRGB(0.88, 0.96, 0.91)
-        self.text("تاريخ الطباعة", self.right, self.height - 77, 9)
-        self.ltr_muted_text(printed_at, self.right - 154, self.height - 77, 9)
-        self.pdf.setFillColorRGB(0, 0, 0)
-
-        self.y = self.height - 122
+        self.y = draw_cover_header(self.pdf, self.theme, self.font, f"نموذج {request_type_title}", f"تاريخ الطباعة: {printed_at}")
         self.pdf.setFillColorRGB(1, 1, 1)
         self.pdf.setStrokeColorRGB(0.88, 0.91, 0.94)
         self.pdf.roundRect(self.left, self.y - 80, self.content_width, 80, 7, fill=1, stroke=1)
@@ -428,13 +360,7 @@ class RequestPdfBuilder:
 
     def section(self, title: str) -> None:
         self.page_break(90)
-        self.pdf.setFillColorRGB(*self.brand_soft)
-        self.pdf.roundRect(self.left, self.y - 27, self.content_width, 32, 6, fill=1, stroke=0)
-        self.pdf.setFillColorRGB(*self.brand_dark)
-        self.pdf.circle(self.right - 18, self.y - 11, 4, fill=1, stroke=0)
-        self.text(title, self.right - 32, self.y - 16, 12)
-        self.pdf.setFillColorRGB(0, 0, 0)
-        self.y -= 44
+        self.y = draw_section_header(self.pdf, self.theme, self.font, title, self.left, self.right, self.y)
 
     def pair(self, key: str, value: object) -> None:
         self.page_break(72)
@@ -459,15 +385,7 @@ class RequestPdfBuilder:
             index += 2
 
     def field_box(self, key: str, value: object, x: float, y: float, width: float) -> None:
-        self.pdf.setFillColorRGB(0.98, 0.99, 1)
-        self.pdf.setStrokeColorRGB(0.88, 0.91, 0.94)
-        self.pdf.roundRect(x, y - 52, width, 52, 5, fill=1, stroke=1)
-        self.pdf.setFillColorRGB(0.45, 0.5, 0.58)
-        self.text(key, x + width - 12, y - 17, 8)
-        self.pdf.setFillColorRGB(0.06, 0.09, 0.16)
-        text = str(value or "-")
-        self.text(text[:44], x + width - 12, y - 36, 10)
-        self.pdf.setFillColorRGB(0, 0, 0)
+        draw_field_box(self.pdf, self.font, key, value, x, y, width)
 
     def note_box(self, title: str, value: object) -> None:
         self.page_break(110)

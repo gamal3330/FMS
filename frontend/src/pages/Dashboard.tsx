@@ -153,7 +153,7 @@ export function Dashboard() {
           </div>
 
           {stats.it_staff_statistics.length === 0 ? (
-            <p className="rounded-md bg-slate-50 p-4 text-sm text-slate-500">لا توجد بيانات معالجة لموظفي تقنية المعلومات حتى الآن.</p>
+            <p className="rounded-md bg-slate-50 p-4 text-sm text-slate-500">لا توجد طلبات تمت معالجتها حتى الآن.</p>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full min-w-[860px] text-sm">
