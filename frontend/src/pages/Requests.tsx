@@ -206,9 +206,9 @@ const statusLabels: Record<string, string> = {
 
 export function Requests() {
   const [items, setItems] = useState<ServiceRequest[]>([]);
-  const [managedRequestTypes, setManagedRequestTypes] = useState<TypeConfig[]>(requestTypes);
+  const [managedRequestTypes, setManagedRequestTypes] = useState<TypeConfig[]>([]);
   const [sectionLabels, setSectionLabels] = useState<Record<string, string>>(administrativeSections);
-  const [requestType, setRequestType] = useState<RequestType>("vpn_remote_access");
+  const [requestType, setRequestType] = useState<RequestType>("");
   const [title, setTitle] = useState("");
   const [priority, setPriority] = useState<Priority>("medium");
   const [businessJustification, setBusinessJustification] = useState("");
@@ -216,6 +216,7 @@ export function Requests() {
   const [attachment, setAttachment] = useState<File | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [isTypesLoading, setIsTypesLoading] = useState(true);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [editingRequestId, setEditingRequestId] = useState<number | null>(null);
@@ -223,7 +224,7 @@ export function Requests() {
 
   const availableRequestTypes = useMemo(() => managedRequestTypes, [managedRequestTypes]);
   const selectedType = useMemo(
-    () => availableRequestTypes.find((item) => item.value === requestType) ?? availableRequestTypes[0] ?? requestTypes[0],
+    () => availableRequestTypes.find((item) => item.value === requestType) ?? availableRequestTypes[0] ?? null,
     [availableRequestTypes, requestType]
   );
 
@@ -232,11 +233,15 @@ export function Requests() {
   }
 
   function resetForm(nextType = requestType, sourceTypes = availableRequestTypes) {
-    const nextConfig = sourceTypes.find((item) => item.value === nextType) ?? sourceTypes[0] ?? requestTypes[0];
+    const nextConfig = sourceTypes.find((item) => item.value === nextType) ?? sourceTypes[0];
     setTitle("");
     setPriority("medium");
     setBusinessJustification("");
     setAttachment(null);
+    if (!nextConfig) {
+      setFormData({});
+      return;
+    }
     setFormData(
       nextConfig.fields.reduce<Record<string, string>>((acc, field) => {
         acc[field.name] = field.kind === "select" ? field.options?.[0] ?? "" : "";
@@ -258,6 +263,7 @@ export function Requests() {
   }
 
   async function loadActiveRequestTypes() {
+    setIsTypesLoading(true);
     try {
       const data = await apiFetch<
         Array<{ id: number; code?: string; request_type?: string; name_ar?: string; description?: string; category?: string; assigned_section?: string; requires_attachment?: boolean }>
@@ -298,14 +304,22 @@ export function Requests() {
           setRequestType(nextType);
         }
         resetForm(nextType, nextTypes);
+      } else {
+        setManagedRequestTypes([]);
+        setRequestType("");
+        resetForm("", []);
       }
     } catch {
-      setManagedRequestTypes(requestTypes);
+      setManagedRequestTypes([]);
+      setRequestType("");
+      resetForm("", []);
+      setError("تعذر تحميل أنواع الطلبات من الخادم.");
+    } finally {
+      setIsTypesLoading(false);
     }
   }
 
   useEffect(() => {
-    resetForm("vpn_remote_access");
     loadActiveRequestTypes();
     loadRequests();
     apiFetch<CurrentUser>("/auth/me").then(setCurrentUser).catch(() => setCurrentUser(null));
@@ -376,6 +390,9 @@ export function Requests() {
   }
 
   function buildRequestPayload() {
+    if (!selectedType) {
+      throw new Error("Request type is not loaded");
+    }
     const enrichedFormData = {
       ...formData,
       administrative_section: selectedType.section,
@@ -441,18 +458,42 @@ export function Requests() {
 
       <div className="grid gap-5 xl:grid-cols-[460px_1fr]">
         <Card className="p-5">
-          <div className="mb-5 flex items-center gap-3">
-            <div className="rounded-md bg-bank-50 p-3 text-bank-700">
-              <FilePlus2 className="h-5 w-5" />
+          {isTypesLoading ? (
+            <div className="space-y-4">
+              <div className="flex items-center gap-3">
+                <div className="rounded-md bg-bank-50 p-3 text-bank-700">
+                  <RefreshCw className="h-5 w-5 animate-spin" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-950">جاري تحميل نموذج الطلب</h3>
+                  <p className="text-sm text-slate-500">يتم جلب أنواع الطلبات والحقول المعرفة من الخادم.</p>
+                </div>
+              </div>
+              <div className="space-y-3">
+                <div className="h-10 animate-pulse rounded-md bg-slate-100" />
+                <div className="h-10 animate-pulse rounded-md bg-slate-100" />
+                <div className="h-24 animate-pulse rounded-md bg-slate-100" />
+              </div>
             </div>
-            <div>
-              <h3 className="font-bold text-slate-950">بيانات الطلب</h3>
-              <p className="text-sm text-slate-500">{selectedType.description}</p>
-              {editingRequestId && <p className="mt-1 text-xs font-bold text-amber-700">وضع تعديل طلب معاد: سيتم إعادة إرساله للموافقات بعد الحفظ.</p>}
+          ) : !selectedType ? (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
+              <h3 className="font-bold text-slate-950">لا توجد أنواع طلبات متاحة</h3>
+              <p className="mt-1 text-sm leading-6 text-slate-600">يرجى تفعيل نوع طلب واحد على الأقل من شاشة إدارة أنواع الطلبات.</p>
             </div>
-          </div>
+          ) : (
+            <>
+              <div className="mb-5 flex items-center gap-3">
+                <div className="rounded-md bg-bank-50 p-3 text-bank-700">
+                  <FilePlus2 className="h-5 w-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-950">بيانات الطلب</h3>
+                  <p className="text-sm text-slate-500">{selectedType.description}</p>
+                  {editingRequestId && <p className="mt-1 text-xs font-bold text-amber-700">وضع تعديل طلب معاد: سيتم إعادة إرساله للموافقات بعد الحفظ.</p>}
+                </div>
+              </div>
 
-          <form onSubmit={create} className="space-y-4">
+              <form onSubmit={create} className="space-y-4">
             <label className="block space-y-2 text-sm font-medium text-slate-700">
               نوع الطلب
               <select value={requestType} onChange={handleTypeChange} className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none focus:border-bank-600 focus:ring-2 focus:ring-bank-100">
@@ -544,7 +585,9 @@ export function Requests() {
                 تفريغ النموذج
               </button>
             </div>
-          </form>
+              </form>
+            </>
+          )}
         </Card>
 
         <Card className="overflow-hidden">
