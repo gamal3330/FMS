@@ -65,6 +65,7 @@ from app.schemas.settings import (
     WorkflowApprovalRead,
 )
 from app.services.audit import write_audit
+from app.services.update_manager import ensure_current_version, normalize_version, version_key
 
 router = APIRouter(prefix="/settings", tags=["Settings"])
 workflows_router = APIRouter(prefix="/workflows", tags=["Workflow Settings"])
@@ -77,12 +78,13 @@ BACKUP_SETTINGS_KEY = "backup_settings"
 DEFAULT_BACKUP_SETTINGS = BackupSettingsPayload().model_dump()
 LOCAL_UPDATES_DIR = (Path.cwd() / settings.upload_dir / "local_updates").resolve()
 LOCAL_UPDATE_MAX_BYTES = 1024 * 1024 * 1024
-LOCAL_UPDATE_REQUIRED_ROOTS = {"backend", "frontend", "scripts"}
+LOCAL_UPDATE_REQUIRED_ROOTS = {"backend", "frontend", "scripts", "updates"}
 PROJECT_ROOT = Path.cwd().parent if Path.cwd().name == "backend" else Path.cwd()
 LOCAL_UPDATE_PRESERVE_NAMES = {
     "backend": {".env", ".env.example", ".venv", ".venv-mac", ".venv312", "qib_local.db", "uploads", "backups", "uvicorn.err.log", "uvicorn.out.log"},
     "frontend": {"node_modules", "dist", ".env", ".env.local"},
     "scripts": set(),
+    "updates": {"releases"},
 }
 LOCAL_UPDATE_ROOT_FILES = {"version.txt", "update-manifest.json", "README.md", "INSTALL.md", "docker-compose.yml"}
 
@@ -220,6 +222,8 @@ def analyze_local_update_zip(path: Path) -> dict:
                     raise HTTPException(status_code=400, detail="ملف update-manifest.json غير صالح")
             if not version:
                 version = read_zip_text(zipped, "version.txt", limit=1024)
+            if version:
+                version = normalize_version(version)
 
             return {
                 "valid": not missing_roots,
@@ -259,10 +263,13 @@ def add_preflight_check(checks: list[dict], name: str, passed: bool, message: st
     checks.append({"name": name, "passed": passed, "message": message})
 
 
-def run_local_update_preflight(package_path: Path) -> dict:
+def run_local_update_preflight(package_path: Path, db: Session | None = None) -> dict:
     analysis = analyze_local_update_zip(package_path)
     checks: list[dict] = []
     warnings: list[str] = []
+    current_version = None
+    if db:
+        current_version = ensure_current_version(db).version
 
     add_preflight_check(
         checks,
@@ -279,7 +286,7 @@ def run_local_update_preflight(package_path: Path) -> dict:
         def exists(relative_path: str) -> bool:
             return (temp_path / relative_path).exists()
 
-        add_preflight_check(checks, "ملف نسخة التحديث", exists("version.txt") or exists("update-manifest.json"), "تم العثور على ملف تعريف النسخة" if exists("version.txt") or exists("update-manifest.json") else "يفضل إضافة version.txt أو update-manifest.json")
+        add_preflight_check(checks, "ملف نسخة التحديث", exists("version.txt") or exists("update-manifest.json"), "تم العثور على ملف تعريف النسخة" if exists("version.txt") or exists("update-manifest.json") else "يجب إضافة version.txt أو update-manifest.json")
         add_preflight_check(checks, "متطلبات الباكند", exists("backend/requirements.txt"), "backend/requirements.txt موجود" if exists("backend/requirements.txt") else "ملف backend/requirements.txt غير موجود")
         add_preflight_check(checks, "مدخل الباكند", exists("backend/app/main.py"), "backend/app/main.py موجود" if exists("backend/app/main.py") else "ملف backend/app/main.py غير موجود")
         add_preflight_check(checks, "ملف الواجهة", exists("frontend/package.json"), "frontend/package.json موجود" if exists("frontend/package.json") else "ملف frontend/package.json غير موجود")
@@ -303,6 +310,8 @@ def run_local_update_preflight(package_path: Path) -> dict:
             except json.JSONDecodeError:
                 add_preflight_check(checks, "صحة ملف التعريف", False, "update-manifest.json غير صالح")
 
+        add_preflight_check(checks, "مجلد تحديثات قاعدة البيانات", exists("updates/migrations"), "updates/migrations موجود" if exists("updates/migrations") else "يجب إرفاق مجلد updates/migrations مع الحزمة")
+
     disk_free = shutil.disk_usage(Path.cwd()).free
     required_space = int(analysis["uncompressed_size_bytes"] * 1.5)
     has_space = disk_free > required_space
@@ -312,8 +321,21 @@ def run_local_update_preflight(package_path: Path) -> dict:
         has_space,
         f"المتاح {disk_free} بايت، والمطلوب التقريبي {required_space} بايت",
     )
-    if analysis["version"] == "غير محدد":
-        warnings.append("لم يتم تحديد رقم النسخة داخل الحزمة.")
+    has_version = analysis["version"] != "غير محدد"
+    add_preflight_check(
+        checks,
+        "رقم الإصدار",
+        has_version,
+        f"رقم الإصدار داخل الحزمة: {analysis['version']}" if has_version else "لم يتم تحديد رقم النسخة داخل الحزمة",
+    )
+    if current_version and has_version:
+        is_newer = version_key(analysis["version"]) > version_key(current_version)
+        add_preflight_check(
+            checks,
+            "تسلسل الإصدارات",
+            is_newer,
+            f"الحزمة أحدث من الإصدار الحالي {current_version}" if is_newer else f"الحزمة ليست أحدث من الإصدار الحالي {current_version}",
+        )
 
     failed_checks = [check for check in checks if not check["passed"]]
     return {
@@ -381,7 +403,11 @@ def apply_update_directory(source_root: Path, target_root: Path, rollback_root: 
 
 
 def apply_local_update_package(package_path: Path) -> dict:
-    preflight = run_local_update_preflight(package_path)
+    db = SessionLocal()
+    try:
+        preflight = run_local_update_preflight(package_path, db)
+    finally:
+        db.close()
     if not preflight["ready"]:
         raise HTTPException(status_code=409, detail="لا يمكن تطبيق التحديث قبل نجاح فحص قابلية التطبيق")
 
@@ -430,7 +456,9 @@ def apply_local_update_package(package_path: Path) -> dict:
         "backup_files": backup_files,
         "applied_roots": applied_roots,
         "restart_required": True,
-        "message": "تم تطبيق ملفات التحديث. أعد تشغيل النظام يدويًا لتفعيل التغييرات.",
+        "migrations_required": True,
+        "next_steps": ["إعادة تشغيل الباكند", "فتح إدارة التحديثات", "فحص التحديثات", "تنفيذ التحديث"],
+        "message": "تم تطبيق ملفات التحديث. أعد تشغيل النظام ثم نفّذ تحديثات قاعدة البيانات من إدارة التحديثات.",
     }
 
 
@@ -680,6 +708,11 @@ async def upload_local_update_package(file: UploadFile = File(...), db: Session 
         if not analysis["valid"]:
             missing = "، ".join(analysis["missing_roots"])
             raise HTTPException(status_code=400, detail=f"ملف التحديث غير مكتمل. المجلدات الناقصة: {missing}")
+        if analysis["version"] == "غير محدد":
+            raise HTTPException(status_code=400, detail="يجب تحديد رقم الإصدار داخل version.txt أو update-manifest.json")
+        current_version = ensure_current_version(db).version
+        if version_key(analysis["version"]) <= version_key(current_version):
+            raise HTTPException(status_code=409, detail=f"رقم إصدار الحزمة {analysis['version']} ليس أحدث من الإصدار الحالي {current_version}")
 
         temp_path.rename(package_path)
         metadata = {
@@ -702,7 +735,7 @@ async def upload_local_update_package(file: UploadFile = File(...), db: Session 
 @router.post("/local-updates/{package_id}/preflight")
 def preflight_local_update_package(package_id: str, db: Session = Depends(get_db), actor: User = Depends(require_roles(UserRole.SUPER_ADMIN))):
     package_path = local_update_package_path(package_id)
-    result = run_local_update_preflight(package_path)
+    result = run_local_update_preflight(package_path, db)
 
     metadata_path = local_update_metadata_path(package_path)
     if metadata_path.exists():

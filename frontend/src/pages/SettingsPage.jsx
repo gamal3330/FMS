@@ -551,6 +551,16 @@ function UpdateManagementSettings({ notify }) {
 
   return (
     <div className="space-y-5">
+      <div className="grid gap-3 lg:grid-cols-2">
+        <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+          <h4 className="font-bold text-slate-950">مسار الإنتاج: Git + Docker</h4>
+          <p className="mt-1 text-sm leading-6 text-slate-600">للخادم الرئيسي المتصل بالمستودع: اسحب الكود، أعد بناء Docker، ثم نفّذ التحديث من هذه الصفحة.</p>
+        </div>
+        <div className="rounded-lg border border-bank-100 bg-bank-50/70 p-4">
+          <h4 className="font-bold text-slate-950">المسار المحلي: ZIP</h4>
+          <p className="mt-1 text-sm leading-6 text-slate-600">للخادم الداخلي: ارفع حزمة ZIP من تبويب التحديث المحلي، أعد التشغيل، ثم نفّذ migrations من هنا.</p>
+        </div>
+      </div>
       <div className="grid gap-3 md:grid-cols-4">
         <MetricBox label="الإصدار الحالي" value={status?.current_version || "-"} />
         <MetricBox label="آخر إصدار متاح" value={status?.latest_version || "-"} />
@@ -707,7 +717,7 @@ function LocalUpdateSettings({ notify }) {
       <div className="min-w-0 rounded-lg border border-bank-100 bg-bank-50/70 p-4">
         <h4 className="font-bold text-slate-950">رفع حزمة تحديث محلية</h4>
         <p className="mt-1 text-sm leading-6 text-slate-600">
-          هذه المرحلة ترفع ملف ZIP وتفحص بنيته فقط، ولا تستبدل ملفات النظام أو تعيد تشغيل الخدمة.
+          هذا المسار مخصص للسيرفر الداخلي أو بدون اتصال GitHub. ارفع حزمة ZIP مبنية من السكربت، ثم افحصها وطبّقها وأعد التشغيل، وبعدها نفّذ migrations من إدارة التحديثات.
         </p>
         <div className="mt-3 grid min-w-0 gap-3 md:grid-cols-3">
           <MetricBox label="الصيغة المطلوبة" value="ZIP" />
@@ -740,7 +750,7 @@ function LocalUpdateSettings({ notify }) {
           <div>
             <h4 className="font-bold text-slate-950">ملاحظة مهمة</h4>
             <p className="mt-1 text-sm leading-6 text-slate-600">
-              تطبيق التحديث يستبدل الملفات فقط ولا يعيد تشغيل النظام تلقائيًا. أعد تشغيل الخدمة يدويًا بعد نجاح التطبيق.
+              تطبيق التحديث يستبدل الملفات فقط ولا ينفذ migrations مباشرة. بعد إعادة التشغيل افتح إدارة التحديثات واضغط فحص التحديثات ثم تنفيذ التحديث.
             </p>
           </div>
           </div>
@@ -834,6 +844,16 @@ function LocalUpdateSettings({ notify }) {
             <MetricBox label="مسار rollback" value={applyResult.rollback_path || "-"} />
             <MetricBox label="نسخة قاعدة البيانات" value={applyResult.database_backup || "-"} />
           </div>
+          {(applyResult.next_steps || []).length > 0 && (
+            <div className="mt-3 rounded-md border border-emerald-200 bg-white p-3 text-sm text-slate-700">
+              <p className="mb-2 font-bold text-slate-950">الخطوات التالية</p>
+              <div className="flex flex-wrap gap-2">
+                {applyResult.next_steps.map((step) => (
+                  <span key={step} className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-bold text-emerald-800">{step}</span>
+                ))}
+              </div>
+            </div>
+          )}
           <div className="mt-4 flex justify-end">
             <Button type="button" onClick={restartBackend} disabled={restartBusy} className="gap-2 bg-slate-900 hover:bg-slate-800">
               <RefreshCw className={`h-4 w-4 ${restartBusy ? "animate-spin" : ""}`} />
