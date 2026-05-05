@@ -1,6 +1,6 @@
 {
-  "version": "1.0.0-local",
-  "release": "local-update",
+  "version": "v1.1.0",
+  "release": "professional-update-manager",
   "application": "QIB IT Service Portal",
   "package_type": "full",
   "required_roots": [
@@ -8,5 +8,5 @@
     "frontend",
     "scripts"
   ],
-  "notes": "Local update package manifest. Update this file before creating a new ZIP release."
+  "notes": "Adds professional update tracking, migration execution, health diagnostics, and performance indexes."
 }

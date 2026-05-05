@@ -9,6 +9,7 @@ backend/.venv/
 backend/.venv-local/
 backend/.venv-mac/
 backend/.venv312/
+backend/.venv-runtime/
 .venv/
 
 # Node / frontend

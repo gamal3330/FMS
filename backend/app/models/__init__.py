@@ -20,11 +20,13 @@ from app.models.settings import (
     WorkflowTemplate,
     WorkflowTemplateStep,
 )
+from app.models.update import AppliedMigration, SystemVersion, UpdateHistory
 from app.models.user import Department, Role, User
 
 __all__ = [
     "AuditLog",
     "ApprovalStep",
+    "AppliedMigration",
     "Attachment",
     "Department",
     "IntegrationConfig",
@@ -44,8 +46,10 @@ __all__ = [
     "ServiceRequest",
     "SystemAlert",
     "SystemHealthCheck",
+    "SystemVersion",
     "SlaConfig",
     "SlaRule",
+    "UpdateHistory",
     "User",
     "WorkflowApprovalConfig",
     "WorkflowStep",

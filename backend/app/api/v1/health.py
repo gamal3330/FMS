@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 from pathlib import Path
+import resource
 import shutil
 import time
 
@@ -18,6 +19,7 @@ from app.models.enums import UserRole
 from app.models.health import SystemAlert, SystemHealthCheck
 from app.models.user import User
 from app.services.audit import write_audit
+from app.services.update_manager import ensure_current_version
 
 router = APIRouter(prefix="/health", tags=["Health Monitoring"])
 settings = get_settings()
@@ -53,6 +55,13 @@ def bytes_label(value: int) -> str:
         size /= 1024
         unit_index += 1
     return f"{size:.1f} {units[unit_index]}" if unit_index else f"{int(size)} {units[unit_index]}"
+
+
+def memory_usage_bytes() -> int:
+    usage = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    if usage < 10_000_000:
+        usage *= 1024
+    return int(usage)
 
 
 def sqlite_database_path() -> Path | None:
@@ -293,10 +302,14 @@ def run_health_checks(db: Session) -> dict:
         upsert_alert(db, "errors", errors_status, f"عدد الأخطاء خلال آخر 24 ساعة: {errors_count}")
 
     parts = [backend, database, storage, backup, errors]
+    version = ensure_current_version(db)
+    memory_bytes = memory_usage_bytes()
     return {
         "status": overall_status(parts),
+        "version": version.version,
         "backend": backend,
         "database": database,
+        "memory": {"status": "healthy", "used_bytes": memory_bytes, "used_label": bytes_label(memory_bytes)},
         "storage": storage,
         "backup": backup,
         "errors_last_24h": errors_count,
@@ -342,8 +355,10 @@ def summary_from_latest(db: Session) -> dict:
     parts = [backend_data, database_data, storage_data, backup_data, errors_data]
     return {
         "status": overall_status(parts),
+        "version": ensure_current_version(db).version,
         "backend": backend_data,
         "database": database_data,
+        "memory": {"status": "healthy", "used_bytes": memory_usage_bytes(), "used_label": bytes_label(memory_usage_bytes())},
         "storage": storage_data,
         "backup": backup_data,
         "errors_last_24h": errors_data.get("count", 0),

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { AlertTriangle, Database, Download, LockKeyhole, Mail, RefreshCw, RotateCcw, Settings2, Upload } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Database, Download, History, LockKeyhole, Mail, PackageCheck, RefreshCw, RotateCcw, Settings2, Upload } from "lucide-react";
 import { api, getErrorMessage } from "../lib/axios";
 import { Card } from "../components/ui/card";
 import { Button } from "../components/ui/button";
@@ -13,6 +13,7 @@ const tabs = [
   ["email", "البريد SMTP", Mail],
   ["security", "إعدادات الأمان", LockKeyhole],
   ["database", "قاعدة البيانات", Database],
+  ["updates", "إدارة التحديثات", PackageCheck],
   ["localUpdates", "التحديث المحلي", Upload]
 ];
 
@@ -50,6 +51,7 @@ export default function SettingsPage() {
           {active === "requestTypes" && <Panel title="أنواع الطلبات"><RequestTypesSettings notify={notify} /></Panel>}
           {active === "security" && <Panel title="إعدادات الأمان"><SecuritySettings notify={notify} /></Panel>}
           {active === "database" && <Panel title="قاعدة البيانات والنسخ الاحتياطي"><DatabaseSettings notify={notify} /></Panel>}
+          {active === "updates" && <Panel title="إدارة التحديثات"><UpdateManagementSettings notify={notify} /></Panel>}
           {active === "localUpdates" && <Panel title="التحديث المحلي للنظام"><LocalUpdateSettings notify={notify} /></Panel>}
         </Card>
       </div>
@@ -286,6 +288,10 @@ function DatabaseSettings({ notify }) {
   }
 
   async function downloadBackup() {
+    if (status && status.maintenance_supported === false) {
+      notify(status.maintenance_message || "هذه العملية غير متاحة لنوع قاعدة البيانات الحالي.", "error");
+      return;
+    }
     setBusy("backup");
     setError("");
     try {
@@ -309,6 +315,10 @@ function DatabaseSettings({ notify }) {
 
   async function restoreBackup(event) {
     event.preventDefault();
+    if (status && status.maintenance_supported === false) {
+      notify(status.maintenance_message || "هذه العملية غير متاحة لنوع قاعدة البيانات الحالي.", "error");
+      return;
+    }
     if (!file) {
       notify("اختر ملف النسخة الاحتياطية أولًا.", "error");
       return;
@@ -355,9 +365,21 @@ function DatabaseSettings({ notify }) {
     <div className="space-y-5">
       <div className="grid gap-3 md:grid-cols-3">
         <MetricBox label="نوع القاعدة" value={status?.engine || "-"} />
-        <MetricBox label="حجم الملف" value={formatBytes(status?.size_bytes || 0)} />
-        <MetricBox label="آخر تحديث" value={formatDateTime(status?.updated_at)} />
+        <MetricBox label={status?.maintenance_supported === false ? "اسم القاعدة" : "حجم الملف"} value={status?.maintenance_supported === false ? status?.database_name || "-" : formatBytes(status?.size_bytes || 0)} />
+        <MetricBox label={status?.maintenance_supported === false ? "الخادم" : "آخر تحديث"} value={status?.maintenance_supported === false ? status?.database_path || "-" : formatDateTime(status?.updated_at)} />
       </div>
+
+      {status?.maintenance_supported === false && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50/70 p-4">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="mt-1 h-5 w-5 shrink-0 text-amber-700" />
+            <div>
+              <h4 className="font-bold text-slate-950">تنبيه قاعدة البيانات</h4>
+              <p className="mt-1 text-sm leading-6 text-slate-600">{status.maintenance_message}</p>
+            </div>
+          </div>
+        </div>
+      )}
 
       <form onSubmit={saveBackupSettings} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
         <div className="mb-4 flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
@@ -396,7 +418,7 @@ function DatabaseSettings({ notify }) {
             <Button type="button" onClick={loadStatus} disabled={Boolean(busy)} className="gap-2 border border-slate-300 bg-white text-slate-700 hover:bg-slate-50">
               <RefreshCw className="h-4 w-4" /> تحديث
             </Button>
-            <Button type="button" onClick={downloadBackup} disabled={Boolean(busy)} className="gap-2">
+            <Button type="button" onClick={downloadBackup} disabled={Boolean(busy) || status?.maintenance_supported === false} className="gap-2">
               <Download className="h-4 w-4" /> تنزيل نسخة
             </Button>
           </div>
@@ -412,9 +434,9 @@ function DatabaseSettings({ notify }) {
           </div>
         </div>
         <div className="grid gap-3 lg:grid-cols-[1fr_220px_auto]">
-          <input type="file" accept=".db,.sqlite,.sqlite3" onChange={(event) => setFile(event.target.files?.[0] || null)} className="h-10 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm" />
-          <Input placeholder="اكتب: استرداد النسخة" value={restoreConfirmation} onChange={(event) => setRestoreConfirmation(event.target.value)} />
-          <Button type="submit" disabled={busy === "restore"} className="gap-2 bg-amber-700 hover:bg-amber-800">
+          <input type="file" accept=".db,.sqlite,.sqlite3" disabled={status?.maintenance_supported === false} onChange={(event) => setFile(event.target.files?.[0] || null)} className="h-10 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm disabled:opacity-60" />
+          <Input placeholder="اكتب: استرداد النسخة" value={restoreConfirmation} disabled={status?.maintenance_supported === false} onChange={(event) => setRestoreConfirmation(event.target.value)} />
+          <Button type="submit" disabled={busy === "restore" || status?.maintenance_supported === false} className="gap-2 bg-amber-700 hover:bg-amber-800">
             <Upload className="h-4 w-4" /> استرداد
           </Button>
         </div>
@@ -470,6 +492,119 @@ function DatabaseSettings({ notify }) {
         </div>
       </form>
 
+    </div>
+  );
+}
+
+function UpdateManagementSettings({ notify }) {
+  const [status, setStatus] = useState(null);
+  const [history, setHistory] = useState({ updates: [], migrations: [] });
+  const [busy, setBusy] = useState("");
+
+  async function load() {
+    try {
+      const [statusResponse, historyResponse] = await Promise.all([
+        api.get("/updates/status"),
+        api.get("/updates/history")
+      ]);
+      setStatus(statusResponse.data);
+      setHistory(historyResponse.data);
+    } catch (error) {
+      notify(getErrorMessage(error), "error");
+    }
+  }
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  async function checkUpdates() {
+    setBusy("check");
+    try {
+      const { data } = await api.post("/updates/check");
+      setStatus(data);
+      notify(data.update_available ? "يوجد تحديث جاهز للمراجعة" : "النظام محدّث ولا توجد تحديثات معلقة");
+      await load();
+    } catch (error) {
+      notify(getErrorMessage(error), "error");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function applyUpdate() {
+    if (!window.confirm("سيتم تنفيذ تحديثات قاعدة البيانات المعلقة وتسجيل رقم الإصدار. هل تريد المتابعة؟")) return;
+    setBusy("apply");
+    try {
+      const { data } = await api.post("/updates/apply");
+      notify(data.message || "تم تنفيذ التحديث بنجاح");
+      await load();
+    } catch (error) {
+      notify(getErrorMessage(error), "error");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  const updates = history.updates || [];
+  const migrations = history.migrations || [];
+
+  return (
+    <div className="space-y-5">
+      <div className="grid gap-3 md:grid-cols-4">
+        <MetricBox label="الإصدار الحالي" value={status?.current_version || "-"} />
+        <MetricBox label="آخر إصدار متاح" value={status?.latest_version || "-"} />
+        <MetricBox label="حالة النظام" value={status?.system_status || "-"} />
+        <MetricBox label="آخر تحديث" value={formatDateTime(status?.last_update?.finished_at || status?.last_update?.started_at)} />
+      </div>
+
+      <div className={`rounded-lg border p-4 ${status?.update_available ? "border-amber-200 bg-amber-50/70" : "border-emerald-200 bg-emerald-50/70"}`}>
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex items-start gap-3">
+            {status?.update_available ? <AlertTriangle className="mt-1 h-5 w-5 shrink-0 text-amber-700" /> : <CheckCircle2 className="mt-1 h-5 w-5 shrink-0 text-emerald-700" />}
+            <div>
+              <h4 className="font-bold text-slate-950">{status?.update_available ? "يوجد تحديث أو migration معلّق" : "النظام محدّث"}</h4>
+              <p className="mt-1 text-sm leading-6 text-slate-600">
+                مجلد التحديثات: {status?.updates_dir || "updates"} - التحديثات المعلقة: {(status?.pending_migrations || []).length}
+              </p>
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" onClick={checkUpdates} disabled={Boolean(busy)} className="gap-2 border border-slate-300 bg-white text-slate-700 hover:bg-slate-50">
+              <RefreshCw className={`h-4 w-4 ${busy === "check" ? "animate-spin" : ""}`} /> فحص التحديثات
+            </Button>
+            <Button type="button" onClick={applyUpdate} disabled={Boolean(busy) || !status?.update_available} className="gap-2">
+              <PackageCheck className="h-4 w-4" /> {busy === "apply" ? "جاري التنفيذ..." : "تنفيذ التحديث"}
+            </Button>
+          </div>
+        </div>
+      </div>
+
+      {(status?.pending_migrations || []).length > 0 && (
+        <div className="rounded-lg border border-slate-200 bg-white p-4">
+          <h4 className="mb-3 flex items-center gap-2 font-bold text-slate-950"><History className="h-4 w-4" /> تحديثات قاعدة البيانات المعلقة</h4>
+          <SimpleTable
+            headers={["Migration", "الإصدار", "Checksum"]}
+            rows={(status.pending_migrations || []).map((item) => [item.migration_id, item.version, String(item.checksum || "").slice(0, 12)])}
+          />
+        </div>
+      )}
+
+      <div className="rounded-lg border border-slate-200 bg-white p-4">
+        <h4 className="mb-3 font-bold text-slate-950">سجل التحديثات</h4>
+        <SimpleTable
+          headers={["من إصدار", "إلى إصدار", "الحالة", "الرسالة", "وقت التنفيذ"]}
+          rows={updates.map((item) => [item.from_version || "-", item.to_version, item.status, item.message || "-", formatDateTime(item.finished_at || item.started_at)])}
+        />
+      </div>
+
+      <div className="rounded-lg border border-slate-200 bg-white p-4">
+        <h4 className="mb-3 font-bold text-slate-950">سجل migrations المنفذة</h4>
+        <SimpleTable
+          headers={["Migration", "الإصدار", "الحالة", "الزمن", "التاريخ"]}
+          rows={migrations.map((item) => [item.migration_id, item.version, item.status, item.execution_ms ? `${item.execution_ms} ms` : "-", formatDateTime(item.applied_at)])}
+        />
+      </div>
     </div>
   );
 }

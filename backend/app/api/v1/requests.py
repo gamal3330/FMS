@@ -625,6 +625,8 @@ def list_requests(
     current_user: User = Depends(get_current_user),
     status_filter: RequestStatus | None = Query(default=None, alias="status"),
     request_type: RequestType | None = None,
+    page: int | None = Query(default=None, ge=1),
+    per_page: int | None = Query(default=None, ge=1, le=100),
 ):
     stmt = request_query().order_by(ServiceRequest.created_at.desc())
     stmt = scoped_requests_stmt(stmt, current_user)
@@ -632,6 +634,8 @@ def list_requests(
         stmt = stmt.where(ServiceRequest.status == status_filter)
     if request_type:
         stmt = stmt.where(ServiceRequest.request_type == request_type)
+    if page and per_page:
+        stmt = stmt.offset((page - 1) * per_page).limit(per_page)
     return enrich_request_list(db, db.scalars(stmt).all())
 
 

@@ -109,7 +109,7 @@ def require_super_admin_token(token: str = Depends(oauth2_scheme)) -> dict:
 def sqlite_database_path() -> Path:
     url = make_url(settings.database_url)
     if url.drivername != "sqlite":
-        raise HTTPException(status_code=409, detail="Database maintenance is currently available for SQLite deployments only")
+        raise HTTPException(status_code=409, detail="النسخ الاحتياطي والاسترداد من هذه الشاشة متاحان فقط عند استخدام SQLite")
     database = url.database
     if not database:
         raise HTTPException(status_code=409, detail="SQLite database path is not configured")
@@ -390,8 +390,11 @@ def apply_local_update_package(package_path: Path) -> dict:
     backup_files: list[str] = []
     applied_roots: dict[str, dict] = {}
 
-    database_path = sqlite_database_path()
-    if database_path.exists():
+    try:
+        database_path = sqlite_database_path()
+    except HTTPException:
+        database_path = None
+    if database_path and database_path.exists():
         database_backup = rollback_root / "database" / database_path.name
         database_backup.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(database_path, database_backup)
@@ -616,6 +619,19 @@ def update_security_policy(payload: SecurityPolicyPayload, db: Session = Depends
 
 @router.get("/database/status")
 def get_database_status(_: User = SettingsActor):
+    url = make_url(settings.database_url)
+    if url.drivername != "sqlite":
+        return {
+            "engine": url.drivername.split("+", 1)[0].upper(),
+            "database_name": url.database or "-",
+            "database_path": url.host or "-",
+            "exists": True,
+            "size_bytes": 0,
+            "updated_at": None,
+            "maintenance_supported": False,
+            "maintenance_message": "النسخ الاحتياطي والاسترداد من هذه الشاشة متاحان فقط لقواعد SQLite. عند استخدام PostgreSQL استخدم أوامر pg_dump أو نسخ Docker.",
+        }
+
     database_path = sqlite_database_path()
     exists = database_path.exists()
     return {
@@ -625,6 +641,8 @@ def get_database_status(_: User = SettingsActor):
         "exists": exists,
         "size_bytes": database_path.stat().st_size if exists else 0,
         "updated_at": datetime.fromtimestamp(database_path.stat().st_mtime).isoformat() if exists else None,
+        "maintenance_supported": True,
+        "maintenance_message": None,
     }
 
 

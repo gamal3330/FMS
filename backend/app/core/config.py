@@ -12,6 +12,10 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 60
     upload_dir: str = "uploads"
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
+    request_slow_ms: int = 1000
+    system_version_file: str = "../version.txt"
+    update_manifest_file: str = "../update-manifest.json"
+    updates_dir: str = "../updates"
     seed_admin_email: EmailStr = "admin@qib.internal-bank.qa"
     seed_admin_password: str = "Admin@12345"
 
