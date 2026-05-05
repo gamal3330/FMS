@@ -309,6 +309,25 @@ def get_or_create_template(db: Session, request_type_id: int) -> WorkflowTemplat
     return template
 
 
+def validate_return_target(db: Session, template: WorkflowTemplate, payload: WorkflowStepPayload, step_id: int | None = None) -> None:
+    if not payload.can_return_for_edit:
+        payload.return_to_step_order = None
+        return
+    if payload.return_to_step_order is None:
+        return
+    if payload.return_to_step_order >= payload.sort_order:
+        raise HTTPException(status_code=422, detail="Return target must be a previous workflow step")
+    target = db.scalar(
+        select(WorkflowTemplateStep).where(
+            WorkflowTemplateStep.workflow_template_id == template.id,
+            WorkflowTemplateStep.sort_order == payload.return_to_step_order,
+            WorkflowTemplateStep.is_active == True,
+        )
+    )
+    if not target or (step_id and target.id == step_id):
+        raise HTTPException(status_code=422, detail="Return target step is not available")
+
+
 @router.get("/{request_type_id}/workflow", response_model=WorkflowRead)
 def get_workflow(request_type_id: int, db: Session = Depends(get_db), _: User = admin_actor):
     template = get_or_create_template(db, request_type_id)
@@ -320,6 +339,7 @@ def get_workflow(request_type_id: int, db: Session = Depends(get_db), _: User = 
 @router.post("/{request_type_id}/workflow/steps", response_model=WorkflowStepRead, status_code=status.HTTP_201_CREATED)
 def create_workflow_step(request_type_id: int, payload: WorkflowStepPayload, db: Session = Depends(get_db), actor: User = admin_actor):
     template = get_or_create_template(db, request_type_id)
+    validate_return_target(db, template, payload)
     item = WorkflowTemplateStep(workflow_template_id=template.id, **payload.model_dump())
     db.add(item)
     db.flush()
@@ -334,6 +354,8 @@ def update_workflow_step(step_id: int, payload: WorkflowStepPayload, db: Session
     item = db.get(WorkflowTemplateStep, step_id)
     if not item:
         raise HTTPException(status_code=404, detail="Workflow step not found")
+    template = db.get(WorkflowTemplate, item.workflow_template_id)
+    validate_return_target(db, template, payload, step_id)
     for field, value in payload.model_dump().items():
         setattr(item, field, value)
     write_audit(db, "workflow_template_step_updated", "workflow_template_steps", actor=actor, entity_id=str(item.id))
@@ -362,6 +384,11 @@ def reorder_workflow(request_type_id: int, payload: ReorderPayload, db: Session 
         step = db.get(WorkflowTemplateStep, step_id)
         if step and step.workflow_template_id == template.id:
             step.sort_order = index
+    steps = db.scalars(select(WorkflowTemplateStep).where(WorkflowTemplateStep.workflow_template_id == template.id)).all()
+    active_orders = {step.sort_order for step in steps if step.is_active}
+    for step in steps:
+        if step.return_to_step_order and (step.return_to_step_order >= step.sort_order or step.return_to_step_order not in active_orders):
+            step.return_to_step_order = None
     write_audit(db, "workflow_template_reordered", "workflow_templates", actor=actor, entity_id=str(template.id))
     db.commit()
     return get_workflow(request_type_id, db, actor)

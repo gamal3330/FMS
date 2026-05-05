@@ -4,7 +4,7 @@ import { api, getErrorMessage } from "../../lib/axios";
 import WorkflowPreview from "./WorkflowPreview";
 import WorkflowStepForm from "./WorkflowStepForm";
 
-const empty = { step_name_ar: "", step_name_en: "", step_type: "direct_manager", approver_role_id: "", approver_user_id: "", is_mandatory: true, can_reject: true, can_return_for_edit: false, sla_hours: 8, escalation_user_id: "", sort_order: 1, is_active: true };
+const empty = { step_name_ar: "", step_name_en: "", step_type: "direct_manager", approver_role_id: "", approver_user_id: "", is_mandatory: true, can_reject: true, can_return_for_edit: false, return_to_step_order: "", sla_hours: 8, escalation_user_id: "", sort_order: 1, is_active: true };
 
 export default function WorkflowBuilder({ requestTypeId, notify, onWorkflowChange }) {
   const [workflow, setWorkflow] = useState(null);
@@ -36,6 +36,7 @@ export default function WorkflowBuilder({ requestTypeId, notify, onWorkflowChang
       approver_role_id: form.approver_role_id ? Number(form.approver_role_id) : null,
       approver_user_id: form.approver_user_id ? Number(form.approver_user_id) : null,
       escalation_user_id: form.escalation_user_id ? Number(form.escalation_user_id) : null,
+      return_to_step_order: form.can_return_for_edit && form.return_to_step_order ? Number(form.return_to_step_order) : null,
       sla_hours: Number(form.sla_hours),
       sort_order: Number(form.sort_order)
     };
@@ -89,7 +90,7 @@ export default function WorkflowBuilder({ requestTypeId, notify, onWorkflowChang
 
   return (
     <div className="space-y-5">
-      <WorkflowStepForm form={form} setForm={setForm} onSubmit={save} editing={Boolean(editingId)} onCancel={resetForm} />
+      <WorkflowStepForm form={form} setForm={setForm} steps={workflow?.steps || []} editingId={editingId} onSubmit={save} editing={Boolean(editingId)} onCancel={resetForm} />
       {error && <p className="rounded-md bg-red-50 p-3 text-sm text-red-700">{error}</p>}
       <div className="space-y-2">
         {(workflow?.steps || []).map((step) => (
@@ -101,7 +102,7 @@ export default function WorkflowBuilder({ requestTypeId, notify, onWorkflowChang
             </div>
             <span>{stepTypeLabel(step.step_type)}</span>
             <div className="flex gap-2">
-              <button type="button" onClick={() => { setEditingId(step.id); setForm({ ...step, approver_role_id: step.approver_role_id || "", approver_user_id: step.approver_user_id || "", escalation_user_id: step.escalation_user_id || "" }); }} className="inline-flex h-8 items-center gap-1 rounded-md border px-3 text-xs font-bold"><Edit3 className="h-3.5 w-3.5" /> تعديل</button>
+              <button type="button" onClick={() => { setEditingId(step.id); setForm({ ...step, approver_role_id: step.approver_role_id || "", approver_user_id: step.approver_user_id || "", escalation_user_id: step.escalation_user_id || "", return_to_step_order: step.return_to_step_order || "" }); }} className="inline-flex h-8 items-center gap-1 rounded-md border px-3 text-xs font-bold"><Edit3 className="h-3.5 w-3.5" /> تعديل</button>
               <button type="button" onClick={() => remove(step.id)} className="inline-flex h-8 items-center gap-1 rounded-md border border-red-200 px-3 text-xs font-bold text-red-700"><Trash2 className="h-3.5 w-3.5" /> حذف</button>
             </div>
           </div>

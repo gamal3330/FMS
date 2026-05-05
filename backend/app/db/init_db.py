@@ -1,4 +1,4 @@
-from sqlalchemy import func, select, text
+from sqlalchemy import func, inspect, select, text
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -124,6 +124,14 @@ def ensure_sqlite_dev_columns(db: Session) -> None:
     db.commit()
 
 
+def ensure_runtime_columns(db: Session) -> None:
+    inspector = inspect(db.bind)
+    workflow_columns = {column["name"] for column in inspector.get_columns("workflow_template_steps")}
+    if "return_to_step_order" not in workflow_columns:
+        db.execute(text("ALTER TABLE workflow_template_steps ADD COLUMN return_to_step_order INTEGER"))
+        db.commit()
+
+
 def seed_request_types(db: Session) -> None:
     existing_count = db.scalar(select(func.count()).select_from(RequestTypeSetting)) or 0
     if existing_count:
@@ -194,6 +202,7 @@ def seed_request_types(db: Session) -> None:
 
 def seed_database(db: Session) -> None:
     ensure_sqlite_dev_columns(db)
+    ensure_runtime_columns(db)
     for code, name_ar, name_en, description in DEFAULT_SPECIALIZED_SECTIONS:
         exists = db.scalar(select(SpecializedSection).where(SpecializedSection.code == code))
         if not exists:

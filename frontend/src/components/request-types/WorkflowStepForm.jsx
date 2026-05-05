@@ -20,9 +20,15 @@ const toggles = [
   ["is_active", "مرحلة نشطة"]
 ];
 
-export default function WorkflowStepForm({ form, setForm, onSubmit, editing, onCancel }) {
+export default function WorkflowStepForm({ form, setForm, steps = [], editingId, onSubmit, editing, onCancel }) {
+  const returnTargetOptions = steps
+    .filter((step) => step.id !== editingId && Number(step.sort_order) < Number(form.sort_order || 1) && step.is_active)
+    .sort((first, second) => Number(first.sort_order) - Number(second.sort_order));
+
   function update(field, value) {
-    setForm({ ...form, [field]: value });
+    const next = { ...form, [field]: value };
+    if (field === "can_return_for_edit" && !value) next.return_to_step_order = "";
+    setForm(next);
   }
 
   return (
@@ -47,6 +53,19 @@ export default function WorkflowStepForm({ form, setForm, onSubmit, editing, onC
             {label}
           </label>
         ))}
+        {form.can_return_for_edit && (
+          <label className="grid gap-1 md:col-span-2">
+            <span className="text-xs font-bold text-slate-600">عند الإرجاع، أعد الطلب إلى</span>
+            <select value={form.return_to_step_order || ""} onChange={(event) => update("return_to_step_order", event.target.value)} className="h-10 rounded-md border border-slate-300 bg-white px-3 text-sm">
+              <option value="">صاحب الطلب للتعديل</option>
+              {returnTargetOptions.map((step) => (
+                <option key={step.id} value={step.sort_order}>
+                  {step.sort_order}. {step.step_name_ar || step.step_name_en}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         <Button type="submit">{editing ? "حفظ المرحلة" : "إضافة مرحلة"}</Button>
       </div>
     </form>

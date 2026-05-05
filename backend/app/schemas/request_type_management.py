@@ -58,6 +58,7 @@ class WorkflowStepPayload(BaseModel):
     is_mandatory: bool = True
     can_reject: bool = True
     can_return_for_edit: bool = False
+    return_to_step_order: int | None = None
     sla_hours: int = Field(default=8, ge=1, le=720)
     escalation_user_id: int | None = None
     sort_order: int = 1

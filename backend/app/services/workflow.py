@@ -61,23 +61,53 @@ def user_can_act(user: User, step: ApprovalStep) -> bool:
     }
 
 
-def step_can_return_for_edit(db: Session, request: ServiceRequest, step: ApprovalStep) -> bool:
+def workflow_return_config(db: Session, request: ServiceRequest, step: ApprovalStep) -> tuple[bool, int | None]:
     if not request.request_type_id:
-        return False
-    return bool(
-        db.scalar(
-            select(WorkflowTemplateStep.can_return_for_edit)
-            .join(WorkflowTemplate, WorkflowTemplateStep.workflow_template_id == WorkflowTemplate.id)
-            .where(
-                WorkflowTemplate.request_type_id == request.request_type_id,
-                WorkflowTemplate.is_active == True,
-                WorkflowTemplateStep.is_active == True,
-                WorkflowTemplateStep.sort_order == step.step_order,
-                WorkflowTemplateStep.step_type == step.role,
-            )
-            .limit(1)
+        return False, None
+    row = db.execute(
+        select(WorkflowTemplateStep.can_return_for_edit, WorkflowTemplateStep.return_to_step_order)
+        .join(WorkflowTemplate, WorkflowTemplateStep.workflow_template_id == WorkflowTemplate.id)
+        .where(
+            WorkflowTemplate.request_type_id == request.request_type_id,
+            WorkflowTemplate.is_active == True,
+            WorkflowTemplateStep.is_active == True,
+            WorkflowTemplateStep.sort_order == step.step_order,
+            WorkflowTemplateStep.step_type == step.role,
         )
-    )
+        .limit(1)
+    ).first()
+    if not row:
+        return False, None
+    return bool(row.can_return_for_edit), row.return_to_step_order
+
+
+def step_can_return_for_edit(db: Session, request: ServiceRequest, step: ApprovalStep) -> bool:
+    can_return, _ = workflow_return_config(db, request, step)
+    return can_return
+
+
+def return_workflow_to_step(request: ServiceRequest, target_order: int) -> None:
+    target_exists = any(step.step_order == target_order for step in request.approvals)
+    if not target_exists:
+        raise ValueError("Selected return target step is not available")
+
+    for step in request.approvals:
+        if step.step_order >= target_order:
+            step.action = ApprovalAction.PENDING
+            step.approver_id = None
+            step.note = None
+            step.acted_at = None
+
+    for snapshot in request.approval_snapshots:
+        if snapshot.sort_order < target_order:
+            continue
+        snapshot.status = "pending" if snapshot.sort_order == target_order else "waiting"
+        snapshot.action_by = None
+        snapshot.action_at = None
+        snapshot.comments = None
+
+    request.status = RequestStatus.PENDING_APPROVAL
+    request.closed_at = None
 
 
 def reset_workflow_for_resubmission(request: ServiceRequest) -> None:
@@ -102,8 +132,11 @@ def advance_workflow(db: Session, request: ServiceRequest, actor: User, action: 
         raise ValueError("No pending approval step")
     if not user_can_act(actor, pending_step):
         raise PermissionError("User cannot act on current step")
-    if action == ApprovalAction.RETURNED_FOR_EDIT and not step_can_return_for_edit(db, request, pending_step):
-        raise PermissionError("This step cannot return the request for editing")
+    return_target_order = None
+    if action == ApprovalAction.RETURNED_FOR_EDIT:
+        can_return, return_target_order = workflow_return_config(db, request, pending_step)
+        if not can_return:
+            raise PermissionError("This step cannot return the request for editing")
 
     pending_step.action = action
     pending_step.approver_id = actor.id
@@ -111,8 +144,11 @@ def advance_workflow(db: Session, request: ServiceRequest, actor: User, action: 
     pending_step.acted_at = datetime.now(timezone.utc)
 
     if action == ApprovalAction.RETURNED_FOR_EDIT:
-        request.status = RequestStatus.RETURNED_FOR_EDIT
-        request.closed_at = None
+        if return_target_order:
+            return_workflow_to_step(request, return_target_order)
+        else:
+            request.status = RequestStatus.RETURNED_FOR_EDIT
+            request.closed_at = None
         return pending_step
 
     if action == ApprovalAction.REJECTED:

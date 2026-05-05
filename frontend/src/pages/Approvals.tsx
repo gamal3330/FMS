@@ -235,7 +235,7 @@ export function Approvals() {
       setRequests((current) => current.map((request) => (request.id === updated.id ? updated : request)));
       setSelectedId(updated.id);
       setNote("");
-      setMessage(decision === "approved" ? "تمت الموافقة على الخطوة الحالية." : decision === "returned_for_edit" ? "تم إرجاع الطلب لصاحب الطلب للتعديل." : "تم رفض الطلب وتحديث سجل الموافقات.");
+      setMessage(decision === "approved" ? "تمت الموافقة على الخطوة الحالية." : decision === "returned_for_edit" ? "تم إرجاع الطلب للتعديل حسب إعدادات مسار الموافقات." : "تم رفض الطلب وتحديث سجل الموافقات.");
     } catch {
       setError("تعذر تنفيذ قرار الموافقة. تحقق من أن لديك صلاحية على الخطوة الحالية.");
     } finally {
@@ -472,7 +472,7 @@ export function Approvals() {
                           onChange={(event) => setNote(event.target.value)}
                           rows={5}
                           required={decision === "rejected" || decision === "returned_for_edit"}
-                          placeholder={decision === "returned_for_edit" ? "اكتب التعديلات المطلوبة من صاحب الطلب" : "اكتب سبب القرار أو أي تعليمات للتنفيذ"}
+                          placeholder={decision === "returned_for_edit" ? "اكتب التعديلات المطلوبة والمرحلة التي يجب مراجعتها" : "اكتب سبب القرار أو أي تعليمات للتنفيذ"}
                           className="w-full resize-y rounded-md border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-bank-600 focus:ring-2 focus:ring-bank-100"
                         />
                       </label>

@@ -190,6 +190,7 @@ class WorkflowTemplateStep(Base):
     is_mandatory: Mapped[bool] = mapped_column(Boolean, default=True)
     can_reject: Mapped[bool] = mapped_column(Boolean, default=True)
     can_return_for_edit: Mapped[bool] = mapped_column(Boolean, default=False)
+    return_to_step_order: Mapped[int | None] = mapped_column(Integer)
     sla_hours: Mapped[int] = mapped_column(Integer, default=8)
     escalation_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
     sort_order: Mapped[int] = mapped_column(Integer, default=1)
