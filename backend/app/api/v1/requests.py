@@ -417,6 +417,7 @@ class RequestPdfBuilder:
         values.extend(pdf_form_pairs(form_data))
         self.pairs(values)
 
+        self.page_break(225)
         self.section("مسار الموافقات")
         self.draw_approval_circles(steps)
         self.note_box("مبرر العمل", self.request.business_justification or "لا يوجد مبرر مسجل.")
