@@ -28,7 +28,7 @@ const priorities = [
   ["critical", "حرجة"]
 ];
 
-export default function RequestTypeForm({ value, onSubmit, onCancel }) {
+export default function RequestTypeForm({ value, onSubmit, onCancel, sectionsOptions }) {
   const [form, setForm] = useState(initial);
   const [sections, setSections] = useState([]);
 
@@ -37,10 +37,14 @@ export default function RequestTypeForm({ value, onSubmit, onCancel }) {
   }, [value]);
 
   useEffect(() => {
+    if (sectionsOptions) {
+      setSections(sectionsOptions);
+      return;
+    }
     api.get("/settings/specialized-sections", { params: { active_only: true } })
       .then(({ data }) => setSections(data.map((section) => [section.code, section.name_ar])))
       .catch(() => setSections([]));
-  }, []);
+  }, [sectionsOptions]);
 
   function update(field, value) {
     setForm((current) => ({ ...current, [field]: value }));

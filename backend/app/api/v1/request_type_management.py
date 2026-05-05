@@ -36,8 +36,7 @@ def workflow_summary(db: Session, request_type_id: int) -> str:
     return " -> ".join(step.step_name_en for step in steps) or "No steps"
 
 
-def read_request_type(db: Session, item: RequestTypeSetting) -> RequestTypeRead:
-    fields_count = db.scalar(select(func.count()).select_from(RequestTypeField).where(RequestTypeField.request_type_id == item.id)) or 0
+def request_type_read(item: RequestTypeSetting, fields_count: int = 0, workflow_text: str = "No workflow") -> RequestTypeRead:
     return RequestTypeRead(
         id=item.id,
         name_ar=item.name_ar,
@@ -57,8 +56,53 @@ def read_request_type(db: Session, item: RequestTypeSetting) -> RequestTypeRead:
         created_at=item.created_at,
         updated_at=item.updated_at,
         fields_count=fields_count,
-        workflow_summary=workflow_summary(db, item.id),
+        workflow_summary=workflow_text,
     )
+
+
+def read_request_type(db: Session, item: RequestTypeSetting) -> RequestTypeRead:
+    fields_count = db.scalar(select(func.count()).select_from(RequestTypeField).where(RequestTypeField.request_type_id == item.id)) or 0
+    return request_type_read(item, int(fields_count), workflow_summary(db, item.id))
+
+
+def read_request_types_bulk(db: Session, items: list[RequestTypeSetting]) -> list[RequestTypeRead]:
+    if not items:
+        return []
+    ids = [item.id for item in items]
+    fields_counts = {
+        row.request_type_id: int(row.count or 0)
+        for row in db.execute(
+            select(RequestTypeField.request_type_id, func.count(RequestTypeField.id).label("count"))
+            .where(RequestTypeField.request_type_id.in_(ids))
+            .group_by(RequestTypeField.request_type_id)
+        ).all()
+    }
+    workflow_rows = db.execute(
+        select(
+            WorkflowTemplate.request_type_id,
+            WorkflowTemplateStep.step_name_en,
+            WorkflowTemplateStep.sort_order,
+        )
+        .join(WorkflowTemplateStep, WorkflowTemplateStep.workflow_template_id == WorkflowTemplate.id)
+        .where(
+            WorkflowTemplate.request_type_id.in_(ids),
+            WorkflowTemplate.is_active == True,
+            WorkflowTemplateStep.is_active == True,
+        )
+        .order_by(WorkflowTemplate.request_type_id, WorkflowTemplateStep.sort_order)
+    ).all()
+    workflow_map: dict[int, list[str]] = {}
+    for row in workflow_rows:
+        workflow_map.setdefault(row.request_type_id, []).append(row.step_name_en)
+
+    return [
+        request_type_read(
+            item,
+            fields_count=fields_counts.get(item.id, 0),
+            workflow_text=" -> ".join(workflow_map.get(item.id, [])) or "No workflow",
+        )
+        for item in items
+    ]
 
 
 @router.get("", response_model=list[RequestTypeRead])
@@ -82,7 +126,28 @@ def list_request_types(
         stmt = stmt.where(RequestTypeSetting.is_active == False)
     if category:
         stmt = stmt.where(RequestTypeSetting.category == category)
-    return [read_request_type(db, item) for item in db.scalars(stmt).all()]
+    return read_request_types_bulk(db, db.scalars(stmt).all())
+
+
+@router.get("/bootstrap")
+def request_types_bootstrap(
+    db: Session = Depends(get_db),
+    _: User = admin_actor,
+    search: str | None = None,
+    status_filter: str | None = Query(default=None, alias="status"),
+):
+    types = list_request_types(db=db, _=_, search=search, status_filter=status_filter)
+    departments = db.scalars(select(Department).order_by(Department.name_ar)).all()
+    sections = db.scalars(
+        select(SpecializedSection)
+        .where(SpecializedSection.is_active == True)
+        .order_by(SpecializedSection.name_ar)
+    ).all()
+    return {
+        "request_types": types,
+        "departments": departments,
+        "specialized_sections": sections,
+    }
 
 
 @router.get("/active", response_model=list[RequestTypeRead])
@@ -92,7 +157,7 @@ def list_active_request_types(db: Session = Depends(get_db), _: User = Depends(g
         .where(RequestTypeSetting.is_active == True)
         .order_by(RequestTypeSetting.name_ar)
     ).all()
-    return [read_request_type(db, item) for item in items]
+    return read_request_types_bulk(db, items)
 
 
 @router.get("/{request_type_id}", response_model=RequestTypeRead)
