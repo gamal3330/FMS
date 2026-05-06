@@ -7,7 +7,7 @@ import { Input } from "../ui/input";
 const roles = [
   ["employee", "موظف"],
   ["direct_manager", "مدير مباشر"],
-  ["it_staff", "موظف تقنية معلومات"],
+  ["it_staff", "موظف تنفيذ"],
   ["it_manager", "مدير تقنية المعلومات"],
   ["information_security", "أمن المعلومات"],
   ["executive_management", "الإدارة التنفيذية"],
@@ -17,6 +17,7 @@ const roles = [
 const relationRoles = new Set(["employee", "direct_manager"]);
 const managerRoleKeys = new Set(["direct_manager", "it_manager", "executive_management", "super_admin"]);
 const seniorManagerRoles = new Set(["it_manager", "executive_management", "super_admin"]);
+const DEFAULT_TEMPORARY_PASSWORD = "Change@12345";
 
 function isTemporarilyLocked(user) {
   if (!user.locked_until) return false;
@@ -45,7 +46,7 @@ const empty = {
   manager_id: "",
   administrative_section: "",
   role: "employee",
-  password: "Change@12345",
+  password: DEFAULT_TEMPORARY_PASSWORD,
   is_active: true
 };
 
@@ -70,19 +71,23 @@ export default function UserSettings({ notify }) {
   const [importFile, setImportFile] = useState(null);
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState(null);
+  const [temporaryPassword, setTemporaryPassword] = useState(DEFAULT_TEMPORARY_PASSWORD);
+  const resolvedTemporaryPassword = temporaryPassword || DEFAULT_TEMPORARY_PASSWORD;
 
   async function load() {
     setLoading(true);
     setError("");
     try {
-      const [usersResponse, departmentsResponse, sectionsResponse] = await Promise.all([
+      const [usersResponse, departmentsResponse, sectionsResponse, securityResponse] = await Promise.all([
         api.get("/users"),
         api.get("/departments"),
-        api.get("/settings/specialized-sections", { params: { active_only: true } })
+        api.get("/settings/specialized-sections", { params: { active_only: true } }),
+        api.get("/settings/security")
       ]);
       setUsers(usersResponse.data);
       setDepartments(departmentsResponse.data);
       setAdministrativeSections(sectionsResponse.data.map((section) => ({ value: section.code, label: section.name_ar, name_en: section.name_en || "" })));
+      setTemporaryPassword(securityResponse.data?.temporary_password || DEFAULT_TEMPORARY_PASSWORD);
     } catch (error) {
       const message = getErrorMessage(error);
       setError(message);
@@ -95,6 +100,14 @@ export default function UserSettings({ notify }) {
   useEffect(() => {
     load();
   }, []);
+
+  useEffect(() => {
+    if (editingId) return;
+    setForm((current) => ({
+      ...current,
+      password: !current.password || current.password === DEFAULT_TEMPORARY_PASSWORD ? resolvedTemporaryPassword : current.password
+    }));
+  }, [editingId, resolvedTemporaryPassword]);
 
   const selectedDepartmentId = form.department_id ? Number(form.department_id) : null;
   const departmentNameById = useMemo(() => new Map(departments.map((item) => [item.id, item.name_ar])), [departments]);
@@ -180,7 +193,7 @@ export default function UserSettings({ notify }) {
 
   function resetForm() {
     setEditingId(null);
-    setForm(empty);
+    setForm({ ...empty, password: resolvedTemporaryPassword });
     setAdministrativeSection("");
     setError("");
   }
@@ -198,7 +211,7 @@ export default function UserSettings({ notify }) {
       manager_id: user.manager_id ? String(user.manager_id) : "",
       administrative_section: user.administrative_section || "",
       role: user.role || "employee",
-      password: "Change@12345",
+      password: resolvedTemporaryPassword,
       is_active: Boolean(user.is_active)
     });
     setAdministrativeSection(user.administrative_section || "");
@@ -224,7 +237,7 @@ export default function UserSettings({ notify }) {
   async function save(event) {
     event.preventDefault();
     if (form.role === "it_staff" && !(form.administrative_section || administrativeSection)) {
-      const message = "اختر القسم المختص لموظف تقنية المعلومات قبل الحفظ.";
+      const message = "اختر القسم المختص لموظف التنفيذ قبل الحفظ.";
       setError(message);
       notify(message, "error");
       return;
@@ -237,7 +250,7 @@ export default function UserSettings({ notify }) {
         await api.put(`/users/${editingId}`, payload);
         notify("تم تحديث بيانات المستخدم");
       } else {
-        await api.post("/users", { ...payload, password: form.password || "Change@12345" });
+        await api.post("/users", { ...payload, password: form.password || resolvedTemporaryPassword });
         notify("تم إنشاء المستخدم وربطه بالإدارة والمدير المباشر");
       }
       resetForm();
@@ -265,10 +278,10 @@ export default function UserSettings({ notify }) {
   }
 
   async function resetPassword(id) {
-    if (!window.confirm("سيتم تعيين كلمة المرور المؤقتة إلى Change@12345. هل تريد المتابعة؟")) return;
+    if (!window.confirm(`سيتم تعيين كلمة المرور المؤقتة إلى ${resolvedTemporaryPassword}. هل تريد المتابعة؟`)) return;
     try {
-      await api.post(`/users/${id}/reset-password`, { password: "Change@12345" });
-      notify("تمت إعادة تعيين كلمة المرور إلى Change@12345");
+      await api.post(`/users/${id}/reset-password`, { password: resolvedTemporaryPassword });
+      notify(`تمت إعادة تعيين كلمة المرور إلى ${resolvedTemporaryPassword}`);
       await load();
     } catch (error) {
       const message = getErrorMessage(error);
@@ -330,8 +343,11 @@ export default function UserSettings({ notify }) {
     setPermissionsSaving(true);
     try {
       const response = await api.get(`/users/${user.id}/screen-permissions`);
-      setAvailableScreens(response.data.available_screens || []);
-      setSelectedScreens(response.data.screens || []);
+      const rawAvailable = response.data.available_screens || [];
+      const backendKnowsMessages = rawAvailable.some((screen) => screen.key === "messages");
+      const available = ensureMessagesScreen(rawAvailable);
+      setAvailableScreens(available);
+      setSelectedScreens(backendKnowsMessages ? response.data.screens || [] : ensureMessagesSelection(response.data.screens || [], available));
     } catch (error) {
       notify(getErrorMessage(error), "error");
       setPermissionsDialog(null);
@@ -629,4 +645,14 @@ function IconButton({ label, icon: Icon, danger = false, ...props }) {
       {label}
     </button>
   );
+}
+
+function ensureMessagesScreen(screens) {
+  if (screens.some((screen) => screen.key === "messages")) return screens;
+  return [...screens, { key: "messages", label: "المراسلات الداخلية" }];
+}
+
+function ensureMessagesSelection(selectedScreens, availableScreens) {
+  if (!availableScreens.some((screen) => screen.key === "messages")) return selectedScreens;
+  return selectedScreens.includes("messages") ? selectedScreens : [...selectedScreens, "messages"];
 }

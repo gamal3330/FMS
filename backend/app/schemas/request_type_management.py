@@ -92,3 +92,4 @@ class RequestSubmitPayload(BaseModel):
     priority: str | None = None
     form_data: dict = Field(default_factory=dict)
     business_justification: str | None = None
+    send_notification: bool = True

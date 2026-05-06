@@ -9,12 +9,14 @@ type PublicProfile = {
   system_name?: string;
   logo_url?: string | null;
   brand_color?: string | null;
+  login_identifier_mode?: "email" | "employee_id" | "email_or_employee_id";
 };
 
 export function Login({ onLogin }: { onLogin: (token: string) => void }) {
   const [systemName, setSystemName] = useState(() => localStorage.getItem("qib_system_name") || "");
   const [logoUrl, setLogoUrl] = useState(() => localStorage.getItem("qib_logo_url") || "");
   const [email, setEmail] = useState("admin@qib.internal-bank.qa");
+  const [loginIdentifierMode, setLoginIdentifierMode] = useState<PublicProfile["login_identifier_mode"]>("email_or_employee_id");
   const [password, setPassword] = useState("Admin@12345");
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -37,6 +39,7 @@ export function Login({ onLogin }: { onLogin: (token: string) => void }) {
         applyBranding(profile);
         if (profile.system_name) setSystemName(profile.system_name);
         setLogoUrl(profile.logo_url || "");
+        setLoginIdentifierMode(profile.login_identifier_mode || "email_or_employee_id");
         if (profile.brand_color) applyBrandColor(profile.brand_color);
       })
       .catch(() => undefined);
@@ -67,6 +70,10 @@ export function Login({ onLogin }: { onLogin: (token: string) => void }) {
       setIsLoading(false);
     }
   }
+
+  const identifierLabel = loginIdentifierMode === "employee_id" ? "الرقم الوظيفي" : loginIdentifierMode === "email" ? "البريد الإلكتروني" : "البريد الإلكتروني أو الرقم الوظيفي";
+  const identifierType = loginIdentifierMode === "employee_id" ? "text" : "text";
+  const identifierAutocomplete = loginIdentifierMode === "employee_id" ? "username" : "email";
 
   return (
     <main className="min-h-screen bg-slate-100 text-slate-950" dir="rtl">
@@ -114,8 +121,8 @@ export function Login({ onLogin }: { onLogin: (token: string) => void }) {
             </div>
 
             <label className="block space-y-2 text-sm font-medium text-slate-700">
-              البريد الإلكتروني
-              <Input value={email} onChange={(event) => setEmail(event.target.value)} type="email" autoComplete="email" required />
+              {identifierLabel}
+              <Input value={email} onChange={(event) => setEmail(event.target.value)} type={identifierType} autoComplete={identifierAutocomplete} required />
             </label>
 
             <label className="block space-y-2 text-sm font-medium text-slate-700">

@@ -4,8 +4,6 @@ from typing import Iterable
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
-from openpyxl import Workbook
-from openpyxl.styles import Alignment, Font
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 from sqlalchemy import select
@@ -111,6 +109,9 @@ def report_rows(items: Iterable[ServiceRequest]) -> list[list[str]]:
 
 
 def build_excel_report(items: Iterable[ServiceRequest]) -> BytesIO:
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font
+
     workbook = Workbook()
     sheet = workbook.active
     sheet.title = "تقرير الطلبات"

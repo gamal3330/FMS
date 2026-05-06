@@ -156,11 +156,13 @@ class BackupSettingsRead(BackupSettingsPayload):
 
 
 class SecurityPolicyPayload(BaseModel):
-    password_min_length: int = Field(default=12, ge=6, le=128)
+    password_min_length: int = Field(default=12, ge=1, le=128)
     require_uppercase: bool = True
     require_numbers: bool = True
     require_special_chars: bool = True
     mfa_enabled: bool = False
+    login_identifier_mode: str = Field(default="email_or_employee_id", pattern="^(email|employee_id|email_or_employee_id)$")
+    temporary_password: str = Field(default="Change@12345", min_length=1, max_length=128)
     lock_after_failed_attempts: int = Field(default=5, ge=1, le=20)
     password_expiry_days: int = Field(default=90, ge=1, le=365)
 

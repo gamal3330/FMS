@@ -22,6 +22,7 @@ from app.schemas.request_type_management import (
     WorkflowStepRead,
 )
 from app.services.audit import write_audit
+from app.services.request_notifications import create_request_created_message
 from app.services.workflow import next_request_number
 
 router = APIRouter(prefix="/request-types", tags=["Request Type Management"])
@@ -509,6 +510,8 @@ def submit_dynamic_request(payload: RequestSubmitPayload, db: Session = Depends(
     db.add(service_request)
     db.flush()
     create_snapshot_steps(db, service_request, request_type.id)
+    if payload.send_notification:
+        create_request_created_message(db, service_request, current_user)
     write_audit(db, "dynamic_request_created", "service_request", actor=current_user, entity_id=str(service_request.id), metadata={"request_type_id": request_type.id})
     db.commit()
     return {"id": service_request.id, "request_number": service_request.request_number}

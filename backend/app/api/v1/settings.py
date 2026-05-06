@@ -519,9 +519,18 @@ def restart_backend_script_path() -> Path:
 @router.get("/public-profile")
 def get_public_profile(db: Session = Depends(get_db)):
     item = get_or_create_singleton(db, SettingsGeneral)
+    security = get_or_create_singleton(db, SecurityPolicy)
     db.commit()
     db.refresh(item)
-    return {"system_name": item.system_name, "language": item.language, "timezone": item.timezone, "logo_url": item.logo_url, "brand_color": item.brand_color}
+    db.refresh(security)
+    return {
+        "system_name": item.system_name,
+        "language": item.language,
+        "timezone": item.timezone,
+        "logo_url": item.logo_url,
+        "brand_color": item.brand_color,
+        "login_identifier_mode": security.login_identifier_mode or "email_or_employee_id",
+    }
 
 
 @router.get("/general-profile", response_model=SettingsGeneralRead)

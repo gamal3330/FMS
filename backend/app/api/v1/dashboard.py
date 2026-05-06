@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_current_user
 from app.db.session import get_db
 from app.models.enums import ApprovalAction, RequestStatus, UserRole
+from app.models.message import InternalMessage, InternalMessageRecipient
 from app.models.request import ApprovalStep, ServiceRequest
 from app.models.user import Department, User
 from app.schemas.dashboard import DashboardStats
@@ -19,6 +20,29 @@ SECTION_KEYWORDS = {
     "networks": ["network", "networks", "net", "شبكة", "شبكات"],
     "support": ["support", "helpdesk", "دعم", "فني"],
     "development": ["development", "software", "dev", "تطوير", "برامج"],
+}
+REQUEST_STATUS_LABELS = {
+    RequestStatus.DRAFT: "مسودة",
+    RequestStatus.SUBMITTED: "مرسل",
+    RequestStatus.PENDING_APPROVAL: "بانتظار الموافقة",
+    RequestStatus.RETURNED_FOR_EDIT: "معاد للتعديل",
+    RequestStatus.APPROVED: "تمت الموافقة",
+    RequestStatus.REJECTED: "مرفوض",
+    RequestStatus.IN_IMPLEMENTATION: "قيد التنفيذ",
+    RequestStatus.COMPLETED: "مكتمل",
+    RequestStatus.CLOSED: "مغلق",
+    RequestStatus.CANCELLED: "ملغي",
+}
+MESSAGE_TYPE_LABELS = {
+    "internal_correspondence": "مراسلة داخلية",
+    "official_correspondence": "مراسلة رسمية",
+    "clarification_request": "طلب استيضاح",
+    "clarification_response": "رد على استيضاح",
+    "approval_note": "ملاحظة موافقة",
+    "rejection_reason": "سبب رفض",
+    "implementation_note": "ملاحظة تنفيذ",
+    "notification": "إشعار",
+    "circular": "تعميم",
 }
 
 
@@ -152,6 +176,144 @@ def it_staff_statistics(db: Session, current_user: User) -> list[dict]:
     ]
 
 
+def request_type_label(value) -> str:
+    text = getattr(value, "value", value)
+    labels = {
+        "email": "طلب إيميل",
+        "domain": "طلب دومين",
+        "vpn_remote_access": "طلب VPN",
+        "internet_access": "طلب وصول إنترنت",
+        "data_copy": "طلب نسخ بيانات",
+        "network_access": "طلب وصول شبكة",
+        "computer_move_installation": "طلب تركيب / نقل جهاز",
+        "it_support_ticket": "طلب دعم فني",
+    }
+    return labels.get(str(text), str(text or "-"))
+
+
+def dashboard_messages(db: Session, current_user: User) -> dict:
+    unread = db.scalar(
+        select(func.count())
+        .select_from(InternalMessageRecipient)
+        .join(InternalMessage, InternalMessage.id == InternalMessageRecipient.message_id)
+        .where(
+            InternalMessageRecipient.recipient_id == current_user.id,
+            InternalMessageRecipient.is_read == False,
+            InternalMessageRecipient.is_archived == False,
+            InternalMessage.is_draft == False,
+        )
+    ) or 0
+    inbox_total = db.scalar(
+        select(func.count())
+        .select_from(InternalMessageRecipient)
+        .join(InternalMessage, InternalMessage.id == InternalMessageRecipient.message_id)
+        .where(
+            InternalMessageRecipient.recipient_id == current_user.id,
+            InternalMessageRecipient.is_archived == False,
+            InternalMessage.is_draft == False,
+        )
+    ) or 0
+    sent_total = db.scalar(
+        select(func.count())
+        .select_from(InternalMessage)
+        .where(InternalMessage.sender_id == current_user.id, InternalMessage.is_draft == False, InternalMessage.is_sender_archived == False)
+    ) or 0
+    drafts = db.scalar(select(func.count()).select_from(InternalMessage).where(InternalMessage.sender_id == current_user.id, InternalMessage.is_draft == True)) or 0
+    linked_messages = db.scalar(
+        select(func.count(func.distinct(InternalMessage.id)))
+        .select_from(InternalMessage)
+        .join(InternalMessageRecipient, InternalMessageRecipient.message_id == InternalMessage.id, isouter=True)
+        .where(
+            InternalMessage.related_request_id.isnot(None),
+            InternalMessage.is_draft == False,
+            or_(InternalMessage.sender_id == current_user.id, InternalMessageRecipient.recipient_id == current_user.id),
+        )
+    ) or 0
+    by_type_rows = db.execute(
+        select(InternalMessage.message_type, func.count(func.distinct(InternalMessage.id)).label("count"))
+        .join(InternalMessageRecipient, InternalMessageRecipient.message_id == InternalMessage.id, isouter=True)
+        .where(
+            InternalMessage.is_draft == False,
+            or_(InternalMessage.sender_id == current_user.id, InternalMessageRecipient.recipient_id == current_user.id),
+        )
+        .group_by(InternalMessage.message_type)
+        .order_by(func.count(func.distinct(InternalMessage.id)).desc())
+    ).all()
+    recent_rows = db.execute(
+        select(
+            InternalMessage.id,
+            InternalMessage.message_uid,
+            InternalMessage.subject,
+            InternalMessage.message_type,
+            InternalMessage.created_at,
+            User.full_name_ar.label("sender_name"),
+            InternalMessageRecipient.is_read,
+        )
+        .join(InternalMessageRecipient, InternalMessageRecipient.message_id == InternalMessage.id)
+        .join(User, User.id == InternalMessage.sender_id)
+        .where(
+            InternalMessageRecipient.recipient_id == current_user.id,
+            InternalMessageRecipient.is_archived == False,
+            InternalMessage.is_draft == False,
+        )
+        .order_by(InternalMessageRecipient.is_read.asc(), InternalMessage.created_at.desc())
+        .limit(5)
+    ).all()
+    return {
+        "unread": unread,
+        "inbox_total": inbox_total,
+        "sent_total": sent_total,
+        "drafts": drafts,
+        "linked_messages": linked_messages,
+        "by_type": [
+            {"type": row.message_type, "label": MESSAGE_TYPE_LABELS.get(row.message_type, row.message_type), "count": row.count}
+            for row in by_type_rows
+        ],
+        "recent": [
+            {
+                "id": row.id,
+                "message_uid": row.message_uid,
+                "subject": row.subject,
+                "message_type": row.message_type,
+                "message_type_label": MESSAGE_TYPE_LABELS.get(row.message_type, row.message_type),
+                "sender_name": row.sender_name,
+                "is_read": bool(row.is_read),
+                "created_at": row.created_at.isoformat() if row.created_at else None,
+            }
+            for row in recent_rows
+        ],
+    }
+
+
+def recent_request_activity(db: Session, scoped_ids) -> list[dict]:
+    rows = db.execute(
+        select(
+            ServiceRequest.id,
+            ServiceRequest.request_number,
+            ServiceRequest.title,
+            ServiceRequest.status,
+            ServiceRequest.updated_at,
+            User.full_name_ar.label("requester_name"),
+        )
+        .join(User, User.id == ServiceRequest.requester_id)
+        .where(ServiceRequest.id.in_(scoped_ids))
+        .order_by(ServiceRequest.updated_at.desc())
+        .limit(6)
+    ).all()
+    return [
+        {
+            "id": row.id,
+            "request_number": row.request_number,
+            "title": row.title,
+            "status": row.status,
+            "status_label": REQUEST_STATUS_LABELS.get(row.status, row.status),
+            "requester_name": row.requester_name,
+            "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+        }
+        for row in rows
+    ]
+
+
 @router.get("/stats", response_model=DashboardStats)
 def stats(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     now = datetime.now(timezone.utc)
@@ -199,6 +361,32 @@ def stats(db: Session = Depends(get_db), current_user: User = Depends(get_curren
         .group_by(Department.name_ar)
         .order_by(Department.name_ar)
     ).all()
+    by_status = db.execute(
+        select(ServiceRequest.status, func.count().label("count"))
+        .where(ServiceRequest.id.in_(scoped_ids))
+        .group_by(ServiceRequest.status)
+        .order_by(func.count().desc())
+    ).all()
+    by_type = db.execute(
+        select(ServiceRequest.request_type, func.count().label("count"))
+        .where(ServiceRequest.id.in_(scoped_ids))
+        .group_by(ServiceRequest.request_type)
+        .order_by(func.count().desc())
+        .limit(8)
+    ).all()
+    attention_items = []
+    if pending_approvals:
+        attention_items.append({"tone": "warning", "title": "موافقات معلقة", "description": f"{pending_approvals} خطوة اعتماد ما زالت بانتظار الإجراء."})
+    returned_for_edit = db.scalar(
+        select(func.count())
+        .select_from(ServiceRequest)
+        .where(ServiceRequest.id.in_(scoped_ids), ServiceRequest.status == RequestStatus.RETURNED_FOR_EDIT)
+    ) or 0
+    if returned_for_edit:
+        attention_items.append({"tone": "info", "title": "طلبات معادة للتعديل", "description": f"{returned_for_edit} طلب يحتاج تحديثاً قبل إعادة الإرسال."})
+    messages = dashboard_messages(db, current_user)
+    if messages["unread"]:
+        attention_items.append({"tone": "message", "title": "رسائل غير مقروءة", "description": f"{messages['unread']} رسالة في الوارد لم تتم قراءتها."})
     return DashboardStats(
         open_requests=open_requests,
         pending_approvals=pending_approvals,
@@ -206,6 +394,11 @@ def stats(db: Session = Depends(get_db), current_user: User = Depends(get_curren
         delayed_requests=delayed_requests,
         monthly_statistics=[{"month": row.month, "count": row.count} for row in monthly],
         requests_by_department=[{"department": row.department, "count": row.count} for row in by_department],
+        requests_by_status=[{"status": row.status, "label": REQUEST_STATUS_LABELS.get(row.status, row.status), "count": row.count} for row in by_status],
+        requests_by_type=[{"type": row.request_type, "label": request_type_label(row.request_type), "count": row.count} for row in by_type],
+        messages=messages,
+        recent_requests=recent_request_activity(db, scoped_ids),
+        attention_items=attention_items[:5],
         can_view_it_staff_statistics=current_user.role in MANAGEMENT_STATS_ROLES,
         it_staff_statistics=it_staff_statistics(db, current_user),
     )

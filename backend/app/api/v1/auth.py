@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, Request, status
 from fastapi.exceptions import HTTPException
 from sqlalchemy import select
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
@@ -53,12 +54,40 @@ def validate_password_policy(password: str, policy: SecurityPolicy) -> None:
         raise HTTPException(status_code=422, detail="كلمة المرور يجب أن تحتوي على رمز خاص")
 
 
+def find_login_user(db: Session, identifier: str, policy: SecurityPolicy) -> User | None:
+    clean_identifier = identifier.strip()
+    mode = policy.login_identifier_mode or "email_or_employee_id"
+    if mode == "email":
+        return db.scalar(select(User).where(User.email == clean_identifier.lower()))
+    if mode == "employee_id":
+        return db.scalar(select(User).where(User.employee_id == clean_identifier))
+    return db.scalar(
+        select(User).where(
+            or_(
+                User.email == clean_identifier.lower(),
+                User.employee_id == clean_identifier,
+            )
+        )
+    )
+
+
+def login_identifier_error(policy: SecurityPolicy) -> str:
+    mode = policy.login_identifier_mode or "email_or_employee_id"
+    if mode == "employee_id":
+        return "الرقم الوظيفي أو كلمة المرور غير صحيحة"
+    if mode == "email":
+        return "البريد الإلكتروني أو كلمة المرور غير صحيحة"
+    return "البريد الإلكتروني أو الرقم الوظيفي أو كلمة المرور غير صحيحة"
+
+
 @router.post("/login", response_model=TokenResponse)
 def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)) -> TokenResponse:
     policy = get_singleton(db, SecurityPolicy)
     general = get_singleton(db, SettingsGeneral)
-    user = db.scalar(select(User).where(User.email == payload.email))
+    identifier = payload.email.strip()
+    user = find_login_user(db, identifier, policy)
     ip_address = request.client.host if request.client else None
+    invalid_login_message = login_identifier_error(policy)
 
     if user and not user.is_active:
         write_audit(db, "login_blocked", "user", actor=user, entity_id=str(user.id), ip_address=ip_address)
@@ -71,9 +100,9 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="تم قفل الحساب مؤقتاً بسبب تجاوز عدد محاولات الدخول الفاشلة")
 
     if not user:
-        write_audit(db, "login_failed", "user", metadata={"email": payload.email}, ip_address=ip_address)
+        write_audit(db, "login_failed", "user", metadata={"identifier": identifier}, ip_address=ip_address)
         db.commit()
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="البريد الإلكتروني أو كلمة المرور غير صحيحة")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=invalid_login_message)
 
     if not verify_password(payload.password, user.hashed_password):
         user.failed_login_attempts = (user.failed_login_attempts or 0) + 1
@@ -85,7 +114,7 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
                 "user",
                 actor=user,
                 entity_id=str(user.id),
-                metadata={"email": payload.email, "failed_login_attempts": user.failed_login_attempts},
+                metadata={"identifier": identifier, "failed_login_attempts": user.failed_login_attempts},
                 ip_address=ip_address,
             )
             db.commit()
@@ -98,11 +127,11 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
             "user",
             actor=user,
             entity_id=str(user.id),
-            metadata={"email": payload.email, "failed_login_attempts": user.failed_login_attempts},
+            metadata={"identifier": identifier, "failed_login_attempts": user.failed_login_attempts},
             ip_address=ip_address,
         )
         db.commit()
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=f"البريد الإلكتروني أو كلمة المرور غير صحيحة. المحاولات المتبقية: {remaining}")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=f"{invalid_login_message}. المحاولات المتبقية: {remaining}")
 
     if password_expired(user, policy):
         write_audit(db, "login_password_expired", "user", actor=user, entity_id=str(user.id), ip_address=ip_address)

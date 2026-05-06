@@ -1,21 +1,23 @@
-import { Activity, BarChart3, Bell, Building2, FileText, KeyRound, LayoutDashboard, LogOut, Network, PanelRightClose, PanelRightOpen, ScrollText, Settings, ShieldCheck, UserCircle, Users, X } from "lucide-react";
+import { Activity, BarChart3, Bell, Building2, FileText, KeyRound, LayoutDashboard, LogOut, Mail, Network, PanelRightClose, PanelRightOpen, ScrollText, Settings, ShieldCheck, UserCircle, Users, X } from "lucide-react";
 import { ReactNode, useEffect, useRef, useState } from "react";
 import { NavLink } from "react-router-dom";
 import { API_BASE, apiFetch, CurrentUser, ServiceRequest } from "../lib/api";
 import { applyBrandColor, applyBranding, applyStoredFavicon } from "../lib/branding";
 import FeedbackDialog from "./ui/FeedbackDialog";
+import FeedbackToast from "./ui/FeedbackToast";
 
 const baseNav = [
   { label: "إحصائيات", href: "/dashboard", icon: LayoutDashboard, hiddenForEmployee: false, screenKey: "dashboard" },
   { label: "الطلبات", href: "/requests", icon: FileText, hiddenForEmployee: false, screenKey: "requests" },
   { label: "الموافقات", href: "/approvals", icon: ShieldCheck, hiddenForEmployee: false, screenKey: "approvals" },
+  { label: "المراسلات", href: "/messages", icon: Mail, hiddenForEmployee: false, screenKey: "messages" },
   { label: "التقارير", href: "/reports", icon: BarChart3, hiddenForEmployee: true, screenKey: "reports" }
 ];
 
 const roleLabels: Record<string, string> = {
   employee: "موظف",
   direct_manager: "مدير مباشر",
-  it_staff: "فريق تقنية المعلومات",
+  it_staff: "موظف تنفيذ",
   it_manager: "مدير تقنية المعلومات",
   information_security: "أمن المعلومات",
   executive_management: "الإدارة التنفيذية",
@@ -42,12 +44,16 @@ export function Layout({
   const [passwordErrors, setPasswordErrors] = useState<{ current_password?: string; new_password?: string; confirm_password?: string }>({});
   const [passwordSaving, setPasswordSaving] = useState(false);
   const [feedback, setFeedback] = useState<{ type: "success" | "error" | "info"; message: string }>({ type: "success", message: "" });
+  const [messageToast, setMessageToast] = useState<{ message: string }>({ message: "" });
   const [notificationCount, setNotificationCount] = useState(0);
+  const [messageUnreadCount, setMessageUnreadCount] = useState(0);
   const [notificationOpen, setNotificationOpen] = useState(false);
   const [allowedScreens, setAllowedScreens] = useState<Set<string> | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem("qib_sidebar_collapsed") === "true");
   const knownNotificationKeys = useRef<Set<string>>(new Set());
   const notificationsInitialized = useRef(false);
+  const messageCountersInitialized = useRef(false);
+  const previousMessageUnreadCount = useRef(0);
 
   const isEmployee = currentUser?.role === "employee";
   const canSeeScreen = (screenKey: string) => !allowedScreens || allowedScreens.has(screenKey);
@@ -96,12 +102,45 @@ export function Layout({
   useEffect(() => {
     if (!currentUser) {
       setAllowedScreens(null);
+      setMessageUnreadCount(0);
       return;
     }
-    apiFetch<{ screens: string[] }>("/users/screen-permissions/me")
-      .then((data) => setAllowedScreens(new Set(data.screens)))
+    apiFetch<{ screens: string[]; available_screens?: { key: string; label: string }[] }>("/users/screen-permissions/me")
+      .then((data) => setAllowedScreens(new Set(normalizeScreens(data.screens, data.available_screens))))
       .catch(() => setAllowedScreens(null));
   }, [currentUser?.id]);
+
+  useEffect(() => {
+    if (!currentUser || !canSeeScreen("messages")) {
+      setMessageUnreadCount(0);
+      messageCountersInitialized.current = false;
+      previousMessageUnreadCount.current = 0;
+      return;
+    }
+    let isActive = true;
+    async function loadMessageCounters() {
+      try {
+        const data = await apiFetch<{ unread: number }>("/messages/counters");
+        if (!isActive) return;
+        if (messageCountersInitialized.current && data.unread > previousMessageUnreadCount.current) {
+          setMessageToast({ message: "وصلت رسالة داخلية جديدة" });
+        }
+        previousMessageUnreadCount.current = data.unread;
+        messageCountersInitialized.current = true;
+        setMessageUnreadCount(data.unread);
+      } catch {
+        if (isActive) setMessageUnreadCount(0);
+      }
+    }
+    loadMessageCounters();
+    const timer = window.setInterval(loadMessageCounters, 15000);
+    window.addEventListener("qib-messages-updated", loadMessageCounters);
+    return () => {
+      isActive = false;
+      window.clearInterval(timer);
+      window.removeEventListener("qib-messages-updated", loadMessageCounters);
+    };
+  }, [currentUser?.id, allowedScreens]);
 
   useEffect(() => {
     knownNotificationKeys.current = new Set();
@@ -137,6 +176,12 @@ export function Layout({
     };
   }, [currentUser?.id, currentUser?.role]);
 
+  useEffect(() => {
+    if (!messageToast.message) return;
+    const timer = window.setTimeout(() => setMessageToast({ message: "" }), 5500);
+    return () => window.clearTimeout(timer);
+  }, [messageToast.message]);
+
   async function changePassword(event: React.FormEvent) {
     event.preventDefault();
     setPasswordErrors({});
@@ -164,6 +209,18 @@ export function Layout({
   return (
     <div className="min-h-screen bg-slate-50 text-slate-950" dir="rtl">
       <FeedbackDialog open={Boolean(feedback.message)} type={feedback.type} message={feedback.message} onClose={() => setFeedback({ ...feedback, message: "" })} />
+      <FeedbackToast
+        open={Boolean(messageToast.message)}
+        type="info"
+        title="رسالة جديدة"
+        message={messageToast.message}
+        actionLabel="فتح المراسلات"
+        onAction={() => {
+          setMessageToast({ message: "" });
+          window.location.assign("/messages");
+        }}
+        onClose={() => setMessageToast({ message: "" })}
+      />
       {passwordDialogOpen && (
         <div className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm" role="dialog" aria-modal="true">
           <form onSubmit={changePassword} className="w-full max-w-sm rounded-lg border border-slate-200 bg-white p-5 shadow-xl">
@@ -214,22 +271,30 @@ export function Layout({
           </div>
 
           <nav className="min-h-0 flex-1 space-y-2 overflow-y-auto overflow-x-hidden pb-4">
-            {nav.map(({ label, href, icon: Icon }) => (
+            {nav.map(({ label, href, icon: Icon, screenKey }) => {
+              const badge = screenKey === "messages" ? messageUnreadCount : 0;
+              return (
               <NavLink
                 key={label}
                 to={href}
                 aria-label={label}
                 title={sidebarCollapsed ? label : undefined}
                 className={({ isActive }) =>
-                  `flex h-11 w-full items-center rounded-md text-sm font-medium transition ${sidebarCollapsed ? "justify-center px-0" : "gap-3 px-3 text-right"} ${
+                  `relative flex h-11 w-full items-center rounded-md text-sm font-medium transition ${sidebarCollapsed ? "justify-center px-0" : "gap-3 px-3 text-right"} ${
                     isActive ? "bg-bank-50 text-bank-700" : "text-slate-600 hover:bg-slate-100 hover:text-slate-950"
                   }`
                 }
               >
                 <Icon className="h-4 w-4 shrink-0" />
-                {!sidebarCollapsed && <span>{label}</span>}
+                {!sidebarCollapsed && <span className="min-w-0 flex-1 truncate">{label}</span>}
+                {badge > 0 && (
+                  <span className={`${sidebarCollapsed ? "absolute -left-1 -top-1" : "mr-auto"} flex h-5 min-w-5 items-center justify-center rounded-full bg-red-600 px-1 text-[11px] font-bold text-white`}>
+                    {badge > 9 ? "9+" : badge}
+                  </span>
+                )}
               </NavLink>
-            ))}
+            );
+            })}
           </nav>
 
           <div className="shrink-0 border-t border-slate-100 pt-4">
@@ -284,6 +349,21 @@ export function Layout({
                     </span>
                   )}
                 </button>
+              )}
+              {canSeeScreen("messages") && (
+                <NavLink
+                  to="/messages"
+                  className="relative flex h-10 w-10 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                  aria-label="المراسلات"
+                  title="المراسلات"
+                >
+                  <Mail className="h-5 w-5" />
+                  {messageUnreadCount > 0 && (
+                    <span className="absolute -left-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-red-600 px-1 text-[11px] font-bold text-white">
+                      {messageUnreadCount > 9 ? "9+" : messageUnreadCount}
+                    </span>
+                  )}
+                </NavLink>
               )}
               {notificationOpen && (
                 <div className="absolute left-0 top-12 w-72 rounded-lg border border-slate-200 bg-white p-4 text-right shadow-xl">
@@ -340,6 +420,13 @@ function PasswordField({ label, value, error, onChange }: { label: string; value
       />
     </label>
   );
+}
+
+function normalizeScreens(screens: string[], availableScreens?: { key: string; label: string }[]) {
+  const next = [...(screens || [])];
+  const backendKnowsMessages = availableScreens?.some((screen) => screen.key === "messages");
+  if (!backendKnowsMessages && !next.includes("messages")) next.push("messages");
+  return next;
 }
 
 function extractErrorMessage(error: unknown) {

@@ -1,5 +1,6 @@
 import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
-import { FilePlus2, Laptop, Mail, Network, RefreshCw, Router, RotateCcw, Save, Send, Shield, Ticket, Upload } from "lucide-react";
+import { FilePlus2, Laptop, Mail, MessageSquare, Network, RefreshCw, Router, RotateCcw, Save, Search, Send, Shield, Ticket, Upload } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import { API_BASE, apiFetch, CurrentUser, ServiceRequest } from "../lib/api";
 import { formatSystemDate } from "../lib/datetime";
 import { Button } from "../components/ui/button";
@@ -32,6 +33,17 @@ interface TypeConfig {
   requiresAttachment?: boolean;
   icon: typeof Mail;
   fields: FieldConfig[];
+}
+
+interface LinkedMessage {
+  id: number;
+  message_type: string;
+  subject: string;
+  body: string;
+  sender_name: string;
+  recipient_names: string[];
+  is_read: boolean;
+  created_at: string;
 }
 
 const administrativeSections: Record<AdministrativeSection, string> = {
@@ -205,6 +217,7 @@ const statusLabels: Record<string, string> = {
 };
 
 export function Requests() {
+  const navigate = useNavigate();
   const [items, setItems] = useState<ServiceRequest[]>([]);
   const [managedRequestTypes, setManagedRequestTypes] = useState<TypeConfig[]>([]);
   const [sectionLabels, setSectionLabels] = useState<Record<string, string>>(administrativeSections);
@@ -212,6 +225,7 @@ export function Requests() {
   const [title, setTitle] = useState("");
   const [priority, setPriority] = useState<Priority>("medium");
   const [businessJustification, setBusinessJustification] = useState("");
+  const [sendNotification, setSendNotification] = useState(true);
   const [formData, setFormData] = useState<Record<string, string>>({});
   const [attachment, setAttachment] = useState<File | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -221,12 +235,35 @@ export function Requests() {
   const [error, setError] = useState("");
   const [editingRequestId, setEditingRequestId] = useState<number | null>(null);
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
+  const [linkedRequest, setLinkedRequest] = useState<ServiceRequest | null>(null);
+  const [linkedMessages, setLinkedMessages] = useState<LinkedMessage[]>([]);
+  const [isLinkedMessagesLoading, setIsLinkedMessagesLoading] = useState(false);
+  const [requestSearch, setRequestSearch] = useState("");
 
   const availableRequestTypes = useMemo(() => managedRequestTypes, [managedRequestTypes]);
   const selectedType = useMemo(
     () => availableRequestTypes.find((item) => item.value === requestType) ?? availableRequestTypes[0] ?? null,
     [availableRequestTypes, requestType]
   );
+  const filteredItems = useMemo(() => {
+    const term = requestSearch.trim().toLowerCase();
+    if (!term) return items;
+    return items.filter((item) => {
+      const searchable = [
+        item.request_number,
+        item.title,
+        requestTypeLabel(item),
+        requestSectionLabel(item),
+        statusLabels[item.status] ?? item.status,
+        priorities.find((type) => type.value === item.priority)?.label ?? item.priority,
+        formatSystemDate(item.created_at)
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      return searchable.includes(term);
+    });
+  }, [items, requestSearch, sectionLabels]);
 
   function updateField(name: string, value: string) {
     setFormData((current) => ({ ...current, [name]: value }));
@@ -237,6 +274,7 @@ export function Requests() {
     setTitle("");
     setPriority("medium");
     setBusinessJustification("");
+    setSendNotification(true);
     setAttachment(null);
     if (!nextConfig) {
       setFormData({});
@@ -382,6 +420,7 @@ export function Requests() {
     setTitle(item.title);
     setPriority(item.priority as Priority);
     setBusinessJustification(item.business_justification || "");
+    setSendNotification(true);
     setAttachment(null);
     setFormData({ ...(item.form_data || {}) });
     setMessage("");
@@ -409,6 +448,7 @@ export function Requests() {
         title,
         priority,
         business_justification: businessJustification,
+        send_notification: sendNotification,
         form_data: enrichedFormData
       };
     }
@@ -418,6 +458,7 @@ export function Requests() {
       request_type: requestType,
       priority,
       business_justification: businessJustification,
+      send_notification: sendNotification,
       form_data: enrichedFormData
     };
   }
@@ -433,6 +474,31 @@ export function Requests() {
       availableRequestTypes.find((type) => type.value === item.request_type || type.code === item.form_data?.request_type_code)?.section ||
       "";
     return item.form_data?.assigned_section_label || item.form_data?.administrative_section_label || sectionLabels[key] || item.department?.name_ar || key || "-";
+  }
+
+  async function showLinkedMessages(item: ServiceRequest) {
+    setLinkedRequest(item);
+    setLinkedMessages([]);
+    setIsLinkedMessagesLoading(true);
+    setError("");
+    try {
+      const data = await apiFetch<LinkedMessage[]>(`/messages/request/${item.id}`);
+      setLinkedMessages(data);
+    } catch {
+      setError("تعذر تحميل المراسلات المرتبطة بالطلب.");
+    } finally {
+      setIsLinkedMessagesLoading(false);
+    }
+  }
+
+  function composeRequestMessage(item: ServiceRequest) {
+    const params = new URLSearchParams({
+      compose: "1",
+      related_request_id: item.request_number,
+      subject: `بخصوص الطلب ${item.request_number}`,
+      message_type: "internal_correspondence"
+    });
+    navigate(`/messages?${params.toString()}`);
   }
 
   return (
@@ -456,7 +522,7 @@ export function Requests() {
         </div>
       </section>
 
-      <div className="grid gap-5 xl:grid-cols-[460px_1fr]">
+      <div className="space-y-5">
         <Card className="p-5">
           {isTypesLoading ? (
             <div className="space-y-4">
@@ -575,6 +641,19 @@ export function Requests() {
               <textarea value={businessJustification} onChange={(event) => setBusinessJustification(event.target.value)} required rows={4} placeholder="اشرح سبب الطلب والأثر التشغيلي المتوقع" className="w-full resize-y rounded-md border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-bank-600 focus:ring-2 focus:ring-bank-100" />
             </label>
 
+            <label className="flex items-start gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
+              <input
+                type="checkbox"
+                checked={sendNotification}
+                onChange={(event) => setSendNotification(event.target.checked)}
+                className="mt-1 h-4 w-4 rounded border-slate-300 text-bank-700 focus:ring-bank-600"
+              />
+              <span>
+                <span className="block font-bold text-slate-900">إرسال إشعار في المراسلات</span>
+                <span className="mt-1 block text-xs leading-5 text-slate-500">عند التفعيل سيتم إرسال رسالة تصنيفها إشعار للجهة الأولى في مسار الموافقات.</span>
+              </span>
+            </label>
+
             <div className="flex flex-col gap-3 sm:flex-row">
               <Button type="submit" disabled={isSubmitting} className="gap-2">
                 <Send className="h-4 w-4" />
@@ -591,52 +670,96 @@ export function Requests() {
         </Card>
 
         <Card className="overflow-hidden">
-          <div className="border-b border-slate-200 p-5">
-            <h3 className="font-bold text-slate-950">آخر الطلبات</h3>
-            <p className="mt-1 text-sm text-slate-500">قائمة مختصرة بالطلبات التي تم تقديمها من خلال النظام.</p>
+          <div className="flex flex-col gap-4 border-b border-slate-200 p-5 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+              <h3 className="font-bold text-slate-950">آخر الطلبات</h3>
+              <p className="mt-1 text-sm text-slate-500">قائمة مختصرة بالطلبات التي تم تقديمها من خلال النظام.</p>
+            </div>
+            <label className="relative block w-full lg:max-w-md">
+              <Search className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+              <Input
+                value={requestSearch}
+                onChange={(event) => setRequestSearch(event.target.value)}
+                placeholder="بحث برقم الطلب أو العنوان أو الحالة"
+                className="pr-10"
+              />
+            </label>
           </div>
 
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[860px] text-sm">
-              <thead className="bg-slate-50 text-slate-500">
+          <div className="overflow-hidden">
+            <table className="w-full table-fixed text-sm">
+              <colgroup>
+                <col className="w-[15%]" />
+                <col className="w-[23%]" />
+                <col className="w-[14%]" />
+                <col className="w-[14%]" />
+                <col className="w-[11%]" />
+                <col className="w-[9%]" />
+                <col className="w-[9%]" />
+                <col className="w-[5%]" />
+              </colgroup>
+              <thead className="bg-slate-50 text-xs font-bold text-slate-600">
                 <tr>
-                  <th className="p-3 text-right">رقم الطلب</th>
-                  <th className="p-3 text-right">العنوان</th>
-                  <th className="p-3 text-right">النوع</th>
-                  <th className="p-3 text-right">القسم المختص</th>
-                  <th className="p-3 text-right">الحالة</th>
-                  <th className="p-3 text-right">الأولوية</th>
-                  <th className="p-3 text-right">تاريخ الإنشاء</th>
-                  <th className="p-3 text-right">الإجراء</th>
+                  <th className="px-3 py-3 text-right leading-5">رقم الطلب</th>
+                  <th className="px-3 py-3 text-right leading-5">العنوان</th>
+                  <th className="px-3 py-3 text-right leading-5">النوع</th>
+                  <th className="px-3 py-3 text-right leading-5">القسم المختص</th>
+                  <th className="px-3 py-3 text-right leading-5">الحالة</th>
+                  <th className="px-3 py-3 text-right leading-5">الأولوية</th>
+                  <th className="px-3 py-3 text-right leading-5">تاريخ الإنشاء</th>
+                  <th className="px-3 py-3 text-right leading-5">الإجراء</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {items.length === 0 && (
+                {filteredItems.length === 0 && (
                   <tr>
-                    <td colSpan={8} className="p-6 text-center text-slate-500">لا توجد طلبات لعرضها حالياً.</td>
+                    <td colSpan={8} className="p-6 text-center text-slate-500">
+                      {items.length === 0 ? "لا توجد طلبات لعرضها حالياً." : "لا توجد نتائج مطابقة للبحث."}
+                    </td>
                   </tr>
                 )}
-                {items.map((item) => (
-                  <tr key={item.id} className="hover:bg-slate-50">
-                    <td className="p-3 font-semibold text-bank-700">{item.request_number}</td>
-                    <td className="p-3 text-slate-900">{item.title}</td>
-                    <td className="p-3">{requestTypeLabel(item)}</td>
-                    <td className="p-3">{requestSectionLabel(item)}</td>
-                    <td className="p-3">{statusLabels[item.status] ?? item.status}</td>
-                    <td className="p-3">{priorities.find((type) => type.value === item.priority)?.label ?? item.priority}</td>
-                    <td className="p-3">{formatSystemDate(item.created_at)}</td>
-                    <td className="p-3">
+                {filteredItems.map((item) => (
+                  <tr key={item.id} className="align-top hover:bg-slate-50">
+                    <td className="px-3 py-4">
+                      <span className="block break-words text-sm font-black leading-6 text-bank-700">{item.request_number}</span>
+                    </td>
+                    <td className="px-3 py-4 text-slate-900">
+                      <span className="line-clamp-3 break-words leading-6">{item.title || "-"}</span>
+                    </td>
+                    <td className="px-3 py-4 leading-6 text-slate-700">{requestTypeLabel(item)}</td>
+                    <td className="px-3 py-4 leading-6 text-slate-700">{requestSectionLabel(item)}</td>
+                    <td className="px-3 py-4 leading-6 text-slate-700">{statusLabels[item.status] ?? item.status}</td>
+                    <td className="px-3 py-4 leading-6 text-slate-700">{priorities.find((type) => type.value === item.priority)?.label ?? item.priority}</td>
+                    <td className="px-3 py-4 text-xs leading-6 text-slate-600">{formatSystemDate(item.created_at)}</td>
+                    <td className="px-3 py-4">
                       {item.status === "returned_for_edit" && currentUser?.id === item.requester?.id ? (
+                        <div className="flex flex-col gap-2">
+                          <button
+                            type="button"
+                            onClick={() => beginEditReturnedRequest(item)}
+                            className="inline-flex h-9 items-center justify-center rounded-md border border-amber-200 bg-amber-50 px-2 text-xs font-bold text-amber-700 hover:bg-amber-100"
+                            title="تعديل وإعادة إرسال"
+                          >
+                            <RotateCcw className="h-4 w-4" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => showLinkedMessages(item)}
+                            className="inline-flex h-9 items-center justify-center rounded-md border border-slate-200 bg-white px-2 text-xs font-bold text-slate-700 hover:bg-slate-50"
+                            title="المراسلات"
+                          >
+                            <MessageSquare className="h-4 w-4" />
+                          </button>
+                        </div>
+                      ) : (
                         <button
                           type="button"
-                          onClick={() => beginEditReturnedRequest(item)}
-                          className="inline-flex h-9 items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 text-xs font-bold text-amber-700 hover:bg-amber-100"
+                          onClick={() => showLinkedMessages(item)}
+                          className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                          title="المراسلات"
                         >
-                          <RotateCcw className="h-4 w-4" />
-                          تعديل وإعادة إرسال
+                          <MessageSquare className="h-4 w-4" />
                         </button>
-                      ) : (
-                        <span className="text-xs text-slate-400">-</span>
                       )}
                     </td>
                   </tr>
@@ -645,9 +768,80 @@ export function Requests() {
             </table>
           </div>
         </Card>
+
+        {linkedRequest && (
+          <Card className="xl:col-span-2">
+            <div className="flex flex-col gap-3 border-b border-slate-200 p-5 lg:flex-row lg:items-center lg:justify-between">
+              <div>
+                <p className="text-sm font-semibold text-bank-700">المراسلات المرتبطة</p>
+                <h3 className="mt-1 text-lg font-bold text-slate-950">
+                  {linkedRequest.request_number} - {linkedRequest.title}
+                </h3>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button type="button" onClick={() => composeRequestMessage(linkedRequest)} className="gap-2">
+                  <MessageSquare className="h-4 w-4" />
+                  مراسلة بخصوص هذا الطلب
+                </Button>
+                <button
+                  type="button"
+                  onClick={() => showLinkedMessages(linkedRequest)}
+                  disabled={isLinkedMessagesLoading}
+                  className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                >
+                  <RefreshCw className={`h-4 w-4 ${isLinkedMessagesLoading ? "animate-spin" : ""}`} />
+                  تحديث
+                </button>
+              </div>
+            </div>
+
+            <div className="p-5">
+              {isLinkedMessagesLoading ? (
+                <div className="rounded-md bg-slate-50 p-5 text-sm text-slate-500">جاري تحميل المراسلات المرتبطة...</div>
+              ) : linkedMessages.length === 0 ? (
+                <div className="rounded-md bg-slate-50 p-5 text-sm text-slate-500">لا توجد مراسلات مرتبطة بهذا الطلب حتى الآن.</div>
+              ) : (
+                <div className="space-y-3">
+                  {linkedMessages.map((message) => (
+                    <div key={message.id} className="rounded-md border border-slate-200 bg-white p-4">
+                      <div className="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
+                        <div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-bold text-slate-600">{messageTypeLabel(message.message_type)}</span>
+                            <h4 className="font-bold text-slate-950">{message.subject || "بدون موضوع"}</h4>
+                          </div>
+                          <p className="mt-1 text-xs text-slate-500">
+                            من: {message.sender_name} | إلى: {message.recipient_names.join("، ") || "-"}
+                          </p>
+                        </div>
+                        <span className="text-xs text-slate-500">{formatSystemDate(message.created_at)}</span>
+                      </div>
+                      <p className="mt-3 whitespace-pre-line text-sm leading-7 text-slate-700">{message.body}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </Card>
+        )}
       </div>
     </div>
   );
+}
+
+function messageTypeLabel(value: string) {
+  const labels: Record<string, string> = {
+    internal_correspondence: "مراسلة داخلية",
+    official_correspondence: "مراسلة رسمية",
+    clarification_request: "طلب استيضاح",
+    reply_to_clarification: "رد على استيضاح",
+    approval_note: "ملاحظة موافقة",
+    rejection_reason: "سبب رفض",
+    implementation_note: "ملاحظة تنفيذ",
+    notification: "إشعار",
+    circular: "تعميم"
+  };
+  return labels[value] || "مراسلة داخلية";
 }
 
 async function loadManagedFields(requestTypeId: number, fallback: FieldConfig[]) {

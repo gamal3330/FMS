@@ -5,6 +5,7 @@ import { Layout } from "./components/Layout";
 import { Approvals } from "./pages/Approvals";
 import { Dashboard } from "./pages/Dashboard";
 import { Login } from "./pages/Login";
+import MessagesPage from "./pages/MessagesPage";
 import { ReportsPage } from "./pages/ReportsPage";
 import { Requests } from "./pages/Requests";
 import SettingsPage from "./pages/SettingsPage.jsx";
@@ -37,8 +38,8 @@ function ProtectedApp() {
     apiFetch<CurrentUser>("/auth/me")
       .then((user) => {
         setCurrentUser(user);
-        return apiFetch<{ screens: string[] }>("/users/screen-permissions/me")
-          .then((permissions) => setScreenPermissions(permissions.screens))
+        return apiFetch<{ screens: string[]; available_screens?: { key: string; label: string }[] }>("/users/screen-permissions/me")
+          .then((permissions) => setScreenPermissions(normalizeScreens(permissions.screens, permissions.available_screens)))
           .catch(() => setScreenPermissions(null));
       })
       .catch(() => {
@@ -81,6 +82,7 @@ function ProtectedApp() {
         <Route path="/dashboard" element={screenElement("dashboard", <Dashboard />)} />
         <Route path="/requests" element={screenElement("requests", <Requests />)} />
         <Route path="/approvals" element={screenElement("approvals", <Approvals />)} />
+        <Route path="/messages" element={screenElement("messages", <MessagesPage />)} />
         <Route
           path="/reports"
           element={currentUser?.role !== "employee" && canAccessScreen("reports") ? <ReportsPage /> : <Navigate to="/dashboard" replace />}
@@ -117,6 +119,13 @@ function ProtectedApp() {
       </Routes>
     </Layout>
   );
+}
+
+function normalizeScreens(screens: string[], availableScreens?: { key: string; label: string }[]) {
+  const next = [...(screens || [])];
+  const backendKnowsMessages = availableScreens?.some((screen) => screen.key === "messages");
+  if (!backendKnowsMessages && !next.includes("messages")) next.push("messages");
+  return next;
 }
 
 export default function App() {

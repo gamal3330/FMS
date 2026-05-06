@@ -114,7 +114,7 @@ export default function SpecializedSectionsPage() {
         <p className="text-sm font-semibold text-bank-700">إدارة النظام</p>
         <h2 className="mt-2 text-2xl font-bold text-slate-950">الأقسام المختصة</h2>
         <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">
-          أضف الأقسام المختصة التي تظهر عند اختيار صلاحية موظف تقنية معلومات، ثم اربط كل موظف بالقسم المناسب.
+          أضف الأقسام المختصة التي تظهر عند اختيار صلاحية موظف تنفيذ، ثم اربط كل موظف بالقسم المناسب.
         </p>
       </div>
 

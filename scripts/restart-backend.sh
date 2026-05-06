@@ -42,6 +42,13 @@ if [ -n "$CURRENT_BACKEND_PID" ]; then
   kill "$CURRENT_BACKEND_PID" 2>/dev/null || true
 fi
 
+EXISTING_BACKEND_PIDS="$(lsof -tiTCP:"$BACKEND_PORT" -sTCP:LISTEN 2>/dev/null || true)"
+if [ -n "$EXISTING_BACKEND_PIDS" ]; then
+  for pid in $EXISTING_BACKEND_PIDS; do
+    kill "$pid" 2>/dev/null || true
+  done
+fi
+
 wait_for_port_release "$BACKEND_PORT" || true
 
 PYTHON_BIN="$(pick_python)"

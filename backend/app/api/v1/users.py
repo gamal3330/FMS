@@ -3,7 +3,6 @@ from io import BytesIO
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from fastapi.responses import StreamingResponse
-from openpyxl import Workbook, load_workbook
 from pydantic import BaseModel, ValidationError
 from sqlalchemy import or_
 from sqlalchemy import select
@@ -26,6 +25,7 @@ SCREEN_DEFINITIONS = [
     {"key": "dashboard", "label": "إحصائيات"},
     {"key": "requests", "label": "الطلبات"},
     {"key": "approvals", "label": "الموافقات"},
+    {"key": "messages", "label": "المراسلات الداخلية"},
     {"key": "reports", "label": "التقارير"},
     {"key": "request_types", "label": "إدارة أنواع الطلبات"},
     {"key": "users", "label": "المستخدمون والصلاحيات"},
@@ -36,8 +36,8 @@ SCREEN_DEFINITIONS = [
 ]
 
 ALL_SCREEN_KEYS = {item["key"] for item in SCREEN_DEFINITIONS}
-MANAGEMENT_SCREEN_KEYS = {"dashboard", "requests", "approvals", "reports", "request_types", "users", "departments", "specialized_sections", "health_monitoring", "settings"}
-EMPLOYEE_SCREEN_KEYS = {"dashboard", "requests", "approvals"}
+MANAGEMENT_SCREEN_KEYS = {"dashboard", "requests", "approvals", "messages", "reports", "request_types", "users", "departments", "specialized_sections", "health_monitoring", "settings"}
+EMPLOYEE_SCREEN_KEYS = {"dashboard", "requests", "approvals", "messages"}
 
 
 class ScreenPermissionsPayload(BaseModel):
@@ -67,6 +67,10 @@ IMPORT_HEADER_ALIASES = {key: key for key, _, _ in IMPORT_COLUMNS} | {label: key
 DEFAULT_IMPORTED_PASSWORD = "Change@12345"
 
 
+def temporary_password_from_policy(policy: SecurityPolicy) -> str:
+    return policy.temporary_password or DEFAULT_IMPORTED_PASSWORD
+
+
 def cell_text(value) -> str:
     if value is None:
         return ""
@@ -94,7 +98,7 @@ def default_screens_for_role(role: UserRole) -> list[str]:
     if role in {UserRole.SUPER_ADMIN, UserRole.IT_MANAGER}:
         return sorted(MANAGEMENT_SCREEN_KEYS)
     if role in {UserRole.EXECUTIVE, UserRole.INFOSEC, UserRole.IT_STAFF}:
-        return ["dashboard", "requests", "approvals", "reports"]
+        return ["dashboard", "requests", "approvals", "messages", "reports"]
     return sorted(EMPLOYEE_SCREEN_KEYS)
 
 
@@ -106,8 +110,11 @@ def read_user_screens(db: Session, user: User) -> list[str]:
     setting = get_screen_permission_setting(db, user.id)
     if not setting:
         return default_screens_for_role(user.role)
-    screens = setting.setting_value.get("screens", []) if isinstance(setting.setting_value, dict) else []
+    value = setting.setting_value if isinstance(setting.setting_value, dict) else {}
+    screens = value.get("screens", [])
     clean_screens = [screen for screen in screens if screen in ALL_SCREEN_KEYS]
+    if "messages_permission_initialized" not in value and "messages" in default_screens_for_role(user.role) and "messages" not in clean_screens:
+        clean_screens.append("messages")
     if user.role in {UserRole.SUPER_ADMIN, UserRole.IT_MANAGER} and "settings" in clean_screens and "health_monitoring" not in clean_screens:
         clean_screens.append("health_monitoring")
     return clean_screens
@@ -119,7 +126,7 @@ def save_user_screens(db: Session, user: User, screens: list[str], actor: User) 
     if not setting:
         setting = PortalSetting(category="screen_permissions", setting_key=str(user.id), setting_value={})
         db.add(setting)
-    setting.setting_value = {"screens": clean_screens}
+    setting.setting_value = {"screens": clean_screens, "messages_permission_initialized": True}
     setting.updated_by_id = actor.id
 
 
@@ -189,6 +196,9 @@ def validate_password_policy(password: str, policy: SecurityPolicy) -> None:
 
 @router.get("/import-template")
 def download_users_import_template(db: Session = Depends(get_db), _: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.IT_MANAGER))):
+    from openpyxl import Workbook
+
+    default_password = temporary_password_from_policy(security_policy(db))
     workbook = Workbook()
     sheet = workbook.active
     sheet.title = "users"
@@ -204,7 +214,7 @@ def download_users_import_template(db: Session = Depends(get_db), _: User = Depe
         "IT",
         "",
         "",
-        DEFAULT_IMPORTED_PASSWORD,
+        default_password,
         "نعم",
     ])
 
@@ -213,8 +223,8 @@ def download_users_import_template(db: Session = Depends(get_db), _: User = Depe
     notes.append(["الصلاحية", "نعم", "استخدم إحدى القيم من ورقة roles"])
     notes.append(["كود الإدارة", "نعم", "استخدم code من ورقة departments أو رقم id"])
     notes.append(["الرقم الوظيفي للمدير المباشر", "لا", "يمكن أن يشير إلى مستخدم موجود أو صف آخر داخل نفس الملف"])
-    notes.append(["كود القسم المختص", "لموظف تقنية المعلومات فقط", "مطلوب عند role = it_staff، استخدم ورقة specialized_sections"])
-    notes.append(["كلمة المرور المؤقتة", "لا", f"إذا تركت فارغة سيتم استخدام {DEFAULT_IMPORTED_PASSWORD}"])
+    notes.append(["كود القسم المختص", "لموظف التنفيذ فقط", "مطلوب عند role = it_staff، استخدم ورقة specialized_sections"])
+    notes.append(["كلمة المرور المؤقتة", "لا", f"إذا تركت فارغة سيتم استخدام كلمة المرور المؤقتة المعرفة في إعدادات الأمان ({default_password})"])
     notes.append(["حساب نشط", "لا", "القيم المقبولة: نعم/لا أو true/false أو 1/0"])
 
     roles_sheet = workbook.create_sheet("roles")
@@ -248,6 +258,8 @@ async def import_users_from_excel(file: UploadFile = File(...), db: Session = De
         raise HTTPException(status_code=400, detail="يرجى رفع ملف Excel بصيغة .xlsx")
 
     try:
+        from openpyxl import load_workbook
+
         workbook = load_workbook(BytesIO(await file.read()), data_only=True)
     except Exception as exc:
         raise HTTPException(status_code=400, detail="تعذر قراءة ملف Excel") from exc
@@ -275,6 +287,7 @@ async def import_users_from_excel(file: UploadFile = File(...), db: Session = De
     seen_emails: set[str] = set()
     seen_usernames: set[str] = set()
     policy = security_policy(db)
+    default_password = temporary_password_from_policy(policy)
 
     for row_number, values in enumerate(sheet.iter_rows(min_row=2, values_only=True), start=2):
         if not any(cell_text(value) for value in values):
@@ -285,7 +298,7 @@ async def import_users_from_excel(file: UploadFile = File(...), db: Session = De
         email = cell_text(row.get("email")).lower()
         role_text = cell_text(row.get("role"))
         department_key = cell_text(row.get("department_code")).lower()
-        password = cell_text(row.get("password")) or DEFAULT_IMPORTED_PASSWORD
+        password = cell_text(row.get("password")) or default_password
         manager_employee_id = cell_text(row.get("manager_employee_id")) or None
         administrative_section = cell_text(row.get("administrative_section")) or None
 
@@ -304,7 +317,7 @@ async def import_users_from_excel(file: UploadFile = File(...), db: Session = De
             errors.append(import_error(row_number, "الصلاحية", "الصلاحية غير صحيحة"))
 
         if role == UserRole.IT_STAFF and not administrative_section:
-            errors.append(import_error(row_number, "كود القسم المختص", "القسم المختص مطلوب لموظف تقنية المعلومات"))
+            errors.append(import_error(row_number, "كود القسم المختص", "القسم المختص مطلوب لموظف التنفيذ"))
         if administrative_section and administrative_section not in active_sections:
             errors.append(import_error(row_number, "كود القسم المختص", "القسم المختص غير موجود أو غير نشط"))
 
@@ -523,8 +536,10 @@ def reset_user_password(user_id: int, payload: PasswordReset, db: Session = Depe
         raise HTTPException(status_code=404, detail="User not found")
     if actor.role != UserRole.SUPER_ADMIN and user.role == UserRole.SUPER_ADMIN:
         raise HTTPException(status_code=403, detail="Only Super Admin can reset Super Admin passwords")
-    validate_password_policy(payload.password, security_policy(db))
-    user.hashed_password = get_password_hash(payload.password)
+    policy = security_policy(db)
+    password = payload.password or temporary_password_from_policy(policy)
+    validate_password_policy(password, policy)
+    user.hashed_password = get_password_hash(password)
     user.password_changed_at = datetime.now(timezone.utc)
     user.failed_login_attempts = 0
     user.locked_until = None

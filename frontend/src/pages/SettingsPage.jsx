@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { AlertTriangle, CheckCircle2, Database, Download, History, LockKeyhole, Mail, PackageCheck, RefreshCw, Settings2, Upload } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Database, Download, FileText, History, LockKeyhole, Mail, PackageCheck, RefreshCw, Settings2, Upload } from "lucide-react";
 import { api, getErrorMessage } from "../lib/axios";
 import { Card } from "../components/ui/card";
 import { Button } from "../components/ui/button";
@@ -11,6 +11,7 @@ import { formatSystemDateTime } from "../lib/datetime";
 const tabs = [
   ["general", "الإعدادات العامة", Settings2],
   ["email", "البريد SMTP", Mail],
+  ["messageTemplates", "إعدادات المراسلات", FileText],
   ["security", "إعدادات الأمان", LockKeyhole],
   ["database", "قاعدة البيانات", Database],
   ["updates", "إدارة التحديثات", PackageCheck],
@@ -48,6 +49,7 @@ export default function SettingsPage() {
         <Card className="min-w-0 overflow-hidden p-5">
           {active === "general" && <Panel title="الإعدادات العامة"><GeneralSettings notify={notify} /></Panel>}
           {active === "email" && <Panel title="إعدادات البريد SMTP"><EmailSettings notify={notify} /></Panel>}
+          {active === "messageTemplates" && <Panel title="إعدادات المراسلات"><MessageTemplatesSettings notify={notify} /></Panel>}
           {active === "requestTypes" && <Panel title="أنواع الطلبات"><RequestTypesSettings notify={notify} /></Panel>}
           {active === "security" && <Panel title="إعدادات الأمان"><SecuritySettings notify={notify} /></Panel>}
           {active === "database" && <Panel title="قاعدة البيانات والنسخ الاحتياطي"><DatabaseSettings notify={notify} /></Panel>}
@@ -77,6 +79,462 @@ function RequestTypesSettings({ notify }) {
     try { await api.post("/request-types", form); notify("تم حفظ نوع الطلب"); await load(); } catch (error) { notify(getErrorMessage(error), "error"); }
   }
   return <div className="space-y-4"><form onSubmit={save} className="grid gap-3 md:grid-cols-4"><Input value={form.request_type} onChange={(e) => setForm({ ...form, request_type: e.target.value })} required /><Input value={form.label_ar} onChange={(e) => setForm({ ...form, label_ar: e.target.value })} required /><label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.is_enabled} onChange={(e) => setForm({ ...form, is_enabled: e.target.checked })} /> Enabled</label><label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.require_attachment} onChange={(e) => setForm({ ...form, require_attachment: e.target.checked })} /> Require Attachment</label><Button type="submit">حفظ</Button></form><SimpleError error={error} /><SimpleTable headers={["Type", "Arabic Label", "Enabled", "Attachment"]} rows={items.map((i) => [i.request_type, i.label_ar, i.is_enabled ? "Yes" : "No", i.require_attachment ? "Yes" : "No"])} /></div>;
+}
+
+const defaultMessageTypes = [
+  { value: "internal_correspondence", label: "مراسلة داخلية", is_system: true },
+  { value: "official_correspondence", label: "مراسلة رسمية", is_system: true },
+  { value: "clarification_request", label: "طلب استيضاح", is_system: true },
+  { value: "reply_to_clarification", label: "رد على استيضاح", is_system: true },
+  { value: "approval_note", label: "ملاحظة موافقة", is_system: true },
+  { value: "rejection_reason", label: "سبب رفض", is_system: true },
+  { value: "implementation_note", label: "ملاحظة تنفيذ", is_system: true },
+  { value: "notification", label: "إشعار", is_system: true },
+  { value: "circular", label: "تعميم", is_system: true }
+];
+
+const messageRoleOptions = [
+  { id: "employee", label: "موظف" },
+  { id: "direct_manager", label: "مدير مباشر" },
+  { id: "it_staff", label: "موظف تنفيذ" },
+  { id: "it_manager", label: "مدير تقنية المعلومات" },
+  { id: "information_security", label: "أمن المعلومات" },
+  { id: "executive_management", label: "الإدارة التنفيذية" },
+  { id: "super_admin", label: "مدير النظام" }
+];
+
+function MessageTemplatesSettings({ notify }) {
+  const [templates, setTemplates] = useState([]);
+  const [messageTypes, setMessageTypes] = useState(defaultMessageTypes);
+  const [messageSettings, setMessageSettings] = useState({
+    enabled: true,
+    enable_attachments: true,
+    enable_drafts: true,
+    enable_templates: true,
+    enable_signatures: true,
+    enable_circulars: true,
+    enable_department_broadcasts: true,
+    enable_read_receipts: true,
+    enable_linked_requests: true,
+    auto_refresh_seconds: 20,
+    max_attachment_mb: 25,
+    max_recipients: 200,
+    default_message_type: "internal_correspondence",
+    allowed_user_ids: [],
+    blocked_user_ids: [],
+    allowed_department_ids: [],
+    blocked_department_ids: [],
+    circular_allowed_roles: [],
+    circular_allowed_user_ids: [],
+    department_broadcast_allowed_roles: [],
+    department_broadcast_allowed_user_ids: [],
+    template_allowed_roles: [],
+    template_allowed_user_ids: []
+  });
+  const [users, setUsers] = useState([]);
+  const [departments, setDepartments] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [settingsSaving, setSettingsSaving] = useState(false);
+  const [typesSaving, setTypesSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  async function load() {
+    setLoading(true);
+    setError("");
+    try {
+      const [settingsResponse, templatesResponse, typesResponse, usersResponse, departmentsResponse] = await Promise.all([
+        api.get("/messages/settings"),
+        api.get("/messages/templates"),
+        api.get("/messages/types"),
+        api.get("/users"),
+        api.get("/settings/departments")
+      ]);
+      setMessageSettings(settingsResponse.data);
+      setTemplates(templatesResponse.data);
+      setMessageTypes(typesResponse.data.length ? typesResponse.data : defaultMessageTypes);
+      setUsers(usersResponse.data || []);
+      setDepartments(departmentsResponse.data || []);
+    } catch (error) {
+      const message = getErrorMessage(error);
+      setError(message);
+      notify(message, "error");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  function updateTemplate(index, field, value) {
+    setTemplates((current) => current.map((template, itemIndex) => (itemIndex === index ? { ...template, [field]: value } : template)));
+  }
+
+  function updateMessageType(index, field, value) {
+    setMessageTypes((current) => current.map((item, itemIndex) => (itemIndex === index ? { ...item, [field]: value } : item)));
+  }
+
+  function updateMessageSetting(field, value) {
+    setMessageSettings((current) => ({ ...current, [field]: value }));
+  }
+
+  function toggleMessageSettingList(field, id) {
+    setMessageSettings((current) => {
+      const list = Array.isArray(current[field]) ? current[field] : [];
+      return { ...current, [field]: list.includes(id) ? list.filter((item) => item !== id) : [...list, id] };
+    });
+  }
+
+  async function saveMessageSettings() {
+    setSettingsSaving(true);
+    setError("");
+    try {
+      const payload = {
+        ...messageSettings,
+        auto_refresh_seconds: Number(messageSettings.auto_refresh_seconds || 20),
+        max_attachment_mb: Number(messageSettings.max_attachment_mb || 25),
+        max_recipients: Number(messageSettings.max_recipients || 200)
+      };
+      const { data } = await api.put("/messages/settings", payload);
+      setMessageSettings(data);
+      notify("تم حفظ إعدادات المراسلات");
+    } catch (error) {
+      const message = getErrorMessage(error);
+      setError(message);
+      notify(message, "error");
+    } finally {
+      setSettingsSaving(false);
+    }
+  }
+
+  function addMessageType() {
+    setMessageTypes((current) => [
+      ...current,
+      { value: `custom_type_${Date.now()}`, label: "تصنيف جديد", is_system: false }
+    ]);
+  }
+
+  function removeMessageType(index) {
+    const item = messageTypes[index];
+    if (item?.is_system) {
+      notify("لا يمكن حذف التصنيفات الأساسية، يمكن تعديل الاسم فقط.", "error");
+      return;
+    }
+    if (!window.confirm("هل تريد حذف هذا التصنيف؟ تأكد أنه غير مستخدم في القوالب الحالية.")) return;
+    setMessageTypes((current) => current.filter((_, itemIndex) => itemIndex !== index));
+  }
+
+  async function saveMessageTypes() {
+    setTypesSaving(true);
+    setError("");
+    try {
+      const { data } = await api.put("/messages/types", { types: messageTypes });
+      setMessageTypes(data);
+      notify("تم حفظ تصنيفات المراسلات");
+    } catch (error) {
+      const message = getErrorMessage(error);
+      setError(message);
+      notify(message, "error");
+    } finally {
+      setTypesSaving(false);
+    }
+  }
+
+  function addTemplate() {
+    const key = `custom_${Date.now()}`;
+    setTemplates((current) => [
+      ...current,
+      {
+        key,
+        label: "قالب جديد",
+        message_type: "internal_correspondence",
+        subject: "",
+        body: ""
+      }
+    ]);
+  }
+
+  function removeTemplate(index) {
+    if (!window.confirm("هل تريد حذف هذا القالب من القائمة؟")) return;
+    setTemplates((current) => current.filter((_, itemIndex) => itemIndex !== index));
+  }
+
+  async function save(event) {
+    event.preventDefault();
+    setSaving(true);
+    setError("");
+    try {
+      const { data } = await api.put("/messages/templates", { templates });
+      setTemplates(data);
+      notify("تم حفظ قوالب المراسلات");
+    } catch (error) {
+      const message = getErrorMessage(error);
+      setError(message);
+      notify(message, "error");
+    } finally {
+      setSettingsSaving(false);
+    }
+  }
+
+  if (loading) {
+    return <div className="rounded-md border border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">جاري تحميل قوالب المراسلات...</div>;
+  }
+
+  return (
+    <form onSubmit={save} className="space-y-5 text-right" dir="rtl">
+      <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <h4 className="font-bold text-slate-950">التحكم العام بالمراسلات</h4>
+            <p className="mt-1 text-sm leading-6 text-slate-500">تحكم في تشغيل المراسلات، المرفقات، المسودات، التواقيع، القوالب، التعاميم، وسجل القراءة.</p>
+          </div>
+          <Button type="button" onClick={saveMessageSettings} disabled={settingsSaving}>{settingsSaving ? "جاري الحفظ..." : "حفظ إعدادات المراسلات"}</Button>
+        </div>
+
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <Toggle label="تفعيل المراسلات" checked={Boolean(messageSettings.enabled)} onChange={(value) => updateMessageSetting("enabled", value)} />
+          <Toggle label="تفعيل المرفقات" checked={Boolean(messageSettings.enable_attachments)} onChange={(value) => updateMessageSetting("enable_attachments", value)} />
+          <Toggle label="تفعيل المسودات" checked={Boolean(messageSettings.enable_drafts)} onChange={(value) => updateMessageSetting("enable_drafts", value)} />
+          <Toggle label="تفعيل القوالب" checked={Boolean(messageSettings.enable_templates)} onChange={(value) => updateMessageSetting("enable_templates", value)} />
+          <Toggle label="تفعيل التواقيع" checked={Boolean(messageSettings.enable_signatures)} onChange={(value) => updateMessageSetting("enable_signatures", value)} />
+          <Toggle label="تفعيل التعاميم" checked={Boolean(messageSettings.enable_circulars)} onChange={(value) => updateMessageSetting("enable_circulars", value)} />
+          <Toggle label="تعميم حسب الإدارات" checked={Boolean(messageSettings.enable_department_broadcasts)} onChange={(value) => updateMessageSetting("enable_department_broadcasts", value)} />
+          <Toggle label="إظهار سجل القراءة" checked={Boolean(messageSettings.enable_read_receipts)} onChange={(value) => updateMessageSetting("enable_read_receipts", value)} />
+          <Toggle label="ربط الرسائل بالطلبات" checked={Boolean(messageSettings.enable_linked_requests)} onChange={(value) => updateMessageSetting("enable_linked_requests", value)} />
+        </div>
+
+        <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <LabeledInput label="تحديث الوارد كل / ثانية" type="number" min="5" max="300" value={messageSettings.auto_refresh_seconds || 20} onChange={(event) => updateMessageSetting("auto_refresh_seconds", event.target.value)} />
+          <LabeledInput label="أقصى حجم للمرفق MB" type="number" min="1" max="100" value={messageSettings.max_attachment_mb || 25} onChange={(event) => updateMessageSetting("max_attachment_mb", event.target.value)} />
+          <LabeledInput label="أقصى عدد مستلمين" type="number" min="1" max="1000" value={messageSettings.max_recipients || 200} onChange={(event) => updateMessageSetting("max_recipients", event.target.value)} />
+          <label className="block space-y-2 text-sm font-medium text-slate-700">
+            التصنيف الافتراضي
+            <select value={messageSettings.default_message_type || "internal_correspondence"} onChange={(event) => updateMessageSetting("default_message_type", event.target.value)} className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none focus:border-bank-600 focus:ring-2 focus:ring-bank-100">
+              {messageTypes.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+            </select>
+          </label>
+        </div>
+      </div>
+
+      <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="mb-4">
+          <h4 className="font-bold text-slate-950">صلاحيات متقدمة للمراسلات</h4>
+          <p className="mt-1 text-sm leading-6 text-slate-500">
+            اترك القوائم فارغة للسماح لكل مستخدمي المراسلات، أو حدّد أدواراً وموظفين لتقييد كل ميزة.
+          </p>
+        </div>
+        <div className="grid gap-4 xl:grid-cols-2">
+          <MessageScopeBox
+            title="من يستطيع إرسال تعميم"
+            description="يتحكم في تصنيف الرسالة: تعميم."
+            items={messageRoleOptions}
+            selected={messageSettings.circular_allowed_roles || []}
+            onToggle={(id) => toggleMessageSettingList("circular_allowed_roles", id)}
+          />
+          <MessageScopeBox
+            title="موظفون مسموح لهم بالتعاميم"
+            description="استثناءات مباشرة لإرسال التعاميم حتى لو لم يكن دورهم محدداً."
+            items={users.map((user) => ({ id: user.id, label: user.full_name_ar, hint: user.email }))}
+            selected={messageSettings.circular_allowed_user_ids || []}
+            onToggle={(id) => toggleMessageSettingList("circular_allowed_user_ids", id)}
+          />
+          <MessageScopeBox
+            title="من يستطيع تعميم حسب الإدارات"
+            description="يتحكم في أداة اختيار إدارة أو أكثر داخل رسالة جديدة."
+            items={messageRoleOptions}
+            selected={messageSettings.department_broadcast_allowed_roles || []}
+            onToggle={(id) => toggleMessageSettingList("department_broadcast_allowed_roles", id)}
+          />
+          <MessageScopeBox
+            title="موظفون مسموح لهم بتعميم الإدارات"
+            description="استثناءات مباشرة لاستخدام أداة تعميم حسب الإدارات."
+            items={users.map((user) => ({ id: user.id, label: user.full_name_ar, hint: user.email }))}
+            selected={messageSettings.department_broadcast_allowed_user_ids || []}
+            onToggle={(id) => toggleMessageSettingList("department_broadcast_allowed_user_ids", id)}
+          />
+          <MessageScopeBox
+            title="من يستطيع استخدام القوالب"
+            description="يتحكم في ظهور زر القوالب داخل محرر الرسائل."
+            items={messageRoleOptions}
+            selected={messageSettings.template_allowed_roles || []}
+            onToggle={(id) => toggleMessageSettingList("template_allowed_roles", id)}
+          />
+          <MessageScopeBox
+            title="موظفون مسموح لهم بالقوالب"
+            description="استثناءات مباشرة لاستخدام قوالب المراسلات."
+            items={users.map((user) => ({ id: user.id, label: user.full_name_ar, hint: user.email }))}
+            selected={messageSettings.template_allowed_user_ids || []}
+            onToggle={(id) => toggleMessageSettingList("template_allowed_user_ids", id)}
+          />
+        </div>
+        <div className="mt-4 flex justify-end">
+          <Button type="button" onClick={saveMessageSettings} disabled={settingsSaving}>{settingsSaving ? "جاري الحفظ..." : "حفظ الصلاحيات المتقدمة"}</Button>
+        </div>
+      </div>
+
+      <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="mb-4">
+          <h4 className="font-bold text-slate-950">نطاق المراسلات حسب الموظف أو الإدارة</h4>
+          <p className="mt-1 text-sm leading-6 text-slate-500">
+            إذا تركت قوائم السماح فارغة فالنظام يسمح لكل من لديه صلاحية شاشة المراسلات. قوائم المنع لها أولوية دائماً.
+          </p>
+        </div>
+        <div className="grid gap-4 xl:grid-cols-2">
+          <MessageScopeBox
+            title="موظفون مسموح لهم"
+            description="عند تحديد موظفين هنا، لن يستطيع غيرهم استخدام المراسلات إلا إذا كانت إدارتهم مسموحة."
+            items={users.map((user) => ({ id: user.id, label: user.full_name_ar, hint: user.email }))}
+            selected={messageSettings.allowed_user_ids || []}
+            onToggle={(id) => toggleMessageSettingList("allowed_user_ids", id)}
+          />
+          <MessageScopeBox
+            title="موظفون ممنوعون"
+            description="يتم منع هؤلاء الموظفين من الإرسال والاستقبال حتى لو كانت إدارتهم مسموحة."
+            items={users.map((user) => ({ id: user.id, label: user.full_name_ar, hint: user.email }))}
+            selected={messageSettings.blocked_user_ids || []}
+            onToggle={(id) => toggleMessageSettingList("blocked_user_ids", id)}
+            danger
+          />
+          <MessageScopeBox
+            title="إدارات مسموحة"
+            description="عند تحديد إدارات هنا، يصبح استخدام المراسلات محصوراً بهذه الإدارات والموظفين المسموحين."
+            items={departments.map((department) => ({ id: department.id, label: department.name_ar, hint: department.code }))}
+            selected={messageSettings.allowed_department_ids || []}
+            onToggle={(id) => toggleMessageSettingList("allowed_department_ids", id)}
+          />
+          <MessageScopeBox
+            title="إدارات ممنوعة"
+            description="يتم منع كل موظفي هذه الإدارات من الإرسال والاستقبال."
+            items={departments.map((department) => ({ id: department.id, label: department.name_ar, hint: department.code }))}
+            selected={messageSettings.blocked_department_ids || []}
+            onToggle={(id) => toggleMessageSettingList("blocked_department_ids", id)}
+            danger
+          />
+        </div>
+        <div className="mt-4 flex justify-end">
+          <Button type="button" onClick={saveMessageSettings} disabled={settingsSaving}>{settingsSaving ? "جاري الحفظ..." : "حفظ نطاق المراسلات"}</Button>
+        </div>
+      </div>
+
+      <div className="rounded-lg border border-bank-100 bg-bank-50/70 p-4">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <div className="flex items-start gap-3">
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-white text-bank-700">
+              <FileText className="h-5 w-5" />
+            </span>
+            <div>
+              <p className="font-bold text-slate-950">قوالب جاهزة للرسائل الرسمية والمتكررة</p>
+              <p className="mt-1 text-sm leading-6 text-slate-600">يمكن استخدام المتغير <span className="font-mono">{`{request_number}`}</span> وسيتم استبداله برقم الطلب المرتبط عند تطبيق القالب.</p>
+            </div>
+          </div>
+          <button type="button" onClick={addTemplate} className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-bank-700 px-4 text-sm font-bold text-white hover:bg-bank-800">
+            <FileText className="h-4 w-4" />
+            إضافة قالب
+          </button>
+        </div>
+      </div>
+
+      <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <h4 className="font-bold text-slate-950">تصنيفات الرسائل</h4>
+            <p className="mt-1 text-sm leading-6 text-slate-500">أضف تصنيفاً جديداً أو عدّل أسماء التصنيفات التي تظهر في شاشة المراسلات والقوالب.</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" onClick={addMessageType} className="h-10 rounded-md border border-bank-200 bg-bank-50 px-4 text-sm font-bold text-bank-800 hover:bg-bank-100">إضافة تصنيف</button>
+            <Button type="button" onClick={saveMessageTypes} disabled={typesSaving}>{typesSaving ? "جاري الحفظ..." : "حفظ التصنيفات"}</Button>
+          </div>
+        </div>
+        <div className="grid gap-3 md:grid-cols-2">
+          {messageTypes.map((item, index) => (
+            <div key={`${item.value}-${index}`} className="grid gap-2 rounded-md border border-slate-200 bg-slate-50 p-3 lg:grid-cols-[1fr_1fr_auto] lg:items-end">
+              <LabeledInput label="الرمز" value={item.value || ""} disabled={Boolean(item.is_system)} onChange={(event) => updateMessageType(index, "value", event.target.value)} placeholder="مثال: internal_note" />
+              <LabeledInput label="الاسم بالعربي" value={item.label || ""} onChange={(event) => updateMessageType(index, "label", event.target.value)} />
+              <button type="button" onClick={() => removeMessageType(index)} disabled={Boolean(item.is_system)} className="h-10 rounded-md border border-red-200 bg-white px-3 text-xs font-bold text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50">
+                حذف
+              </button>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="space-y-4">
+        {templates.map((template, index) => (
+          <div key={template.key || index} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <p className="text-sm font-black text-slate-950">{template.label || "قالب بدون اسم"}</p>
+              <button type="button" onClick={() => removeTemplate(index)} className="h-9 rounded-md border border-red-200 bg-white px-3 text-xs font-bold text-red-700 hover:bg-red-50">
+                حذف القالب
+              </button>
+            </div>
+            <div className="grid gap-3 lg:grid-cols-[220px_220px_1fr]">
+              <LabeledInput label="اسم القالب" value={template.label || ""} onChange={(event) => updateTemplate(index, "label", event.target.value)} />
+              <label className="block space-y-2 text-sm font-medium text-slate-700">
+                التصنيف
+                <select
+                  value={template.message_type || "internal_correspondence"}
+                  onChange={(event) => updateTemplate(index, "message_type", event.target.value)}
+                  className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none focus:border-bank-600 focus:ring-2 focus:ring-bank-100"
+                >
+                  {messageTypes.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+                </select>
+              </label>
+              <LabeledInput label="موضوع الرسالة" value={template.subject || ""} onChange={(event) => updateTemplate(index, "subject", event.target.value)} />
+            </div>
+            <label className="mt-3 block space-y-2 text-sm font-medium text-slate-700">
+              نص القالب
+              <textarea
+                value={template.body || ""}
+                onChange={(event) => updateTemplate(index, "body", event.target.value)}
+                rows={6}
+                className="w-full resize-y rounded-md border border-slate-300 bg-white px-3 py-2 text-sm leading-7 outline-none focus:border-bank-600 focus:ring-2 focus:ring-bank-100"
+              />
+            </label>
+          </div>
+        ))}
+      </div>
+
+      <SimpleError error={error} />
+      <div className="flex flex-wrap gap-3">
+        <Button type="submit" disabled={saving} className="gap-2">
+          <FileText className="h-4 w-4" />
+          {saving ? "جاري الحفظ..." : "حفظ القوالب"}
+        </Button>
+        <button type="button" onClick={load} className="h-10 rounded-md border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50">إعادة تحميل</button>
+      </div>
+    </form>
+  );
+}
+
+function MessageScopeBox({ title, description, items, selected, onToggle, danger = false }) {
+  const [term, setTerm] = useState("");
+  const filtered = items.filter((item) => `${item.label} ${item.hint || ""}`.toLowerCase().includes(term.trim().toLowerCase())).slice(0, 120);
+  return (
+    <div className={`rounded-lg border p-4 ${danger ? "border-red-100 bg-red-50/40" : "border-bank-100 bg-bank-50/40"}`}>
+      <div className="mb-3 flex items-start justify-between gap-3">
+        <div>
+          <h5 className="font-bold text-slate-950">{title}</h5>
+          <p className="mt-1 text-xs leading-5 text-slate-500">{description}</p>
+        </div>
+        <span className={`rounded-full px-2 py-1 text-xs font-bold ${danger ? "bg-red-100 text-red-700" : "bg-bank-100 text-bank-800"}`}>{selected.length}</span>
+      </div>
+      <Input value={term} onChange={(event) => setTerm(event.target.value)} placeholder="بحث" />
+      <div className="mt-3 max-h-64 space-y-1 overflow-y-auto rounded-md border border-white/80 bg-white p-2">
+        {filtered.map((item) => (
+          <label key={item.id} className="flex cursor-pointer items-center justify-between gap-3 rounded-md px-2 py-2 text-sm hover:bg-slate-50">
+            <span className="min-w-0">
+              <span className="block truncate font-semibold text-slate-800">{item.label}</span>
+              {item.hint && <span className="block truncate text-xs text-slate-500">{item.hint}</span>}
+            </span>
+            <input type="checkbox" checked={selected.includes(item.id)} onChange={() => onToggle(item.id)} />
+          </label>
+        ))}
+        {filtered.length === 0 && <p className="p-3 text-center text-xs text-slate-500">لا توجد نتائج.</p>}
+      </div>
+    </div>
+  );
 }
 
 const emailDefaults = {
@@ -199,7 +657,10 @@ function SecuritySettings({ notify }) {
       password_expiry_days: numeric.password_expiry_days,
       require_uppercase: Boolean(form.require_uppercase),
       require_numbers: Boolean(form.require_numbers),
-      require_special_chars: Boolean(form.require_special_chars)
+      require_special_chars: Boolean(form.require_special_chars),
+      mfa_enabled: Boolean(form.mfa_enabled),
+      login_identifier_mode: form.login_identifier_mode || "email_or_employee_id",
+      temporary_password: form.temporary_password || "Change@12345"
     };
     try { setForm((await api.put("/settings/security", payload)).data); notify("تم حفظ سياسة الأمان"); } catch (e) { notify(getErrorMessage(e), "error"); }
   }
@@ -209,9 +670,23 @@ function SecuritySettings({ notify }) {
     ["require_special_chars", "اشتراط رموز خاصة"]
   ];
   return <form onSubmit={save} className="grid gap-4 md:grid-cols-2">
-    <LabeledInput label="الحد الأدنى لطول كلمة المرور" type="number" value={form.password_min_length || ""} onChange={(e) => setForm({ ...form, password_min_length: e.target.value })} />
+    <label className="block space-y-2 text-sm font-medium text-slate-700 md:col-span-2">
+      طريقة تسجيل الدخول
+      <select value={form.login_identifier_mode || "email_or_employee_id"} onChange={(e) => setForm({ ...form, login_identifier_mode: e.target.value })} className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none focus:border-bank-600 focus:ring-2 focus:ring-bank-100">
+        <option value="email_or_employee_id">البريد الإلكتروني أو الرقم الوظيفي</option>
+        <option value="email">البريد الإلكتروني فقط</option>
+        <option value="employee_id">الرقم الوظيفي فقط</option>
+      </select>
+      <span className="block text-xs font-normal text-slate-500">يتم تطبيق هذا الخيار على شاشة تسجيل الدخول فقط، ولا يغير بيانات المستخدمين.</span>
+    </label>
+    <LabeledInput label="الحد الأدنى لطول كلمة المرور" type="number" min="1" value={form.password_min_length || ""} onChange={(e) => setForm({ ...form, password_min_length: e.target.value })} />
     <LabeledInput label="قفل الحساب بعد عدد محاولات فاشلة" type="number" value={form.lock_after_failed_attempts || ""} onChange={(e) => setForm({ ...form, lock_after_failed_attempts: e.target.value })} />
     <LabeledInput label="مدة صلاحية كلمة المرور بالأيام" type="number" value={form.password_expiry_days || ""} onChange={(e) => setForm({ ...form, password_expiry_days: e.target.value })} />
+    <label className="block space-y-2 text-sm font-medium text-slate-700 md:col-span-2">
+      كلمة المرور المؤقتة الافتراضية
+      <Input type="text" value={form.temporary_password || ""} onChange={(e) => setForm({ ...form, temporary_password: e.target.value })} placeholder="مثال: Change@12345" required />
+      <span className="block text-xs font-normal text-slate-500">تستخدم عند إنشاء مستخدم جديد بدون كلمة مرور، وعند إعادة تعيين كلمة مرور المستخدم، وعند استيراد المستخدمين من Excel إذا ترك الحقل فارغاً.</span>
+    </label>
     <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
       <p className="mb-3 text-sm font-bold text-slate-700">قواعد كلمة المرور والدخول</p>
       <div className="space-y-3">

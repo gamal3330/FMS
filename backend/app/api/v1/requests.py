@@ -14,8 +14,9 @@ from app.api.deps import get_current_user
 from app.core.config import get_settings
 from app.db.session import get_db
 from app.models.enums import ApprovalAction, RequestStatus, RequestType, UserRole
-from app.models.request import ApprovalStep, Attachment, RequestComment, ServiceRequest
-from app.models.settings import RequestTypeField, RequestTypeSetting, SettingsGeneral
+from app.models.message import InternalMessage, InternalMessageRecipient
+from app.models.request import ApprovalStep, Attachment, RequestApprovalStep, RequestComment, ServiceRequest
+from app.models.settings import PortalSetting, RequestTypeField, RequestTypeSetting, SettingsGeneral
 from app.models.user import User
 from app.schemas.request import ApprovalDecision, AttachmentRead, CommentCreate, ServiceRequestCreate, ServiceRequestRead, ServiceRequestUpdate
 from app.services.audit import write_audit
@@ -29,6 +30,7 @@ from app.services.pdf_template import (
     format_pdf_datetime,
     pdf_theme,
 )
+from app.services.request_notifications import create_request_workflow_message
 from app.services.workflow import (
     IMPLEMENTATION_STEP_ROLES,
     advance_workflow,
@@ -59,11 +61,20 @@ ROLE_LABELS = {
     "direct_manager": "المدير المباشر",
     "information_security": "أمن المعلومات",
     "it_manager": "مدير تقنية المعلومات",
-    "it_staff": "فريق تقنية المعلومات",
+    "it_staff": "موظف تنفيذ",
     "executive_management": "الإدارة التنفيذية",
     "implementation_engineer": "مهندس التنفيذ",
     "implementation": "التنفيذ",
     "execution": "التنفيذ",
+}
+MESSAGE_DEFAULT_ROLES = {
+    UserRole.EMPLOYEE,
+    UserRole.DIRECT_MANAGER,
+    UserRole.IT_STAFF,
+    UserRole.IT_MANAGER,
+    UserRole.INFOSEC,
+    UserRole.EXECUTIVE,
+    UserRole.SUPER_ADMIN,
 }
 FIELD_LABELS = {
     "source_ip": "عنوان المصدر",
@@ -139,6 +150,117 @@ def unassigned_it_staff_can_cover_request(db: Session, service_request: ServiceR
         .where(User.role == UserRole.IT_STAFF, User.is_active == True, User.administrative_section == request_section)
     ) or 0
     return section_staff_count == 0
+
+
+def user_has_messages_screen(db: Session, user: User) -> bool:
+    setting = db.scalar(select(PortalSetting).where(PortalSetting.category == "screen_permissions", PortalSetting.setting_key == str(user.id)))
+    if not setting:
+        return user.role in MESSAGE_DEFAULT_ROLES
+    value = setting.setting_value if isinstance(setting.setting_value, dict) else {}
+    screens = value.get("screens", [])
+    if not isinstance(screens, list):
+        return False
+    if "messages_permission_initialized" not in value and user.role in MESSAGE_DEFAULT_ROLES:
+        return True
+    return "messages" in screens
+
+
+def first_request_notification_recipients(db: Session, service_request: ServiceRequest, actor: User) -> list[User]:
+    first_snapshot = next((step for step in sorted(service_request.approval_snapshots or [], key=lambda item: item.sort_order) if step.status == "pending"), None)
+    if not first_snapshot:
+        first_snapshot = db.scalar(
+            select(RequestApprovalStep)
+            .where(RequestApprovalStep.request_id == service_request.id, RequestApprovalStep.status == "pending")
+            .order_by(RequestApprovalStep.sort_order)
+            .limit(1)
+        )
+    first_approval = next((step for step in sorted(service_request.approvals or [], key=lambda item: item.step_order) if step.action == ApprovalAction.PENDING), None)
+    if not first_approval:
+        first_approval = db.scalar(
+            select(ApprovalStep)
+            .where(ApprovalStep.request_id == service_request.id, ApprovalStep.action == ApprovalAction.PENDING)
+            .order_by(ApprovalStep.step_order)
+            .limit(1)
+        )
+    recipient_ids: set[int] = set()
+
+    if first_snapshot and first_snapshot.approver_user_id:
+        recipient_ids.add(first_snapshot.approver_user_id)
+
+    role_value = str(first_snapshot.step_type if first_snapshot else first_approval.role if first_approval else "")
+    if role_value == UserRole.DIRECT_MANAGER.value:
+        manager_id = actor.manager_id or (service_request.requester.manager_id if service_request.requester else None)
+        if manager_id:
+            recipient_ids.add(manager_id)
+    elif role_value in IMPLEMENTATION_STEP_ROLES:
+        form_data = service_request.form_data or {}
+        request_section = form_data.get("assigned_section") or form_data.get("administrative_section")
+        stmt = select(User).where(User.is_active == True, User.role.in_([UserRole.IT_STAFF, UserRole.IT_MANAGER]))
+        if request_section:
+            stmt = stmt.where(or_(User.role == UserRole.IT_MANAGER, User.administrative_section == request_section))
+        recipient_ids.update(user.id for user in db.scalars(stmt).all())
+    elif role_value:
+        try:
+            role = UserRole(role_value)
+            recipient_ids.update(user.id for user in db.scalars(select(User).where(User.is_active == True, User.role == role)).all())
+        except ValueError:
+            recipient_ids.update(user.id for user in db.scalars(select(User).where(User.is_active == True, User.role == UserRole.IT_MANAGER)).all())
+
+    if not recipient_ids and actor.manager_id:
+        recipient_ids.add(actor.manager_id)
+
+    recipient_ids.discard(actor.id)
+    if not recipient_ids:
+        return []
+    users = db.scalars(select(User).where(User.id.in_(sorted(recipient_ids)), User.is_active == True)).all()
+    return [user for user in users if user_has_messages_screen(db, user)]
+
+
+def create_request_created_message(db: Session, service_request: ServiceRequest, actor: User) -> None:
+    existing = db.scalar(
+        select(InternalMessage.id)
+        .where(
+            InternalMessage.related_request_id == service_request.id,
+            InternalMessage.message_type == "notification",
+            InternalMessage.subject == f"إشعار بطلب جديد: {service_request.request_number}",
+        )
+        .limit(1)
+    )
+    if existing:
+        return
+    recipients = first_request_notification_recipients(db, service_request, actor)
+    if not recipients:
+        return
+    form_data = service_request.form_data or {}
+    request_type_label = form_data.get("request_type_label") or str(service_request.request_type)
+    priority = PRIORITY_LABELS.get(str(service_request.priority), str(service_request.priority or "-"))
+    status_label = STATUS_LABELS.get(str(service_request.status), str(service_request.status or "-"))
+    body = "\n".join(
+        [
+            "تم إنشاء طلب جديد ويحتاج إلى المتابعة.",
+            "",
+            f"رقم الطلب: {service_request.request_number}",
+            f"عنوان الطلب: {service_request.title}",
+            f"نوع الطلب: {request_type_label}",
+            f"الأولوية: {priority}",
+            f"الحالة: {status_label}",
+            f"مقدم الطلب: {actor.full_name_ar or actor.email}",
+            "",
+            f"مبرر الطلب: {service_request.business_justification or '-'}",
+        ]
+    )
+    message = InternalMessage(
+        sender_id=actor.id,
+        message_type="notification",
+        subject=f"إشعار بطلب جديد: {service_request.request_number}",
+        body=body,
+        related_request_id=service_request.id,
+    )
+    db.add(message)
+    db.flush()
+    message.thread_id = message.id
+    for recipient in recipients:
+        db.add(InternalMessageRecipient(message_id=message.id, recipient_id=recipient.id))
 
 
 def request_query():
@@ -585,6 +707,8 @@ def create_request(payload: ServiceRequestCreate, db: Session = Depends(get_db),
         service_request.status = RequestStatus.PENDING_APPROVAL
     else:
         create_approval_steps(db, service_request)
+    if payload.send_notification:
+        create_request_created_message(db, service_request, current_user)
     write_audit(db, "request_created", "service_request", actor=current_user, entity_id=str(service_request.id))
     db.commit()
     return enrich_approval_steps(db, db.scalar(request_query().where(ServiceRequest.id == service_request.id)))
@@ -657,6 +781,8 @@ def decide(request_id: int, payload: ApprovalDecision, db: Session = Depends(get
         raise HTTPException(status_code=404, detail="Request not found")
     try:
         advance_workflow(db, service_request, current_user, payload.action, payload.note)
+        db.flush()
+        create_request_workflow_message(db, service_request, current_user, payload.action, payload.note)
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:

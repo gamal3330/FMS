@@ -1,6 +1,6 @@
 {
-  "version": "v1.1.0",
-  "release": "professional-update-manager",
+  "version": "v1.1.11",
+  "release": "message-tracking-ids",
   "application": "QIB IT Service Portal",
   "package_type": "full",
   "required_roots": [
@@ -8,5 +8,5 @@
     "frontend",
     "scripts"
   ],
-  "notes": "Adds professional update tracking, migration execution, health diagnostics, and performance indexes."
+  "notes": "Adds unique tracking IDs for internal messages and enables searching messages by their tracking number."
 }

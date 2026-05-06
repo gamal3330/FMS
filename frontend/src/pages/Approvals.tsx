@@ -40,7 +40,7 @@ const roleLabels: Record<string, string> = {
   direct_manager: "المدير المباشر",
   information_security: "أمن المعلومات",
   it_manager: "مدير تقنية المعلومات",
-  it_staff: "فريق تقنية المعلومات",
+  it_staff: "موظف تنفيذ",
   executive_management: "الإدارة التنفيذية",
   implementation_engineer: "مهندس التنفيذ",
   implementation: "التنفيذ",

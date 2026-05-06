@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from sqlalchemy import func, inspect, select, text
 from sqlalchemy.orm import Session
 
@@ -20,7 +22,7 @@ DEFAULT_DEPARTMENTS = [
 DEFAULT_ROLES = [
     ("employee", "موظف"),
     ("direct_manager", "مدير مباشر"),
-    ("it_staff", "فريق تقنية المعلومات"),
+    ("it_staff", "موظف تنفيذ"),
     ("it_manager", "مدير تقنية المعلومات"),
     ("information_security", "أمن المعلومات"),
     ("executive_management", "الإدارة التنفيذية"),
@@ -44,6 +46,48 @@ DEFAULT_REQUEST_TYPES = [
     ("طلب تركيب / نقل جهاز كمبيوتر", "Computer Install/Move", "COMPUTER_MOVE", "hardware", "نقل أو تركيب جهاز كمبيوتر", 4, 24, ["asset_tag", "current_location", "new_location", "reason"], ["Direct Manager", "IT Manager", "Implementation Engineer"]),
     ("طلب دعم فني", "Support Ticket", "SUPPORT", "support", "تذكرة دعم فني", 2, 8, ["affected_user", "category", "issue_description"], ["IT Staff", "Implementation Engineer"]),
 ]
+
+
+def _message_tracking_year(created_at) -> int:
+    if isinstance(created_at, datetime):
+        return created_at.year
+    value = str(created_at or "").strip()
+    if len(value) >= 4 and value[:4].isdigit():
+        return int(value[:4])
+    return datetime.utcnow().year
+
+
+def ensure_message_tracking_ids(db: Session) -> None:
+    used = {
+        row[0]
+        for row in db.execute(
+            text("SELECT message_uid FROM internal_messages WHERE message_uid IS NOT NULL AND message_uid <> ''")
+        ).all()
+        if row[0]
+    }
+    counters: dict[int, int] = {}
+    rows = db.execute(
+        text(
+            """
+            SELECT id, created_at
+            FROM internal_messages
+            WHERE message_uid IS NULL OR message_uid = ''
+            ORDER BY id
+            """
+        )
+    ).all()
+    for message_id, created_at in rows:
+        year = _message_tracking_year(created_at)
+        counters[year] = counters.get(year, 0) + 1
+        message_uid = f"MSG-{year}-{counters[year]:06d}"
+        while message_uid in used:
+            counters[year] += 1
+            message_uid = f"MSG-{year}-{counters[year]:06d}"
+        used.add(message_uid)
+        db.execute(
+            text("UPDATE internal_messages SET message_uid = :message_uid WHERE id = :message_id"),
+            {"message_uid": message_uid, "message_id": message_id},
+        )
 
 
 def ensure_sqlite_dev_columns(db: Session) -> None:
@@ -126,9 +170,47 @@ def ensure_sqlite_dev_columns(db: Session) -> None:
 
 def ensure_runtime_columns(db: Session) -> None:
     inspector = inspect(db.bind)
+    table_names = set(inspector.get_table_names())
+    if "security_policies" in table_names:
+        security_columns = {column["name"] for column in inspector.get_columns("security_policies")}
+        if "login_identifier_mode" not in security_columns:
+            db.execute(text("ALTER TABLE security_policies ADD COLUMN login_identifier_mode VARCHAR(30) DEFAULT 'email_or_employee_id'"))
+            db.commit()
+        if "temporary_password" not in security_columns:
+            db.execute(text("ALTER TABLE security_policies ADD COLUMN temporary_password VARCHAR(128) DEFAULT 'Change@12345'"))
+            db.execute(text("UPDATE security_policies SET temporary_password = 'Change@12345' WHERE temporary_password IS NULL OR temporary_password = ''"))
+            db.commit()
     workflow_columns = {column["name"] for column in inspector.get_columns("workflow_template_steps")}
     if "return_to_step_order" not in workflow_columns:
         db.execute(text("ALTER TABLE workflow_template_steps ADD COLUMN return_to_step_order INTEGER"))
+        db.commit()
+    if "internal_messages" in table_names:
+        message_columns = {column["name"] for column in inspector.get_columns("internal_messages")}
+        if "thread_id" not in message_columns:
+            db.execute(text("ALTER TABLE internal_messages ADD COLUMN thread_id INTEGER"))
+            db.commit()
+        if "message_type" not in message_columns:
+            db.execute(text("ALTER TABLE internal_messages ADD COLUMN message_type VARCHAR(40) DEFAULT 'internal_correspondence'"))
+            db.execute(text("UPDATE internal_messages SET message_type = 'internal_correspondence' WHERE message_type IS NULL OR message_type = ''"))
+            db.commit()
+        if "is_sender_archived" not in message_columns:
+            default_value = "0" if db.bind and db.bind.dialect.name == "sqlite" else "false"
+            db.execute(text(f"ALTER TABLE internal_messages ADD COLUMN is_sender_archived BOOLEAN DEFAULT {default_value}"))
+            db.commit()
+        if "is_draft" not in message_columns:
+            default_value = "0" if db.bind and db.bind.dialect.name == "sqlite" else "false"
+            db.execute(text(f"ALTER TABLE internal_messages ADD COLUMN is_draft BOOLEAN DEFAULT {default_value}"))
+            db.commit()
+        if "updated_at" not in message_columns:
+            column_type = "DATETIME" if db.bind and db.bind.dialect.name == "sqlite" else "TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP"
+            db.execute(text(f"ALTER TABLE internal_messages ADD COLUMN updated_at {column_type}"))
+            db.execute(text("UPDATE internal_messages SET updated_at = created_at WHERE updated_at IS NULL"))
+            db.commit()
+        if "message_uid" not in message_columns:
+            db.execute(text("ALTER TABLE internal_messages ADD COLUMN message_uid VARCHAR(40)"))
+            db.commit()
+        ensure_message_tracking_ids(db)
+        db.execute(text('CREATE UNIQUE INDEX IF NOT EXISTS "idx_internal_messages_message_uid" ON "internal_messages" (message_uid)'))
         db.commit()
 
 
@@ -216,8 +298,11 @@ def seed_database(db: Session) -> None:
     db.flush()
 
     for name, label_ar in DEFAULT_ROLES:
-        if not db.scalar(select(Role).where(Role.name == name)):
+        role = db.scalar(select(Role).where(Role.name == name))
+        if not role:
             db.add(Role(name=name, label_ar=label_ar))
+        elif name == "it_staff" and role.label_ar != label_ar:
+            role.label_ar = label_ar
     db.flush()
 
     admin = db.scalar(select(User).where(User.email == settings.seed_admin_email))

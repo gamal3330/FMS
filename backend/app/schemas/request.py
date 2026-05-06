@@ -12,6 +12,7 @@ class ServiceRequestCreate(BaseModel):
     priority: Priority = Priority.MEDIUM
     form_data: dict = Field(default_factory=dict)
     business_justification: str | None = None
+    send_notification: bool = True
 
 
 class ServiceRequestUpdate(BaseModel):

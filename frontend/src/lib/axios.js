@@ -13,7 +13,12 @@ api.interceptors.request.use((config) => {
 });
 
 export function getErrorMessage(error) {
+  if (!error?.response) {
+    return error?.message || "تعذر الاتصال بالخادم. تحقق من تشغيل النظام ثم حاول مرة أخرى.";
+  }
+
   const detail = error?.response?.data?.detail;
+  const data = error?.response?.data;
 
   if (Array.isArray(detail)) {
     return detail
@@ -34,6 +39,18 @@ export function getErrorMessage(error) {
 
   if (detail && typeof detail === "object") {
     return detail.message || detail.msg || JSON.stringify(detail);
+  }
+
+  if (typeof data === "string" && data.trim()) {
+    return data;
+  }
+
+  if (data && typeof data === "object") {
+    return data.message || data.msg || data.error || JSON.stringify(data);
+  }
+
+  if (error?.response?.status) {
+    return `تعذر تنفيذ العملية. رمز الخطأ: ${error.response.status}`;
   }
 
   return "تعذر تنفيذ العملية. يرجى المحاولة مرة أخرى.";

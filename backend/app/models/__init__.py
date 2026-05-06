@@ -1,5 +1,6 @@
 from app.models.audit import AuditLog
 from app.models.health import SystemAlert, SystemHealthCheck
+from app.models.message import InternalMessage, InternalMessageAttachment, InternalMessageRecipient
 from app.models.notification import Notification
 from app.models.request import ApprovalStep, Attachment, RequestApprovalStep, RequestComment, ServiceRequest
 from app.models.settings import (
@@ -30,6 +31,9 @@ __all__ = [
     "Attachment",
     "Department",
     "IntegrationConfig",
+    "InternalMessage",
+    "InternalMessageAttachment",
+    "InternalMessageRecipient",
     "Notification",
     "PortalSetting",
     "SettingsGeneral",

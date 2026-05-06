@@ -73,3 +73,48 @@ th, td {
   color: rgb(0 0 0 / 0.55) !important;
   opacity: 1;
 }
+
+.message-rich-editor:empty::before {
+  content: attr(data-placeholder);
+  color: rgb(100 116 139 / 0.75);
+  pointer-events: none;
+}
+
+.message-rich-editor :where(b, strong) {
+  font-weight: 800;
+}
+
+.message-rich-editor :where(i, em) {
+  font-style: italic;
+}
+
+.message-rich-editor :where(u) {
+  text-decoration: underline;
+}
+
+.message-rich-editor :where(s, strike) {
+  text-decoration: line-through;
+}
+
+.message-rich-editor :where(ul, ol) {
+  margin: 0.5rem 1.25rem;
+  padding: 0;
+}
+
+.message-rich-editor :where(blockquote) {
+  border-right: 3px solid rgb(13 99 55);
+  margin: 0.75rem 0;
+  padding: 0.5rem 0.75rem;
+  background: rgb(248 250 252);
+}
+
+@keyframes toastIn {
+  from {
+    opacity: 0;
+    transform: translateY(-10px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}

@@ -225,6 +225,8 @@ class SecurityPolicy(Base):
     require_numbers: Mapped[bool] = mapped_column(Boolean, default=True)
     require_special_chars: Mapped[bool] = mapped_column(Boolean, default=True)
     mfa_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    login_identifier_mode: Mapped[str] = mapped_column(String(30), default="email_or_employee_id")
+    temporary_password: Mapped[str] = mapped_column(String(128), default="Change@12345")
     lock_after_failed_attempts: Mapped[int] = mapped_column(Integer, default=5)
     password_expiry_days: Mapped[int] = mapped_column(Integer, default=90)
 
