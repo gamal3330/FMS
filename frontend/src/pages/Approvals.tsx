@@ -1,9 +1,11 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { AlertTriangle, CheckCircle2, Circle, Clock3, Download, ExternalLink, FileCheck2, FileText, Filter, Image as ImageIcon, Paperclip, RefreshCw, RotateCcw, Search, Send, UserCheck, XCircle } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import { API_BASE, apiFetch, ApprovalAction, ApprovalStep, Attachment, CurrentUser, ServiceRequest } from "../lib/api";
 import { formatSystemDateTime } from "../lib/datetime";
 import { Button } from "../components/ui/button";
 import { Card } from "../components/ui/card";
+import { Pagination } from "../components/ui/Pagination";
 
 const requestTypeLabels: Record<string, string> = {
   email: "طلبات البريد الإلكتروني",
@@ -80,6 +82,8 @@ const actionLabels: Record<ApprovalAction, string> = {
   skipped: "تم التجاوز"
 };
 
+const approvalsPageSize = 12;
+
 function getCurrentStep(request?: ServiceRequest) {
   return [...(request?.approvals ?? [])].sort((first, second) => first.step_order - second.step_order).find((step) => step.action === "pending") ?? null;
 }
@@ -151,6 +155,7 @@ function isActionableForUser(step: ApprovalStep | null, user: CurrentUser | null
 }
 
 export function Approvals() {
+  const navigate = useNavigate();
   const [requests, setRequests] = useState<ServiceRequest[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [decision, setDecision] = useState<"approved" | "rejected" | "returned_for_edit">("approved");
@@ -162,6 +167,7 @@ export function Approvals() {
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
   const [search, setSearch] = useState("");
   const [statusView, setStatusView] = useState<"all" | "pending" | "done">("pending");
+  const [approvalsPage, setApprovalsPage] = useState(1);
 
   const selectedRequest = useMemo(
     () => (selectedId ? requests.find((request) => request.id === selectedId) : undefined),
@@ -188,16 +194,25 @@ export function Approvals() {
       return matchesSearch && matchesStatus;
     });
   }, [requests, search, statusView, currentUser]);
+  const paginatedRequests = useMemo(() => {
+    const start = (approvalsPage - 1) * approvalsPageSize;
+    return filteredRequests.slice(start, start + approvalsPageSize);
+  }, [filteredRequests, approvalsPage]);
 
   useEffect(() => {
-    if (filteredRequests.length === 0) {
+    const totalPages = Math.max(1, Math.ceil(filteredRequests.length / approvalsPageSize));
+    if (approvalsPage > totalPages) {
+      setApprovalsPage(totalPages);
+      return;
+    }
+    if (paginatedRequests.length === 0) {
       setSelectedId(null);
       return;
     }
-    if (!selectedId || !filteredRequests.some((request) => request.id === selectedId)) {
-      setSelectedId(filteredRequests[0].id);
+    if (!selectedId || !paginatedRequests.some((request) => request.id === selectedId)) {
+      setSelectedId(paginatedRequests[0].id);
     }
-  }, [filteredRequests, selectedId]);
+  }, [filteredRequests.length, paginatedRequests, selectedId, approvalsPage]);
 
   async function loadApprovals() {
     setIsLoading(true);
@@ -281,14 +296,24 @@ export function Approvals() {
           <Search className="pointer-events-none absolute right-3 top-2.5 h-4 w-4 text-slate-400" />
           <input
             value={search}
-            onChange={(event) => setSearch(event.target.value)}
+            onChange={(event) => {
+              setSearch(event.target.value);
+              setApprovalsPage(1);
+            }}
             placeholder="بحث برقم الطلب أو الموظف أو القسم المختص"
             className="h-10 w-full rounded-md border border-slate-300 bg-white pr-9 pl-3 text-sm outline-none focus:border-bank-600 focus:ring-2 focus:ring-bank-100"
           />
         </div>
         <div className="flex items-center gap-2">
           <Filter className="h-4 w-4 text-slate-400" />
-          <select value={statusView} onChange={(event) => setStatusView(event.target.value as "all" | "pending" | "done")} className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm">
+          <select
+            value={statusView}
+            onChange={(event) => {
+              setStatusView(event.target.value as "all" | "pending" | "done");
+              setApprovalsPage(1);
+            }}
+            className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm"
+          >
             <option value="pending">بانتظار الإجراء</option>
             <option value="all">كل الطلبات</option>
             <option value="done">المنتهية</option>
@@ -321,7 +346,7 @@ export function Approvals() {
           </div>
           <div className="max-h-[720px] overflow-y-auto">
             {filteredRequests.length === 0 && <p className="p-5 text-sm text-slate-500">لا توجد طلبات مطابقة حالياً.</p>}
-            {filteredRequests.map((request) => (
+            {paginatedRequests.map((request) => (
               <button
                 key={request.id}
                 onClick={() => {
@@ -352,6 +377,7 @@ export function Approvals() {
               </button>
             ))}
           </div>
+          <Pagination page={approvalsPage} totalItems={filteredRequests.length} pageSize={approvalsPageSize} onPageChange={setApprovalsPage} />
         </Card>
 
         <div className="space-y-5">
@@ -377,6 +403,14 @@ export function Approvals() {
                     <span className="rounded-md bg-bank-50 px-3 py-2 text-sm font-semibold text-bank-700">
                       {statusLabels[selectedRequest.status] ?? selectedRequest.status}
                     </span>
+                    <button
+                      type="button"
+                      onClick={() => navigate(`/requests/${selectedRequest.id}`)}
+                      className="inline-flex h-10 items-center gap-2 rounded-md border border-bank-100 bg-bank-50 px-3 text-sm font-semibold text-bank-700 hover:bg-bank-100"
+                    >
+                      <ExternalLink className="h-4 w-4" />
+                      تفاصيل الطلب
+                    </button>
                     <button
                       type="button"
                       onClick={() => handleRequestPdf(selectedRequest, "download")}

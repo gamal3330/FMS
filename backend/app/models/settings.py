@@ -26,6 +26,10 @@ class SettingsGeneral(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     system_name: Mapped[str] = mapped_column(String(160), default="QIB IT Service Portal")
+    login_intro_text: Mapped[str] = mapped_column(
+        Text,
+        default="منصة داخلية موحدة لاستقبال الطلبات، تتبع مراحل الاعتماد، مراقبة مؤشرات الخدمة، وتوثيق الأثر التشغيلي.",
+    )
     logo_url: Mapped[str | None] = mapped_column(String(255))
     brand_color: Mapped[str] = mapped_column(String(7), default="#0d6337")
     language: Mapped[str] = mapped_column(String(20), default="Arabic")

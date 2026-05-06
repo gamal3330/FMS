@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT_DIR="${PROJECT_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 BACKEND_DIR="$ROOT_DIR/backend"
 BACKEND_PORT="${BACKEND_PORT:-8000}"
+BACKEND_HOST="${BACKEND_HOST:-127.0.0.1}"
 CURRENT_BACKEND_PID="${CURRENT_BACKEND_PID:-}"
 
 pick_python() {
@@ -56,7 +57,7 @@ EXPAT_LIB="/opt/homebrew/opt/expat/lib"
 
 cd "$BACKEND_DIR"
 if [ -d "$EXPAT_LIB" ]; then
-  nohup env "DYLD_LIBRARY_PATH=$EXPAT_LIB" "$PYTHON_BIN" -m uvicorn app.main:app --host 0.0.0.0 --port "$BACKEND_PORT" >> "$BACKEND_DIR/uvicorn.out.log" 2>> "$BACKEND_DIR/uvicorn.err.log" &
+  nohup env "DYLD_LIBRARY_PATH=$EXPAT_LIB" "$PYTHON_BIN" -m uvicorn app.main:app --host "$BACKEND_HOST" --port "$BACKEND_PORT" >> "$BACKEND_DIR/uvicorn.out.log" 2>> "$BACKEND_DIR/uvicorn.err.log" &
 else
-  nohup "$PYTHON_BIN" -m uvicorn app.main:app --host 0.0.0.0 --port "$BACKEND_PORT" >> "$BACKEND_DIR/uvicorn.out.log" 2>> "$BACKEND_DIR/uvicorn.err.log" &
+  nohup "$PYTHON_BIN" -m uvicorn app.main:app --host "$BACKEND_HOST" --port "$BACKEND_PORT" >> "$BACKEND_DIR/uvicorn.out.log" 2>> "$BACKEND_DIR/uvicorn.err.log" &
 fi

@@ -1,5 +1,5 @@
 import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
-import { FilePlus2, Laptop, Mail, MessageSquare, Network, RefreshCw, Router, RotateCcw, Save, Search, Send, Shield, Ticket, Upload } from "lucide-react";
+import { Eye, FilePlus2, Laptop, Mail, MessageSquare, Network, RefreshCw, Router, RotateCcw, Save, Search, Send, Shield, Ticket, Upload } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { API_BASE, apiFetch, CurrentUser, ServiceRequest } from "../lib/api";
 import { formatSystemDate } from "../lib/datetime";
@@ -7,6 +7,7 @@ import { Button } from "../components/ui/button";
 import { Card } from "../components/ui/card";
 import FeedbackDialog from "../components/ui/FeedbackDialog";
 import { Input } from "../components/ui/input";
+import { Pagination } from "../components/ui/Pagination";
 
 type RequestType = string;
 type Priority = "low" | "medium" | "high" | "critical";
@@ -216,6 +217,8 @@ const statusLabels: Record<string, string> = {
   cancelled: "ملغي"
 };
 
+const requestPageSize = 10;
+
 export function Requests() {
   const navigate = useNavigate();
   const [items, setItems] = useState<ServiceRequest[]>([]);
@@ -239,6 +242,7 @@ export function Requests() {
   const [linkedMessages, setLinkedMessages] = useState<LinkedMessage[]>([]);
   const [isLinkedMessagesLoading, setIsLinkedMessagesLoading] = useState(false);
   const [requestSearch, setRequestSearch] = useState("");
+  const [requestsPage, setRequestsPage] = useState(1);
 
   const availableRequestTypes = useMemo(() => managedRequestTypes, [managedRequestTypes]);
   const selectedType = useMemo(
@@ -264,6 +268,15 @@ export function Requests() {
       return searchable.includes(term);
     });
   }, [items, requestSearch, sectionLabels]);
+  const paginatedItems = useMemo(() => {
+    const start = (requestsPage - 1) * requestPageSize;
+    return filteredItems.slice(start, start + requestPageSize);
+  }, [filteredItems, requestsPage]);
+
+  useEffect(() => {
+    const totalPages = Math.max(1, Math.ceil(filteredItems.length / requestPageSize));
+    if (requestsPage > totalPages) setRequestsPage(totalPages);
+  }, [filteredItems.length, requestsPage]);
 
   function updateField(name: string, value: string) {
     setFormData((current) => ({ ...current, [name]: value }));
@@ -679,7 +692,10 @@ export function Requests() {
               <Search className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
               <Input
                 value={requestSearch}
-                onChange={(event) => setRequestSearch(event.target.value)}
+                onChange={(event) => {
+                  setRequestSearch(event.target.value);
+                  setRequestsPage(1);
+                }}
                 placeholder="بحث برقم الطلب أو العنوان أو الحالة"
                 className="pr-10"
               />
@@ -689,14 +705,14 @@ export function Requests() {
           <div className="overflow-hidden">
             <table className="w-full table-fixed text-sm">
               <colgroup>
-                <col className="w-[15%]" />
-                <col className="w-[23%]" />
+                <col className="w-[14%]" />
+                <col className="w-[22%]" />
                 <col className="w-[14%]" />
                 <col className="w-[14%]" />
-                <col className="w-[11%]" />
+                <col className="w-[10%]" />
                 <col className="w-[9%]" />
                 <col className="w-[9%]" />
-                <col className="w-[5%]" />
+                <col className="w-[8%]" />
               </colgroup>
               <thead className="bg-slate-50 text-xs font-bold text-slate-600">
                 <tr>
@@ -718,7 +734,7 @@ export function Requests() {
                     </td>
                   </tr>
                 )}
-                {filteredItems.map((item) => (
+                {paginatedItems.map((item) => (
                   <tr key={item.id} className="align-top hover:bg-slate-50">
                     <td className="px-3 py-4">
                       <span className="block break-words text-sm font-black leading-6 text-bank-700">{item.request_number}</span>
@@ -734,6 +750,14 @@ export function Requests() {
                     <td className="px-3 py-4">
                       {item.status === "returned_for_edit" && currentUser?.id === item.requester?.id ? (
                         <div className="flex flex-col gap-2">
+                          <button
+                            type="button"
+                            onClick={() => navigate(`/requests/${item.id}`)}
+                            className="inline-flex h-9 items-center justify-center rounded-md border border-bank-100 bg-bank-50 px-2 text-xs font-bold text-bank-700 hover:bg-bank-100"
+                            title="تفاصيل الطلب"
+                          >
+                            <Eye className="h-4 w-4" />
+                          </button>
                           <button
                             type="button"
                             onClick={() => beginEditReturnedRequest(item)}
@@ -752,14 +776,24 @@ export function Requests() {
                           </button>
                         </div>
                       ) : (
-                        <button
-                          type="button"
-                          onClick={() => showLinkedMessages(item)}
-                          className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
-                          title="المراسلات"
-                        >
-                          <MessageSquare className="h-4 w-4" />
-                        </button>
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            onClick={() => navigate(`/requests/${item.id}`)}
+                            className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-bank-100 bg-bank-50 text-bank-700 hover:bg-bank-100"
+                            title="تفاصيل الطلب"
+                          >
+                            <Eye className="h-4 w-4" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => showLinkedMessages(item)}
+                            className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                            title="المراسلات"
+                          >
+                            <MessageSquare className="h-4 w-4" />
+                          </button>
+                        </div>
                       )}
                     </td>
                   </tr>
@@ -767,6 +801,7 @@ export function Requests() {
               </tbody>
             </table>
           </div>
+          <Pagination page={requestsPage} totalItems={filteredItems.length} pageSize={requestPageSize} onPageChange={setRequestsPage} />
         </Card>
 
         {linkedRequest && (

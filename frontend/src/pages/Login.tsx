@@ -7,13 +7,17 @@ import { Input } from "../components/ui/input";
 
 type PublicProfile = {
   system_name?: string;
+  login_intro_text?: string;
   logo_url?: string | null;
   brand_color?: string | null;
   login_identifier_mode?: "email" | "employee_id" | "email_or_employee_id";
 };
 
+const defaultLoginIntroText = "منصة داخلية موحدة لاستقبال الطلبات، تتبع مراحل الاعتماد، مراقبة مؤشرات الخدمة، وتوثيق الأثر التشغيلي.";
+
 export function Login({ onLogin }: { onLogin: (token: string) => void }) {
   const [systemName, setSystemName] = useState(() => localStorage.getItem("qib_system_name") || "");
+  const [loginIntroText, setLoginIntroText] = useState(defaultLoginIntroText);
   const [logoUrl, setLogoUrl] = useState(() => localStorage.getItem("qib_logo_url") || "");
   const [email, setEmail] = useState("admin@qib.internal-bank.qa");
   const [loginIdentifierMode, setLoginIdentifierMode] = useState<PublicProfile["login_identifier_mode"]>("email_or_employee_id");
@@ -38,6 +42,7 @@ export function Login({ onLogin }: { onLogin: (token: string) => void }) {
         if (!profile) return;
         applyBranding(profile);
         if (profile.system_name) setSystemName(profile.system_name);
+        setLoginIntroText(profile.login_intro_text || defaultLoginIntroText);
         setLogoUrl(profile.logo_url || "");
         setLoginIdentifierMode(profile.login_identifier_mode || "email_or_employee_id");
         if (profile.brand_color) applyBrandColor(profile.brand_color);
@@ -65,7 +70,7 @@ export function Login({ onLogin }: { onLogin: (token: string) => void }) {
       const data = await response.json();
       onLogin(data.access_token);
     } catch {
-      setError("الخدمة غير متاحة حالياً. يرجى المحاولة لاحقاً.");
+      setError("الخادم الخلفي غير متصل حالياً. شغّل backend على المنفذ 8000 ثم حاول مرة أخرى.");
     } finally {
       setIsLoading(false);
     }
@@ -100,7 +105,7 @@ export function Login({ onLogin }: { onLogin: (token: string) => void }) {
             <div className="max-w-3xl pb-6">
               <h1 className="text-5xl font-bold leading-tight">{systemName}</h1>
               <p className="mt-5 max-w-2xl text-lg leading-8 text-black/80">
-                منصة داخلية موحدة لاستقبال الطلبات، تتبع مراحل الاعتماد، مراقبة مؤشرات الخدمة، وتوثيق الأثر التشغيلي.
+                {loginIntroText}
               </p>
             </div>
           </div>
@@ -164,10 +169,17 @@ export function Login({ onLogin }: { onLogin: (token: string) => void }) {
 }
 
 async function readLoginError(response: Response) {
+  if ([502, 503, 504].includes(response.status)) {
+    return "الخادم الخلفي غير متصل حالياً. شغّل backend على المنفذ 8000 ثم حاول مرة أخرى.";
+  }
   try {
     const data = await response.json();
     if (typeof data.detail === "string") return data.detail;
   } catch {
+    const text = await response.text().catch(() => "");
+    if (text.toLowerCase().includes("bad gateway")) {
+      return "الخادم الخلفي غير متصل حالياً. شغّل backend على المنفذ 8000 ثم حاول مرة أخرى.";
+    }
     return "تعذر تسجيل الدخول. يرجى التحقق من البريد الإلكتروني وكلمة المرور.";
   }
   return "تعذر تسجيل الدخول. يرجى التحقق من البريد الإلكتروني وكلمة المرور.";

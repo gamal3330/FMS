@@ -7,6 +7,7 @@ import { Input } from "../ui/input";
 
 const defaults = {
   system_name: "",
+  login_intro_text: "منصة داخلية موحدة لاستقبال الطلبات، تتبع مراحل الاعتماد، مراقبة مؤشرات الخدمة، وتوثيق الأثر التشغيلي.",
   language: "ar",
   timezone: "Asia/Qatar",
   session_timeout_minutes: 60,
@@ -91,6 +92,19 @@ export default function GeneralSettings({ notify }) {
   return (
     <form onSubmit={save} className="grid gap-4 text-right md:grid-cols-2" dir="rtl">
       <Field label="اسم النظام" value={form.system_name} onChange={(value) => setForm({ ...form, system_name: value })} />
+      <label className="block space-y-2 text-sm font-medium text-slate-700 md:col-span-2">
+        النص التعريفي في شاشة تسجيل الدخول
+        <textarea
+          value={form.login_intro_text || ""}
+          onChange={(event) => setForm({ ...form, login_intro_text: event.target.value })}
+          rows={3}
+          maxLength={500}
+          required
+          className="w-full resize-y rounded-md border border-slate-300 bg-white px-3 py-2 text-sm leading-7 outline-none focus:border-bank-600 focus:ring-2 focus:ring-bank-100"
+          placeholder="اكتب النص الذي يظهر في شاشة تسجيل الدخول"
+        />
+        <span className="block text-xs font-normal text-slate-500">{(form.login_intro_text || "").length}/500</span>
+      </label>
       <label className="block space-y-2 text-sm font-medium text-slate-700">
         لون هوية النظام HEX
         <div className="grid grid-cols-[56px_1fr] gap-2">
@@ -142,6 +156,7 @@ export default function GeneralSettings({ notify }) {
 function applyLocalSettings(settings) {
   applyBranding({
     system_name: settings.system_name || defaults.system_name,
+    login_intro_text: settings.login_intro_text || defaults.login_intro_text,
     logo_url: settings.logo_url || null,
     brand_color: settings.brand_color || defaults.brand_color,
     timezone: settings.timezone || defaults.timezone

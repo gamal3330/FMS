@@ -5,6 +5,10 @@ from pydantic import BaseModel, Field
 
 class SettingsGeneralPayload(BaseModel):
     system_name: str
+    login_intro_text: str = Field(
+        default="منصة داخلية موحدة لاستقبال الطلبات، تتبع مراحل الاعتماد، مراقبة مؤشرات الخدمة، وتوثيق الأثر التشغيلي.",
+        max_length=500,
+    )
     logo_url: str | None = None
     brand_color: str = Field(default="#0d6337", pattern=r"^#[0-9A-Fa-f]{6}$")
     language: str

@@ -45,6 +45,17 @@ def startup() -> None:
         db.close()
 
 
+@app.get("/", tags=["Health"])
+def root() -> dict[str, object]:
+    return {
+        "status": "running",
+        "service": settings.app_name,
+        "health": "/health",
+        "api": settings.api_v1_prefix,
+        "docs": "/docs",
+    }
+
+
 @app.get("/health", tags=["Health"])
 def health() -> dict[str, object]:
     started = time.perf_counter()

@@ -109,6 +109,7 @@ def ensure_sqlite_dev_columns(db: Session) -> None:
             "password_changed_at": "DATETIME",
         },
         "settings_general": {
+            "login_intro_text": "TEXT",
             "logo_url": "VARCHAR(255)",
             "brand_color": "VARCHAR(7) DEFAULT '#0d6337'",
             "timezone": "VARCHAR(80) DEFAULT 'Asia/Qatar'",
@@ -171,6 +172,21 @@ def ensure_sqlite_dev_columns(db: Session) -> None:
 def ensure_runtime_columns(db: Session) -> None:
     inspector = inspect(db.bind)
     table_names = set(inspector.get_table_names())
+    if "settings_general" in table_names:
+        general_columns = {column["name"] for column in inspector.get_columns("settings_general")}
+        if "login_intro_text" not in general_columns:
+            db.execute(text("ALTER TABLE settings_general ADD COLUMN login_intro_text TEXT"))
+        db.execute(
+            text(
+                """
+                UPDATE settings_general
+                SET login_intro_text = :default_text
+                WHERE login_intro_text IS NULL OR login_intro_text = ''
+                """
+            ),
+            {"default_text": "منصة داخلية موحدة لاستقبال الطلبات، تتبع مراحل الاعتماد، مراقبة مؤشرات الخدمة، وتوثيق الأثر التشغيلي."},
+        )
+        db.commit()
     if "security_policies" in table_names:
         security_columns = {column["name"] for column in inspector.get_columns("security_policies")}
         if "login_identifier_mode" not in security_columns:

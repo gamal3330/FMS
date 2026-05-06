@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Activity, AlertTriangle, CheckCircle2, Clock, Database, HardDrive, RefreshCw, Server, Trash2, XCircle } from "lucide-react";
+import { Activity, AlertTriangle, CheckCircle2, Clock, Database, HardDrive, LogIn, RefreshCw, Server, Trash2, XCircle } from "lucide-react";
 import { api, getErrorMessage } from "../../lib/axios";
 import { Card } from "../../components/ui/card";
 import { Button } from "../../components/ui/button";
@@ -30,8 +30,20 @@ const iconClasses = {
   critical: "bg-red-100 text-red-700"
 };
 
+const loginActionLabels = {
+  login_success: "دخول ناجح",
+  login_failed: "محاولة فاشلة",
+  login_blocked: "حساب غير نشط",
+  login_blocked_locked: "حساب مقفل",
+  login_locked_after_failures: "قفل بعد محاولات فاشلة",
+  login_password_expired: "كلمة مرور منتهية",
+  logout: "خروج"
+};
+
 export default function HealthMonitoringPage() {
   const [summary, setSummary] = useState(null);
+  const [loginActivity, setLoginActivity] = useState([]);
+  const [loginActivityError, setLoginActivityError] = useState("");
   const [loading, setLoading] = useState(true);
   const [running, setRunning] = useState(false);
   const [clearingLogs, setClearingLogs] = useState(false);
@@ -41,10 +53,18 @@ export default function HealthMonitoringPage() {
   async function load() {
     setError("");
     setNotice("");
+    setLoginActivityError("");
     setLoading(true);
     try {
       const { data } = await api.get("/health/summary");
       setSummary(data);
+      try {
+        const activity = await api.get("/audit-logs/login-activity?limit=30");
+        setLoginActivity(activity.data || []);
+      } catch (error) {
+        setLoginActivity([]);
+        setLoginActivityError(getErrorMessage(error));
+      }
     } catch (error) {
       setError(getErrorMessage(error));
     } finally {
@@ -248,6 +268,57 @@ export default function HealthMonitoringPage() {
               </div>
             </Card>
           </div>
+
+          <Card className="overflow-hidden">
+            <div className="flex flex-col gap-2 border-b border-slate-200 p-4 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <h3 className="font-bold text-slate-950">سجل دخول المستخدمين</h3>
+                <p className="mt-1 text-sm text-slate-500">آخر محاولات الدخول الناجحة والفاشلة مع عنوان الشبكة والمتصفح.</p>
+              </div>
+              <div className="rounded-md bg-bank-50 p-2 text-bank-700">
+                <LogIn className="h-5 w-5" />
+              </div>
+            </div>
+            <div className="overflow-x-auto">
+              {loginActivityError && (
+                <div className="border-b border-amber-200 bg-amber-50 p-4 text-sm font-semibold text-amber-800">
+                  تعذر تحميل سجل الدخول: {loginActivityError}
+                </div>
+              )}
+              <table className="w-full min-w-[920px] text-sm">
+                <thead className="bg-slate-50 text-xs font-bold text-slate-600">
+                  <tr>
+                    <th className="p-3 text-right">النتيجة</th>
+                    <th className="p-3 text-right">المستخدم</th>
+                    <th className="p-3 text-right">المعرّف المستخدم</th>
+                    <th className="p-3 text-right">IP</th>
+                    <th className="p-3 text-right">المحاولات</th>
+                    <th className="p-3 text-right">المتصفح</th>
+                    <th className="p-3 text-right">الوقت</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {loginActivity.map((log) => (
+                    <tr key={log.id} className="hover:bg-slate-50">
+                      <td className="p-3"><LoginActionBadge action={log.action} /></td>
+                      <td className="p-3">
+                        <p className="font-bold text-slate-950">{log.actor_name || "-"}</p>
+                        <p className="mt-1 text-xs text-slate-500">{log.actor_email || ""}</p>
+                      </td>
+                      <td className="p-3 text-slate-700">{log.identifier || "-"}</td>
+                      <td className="p-3 text-slate-700">{log.ip_address || "-"}</td>
+                      <td className="p-3 text-slate-700">{log.failed_login_attempts ?? "-"}</td>
+                      <td className="max-w-[260px] truncate p-3 text-xs text-slate-500" title={log.user_agent || ""}>{log.user_agent || "-"}</td>
+                      <td className="p-3 text-slate-600">{log.created_at || "-"}</td>
+                    </tr>
+                  ))}
+                  {!loginActivity.length && (
+                    <tr><td colSpan="7" className="p-6 text-center text-slate-500">لا توجد محاولات دخول مسجلة.</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </Card>
         </>
       )}
     </section>
@@ -288,6 +359,16 @@ function StatusIcon({ status }) {
   if (status === "healthy") return <CheckCircle2 className="h-5 w-5 text-emerald-700" />;
   if (status === "critical") return <XCircle className="h-5 w-5 text-red-700" />;
   return <Activity className="h-5 w-5 text-amber-700" />;
+}
+
+function LoginActionBadge({ action }) {
+  const isSuccess = action === "login_success" || action === "logout";
+  const className = isSuccess ? severityClasses.healthy : action === "login_failed" ? severityClasses.warning : severityClasses.critical;
+  return (
+    <span className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-bold ${className}`}>
+      {loginActionLabels[action] || action}
+    </span>
+  );
 }
 
 function formatMs(value) {

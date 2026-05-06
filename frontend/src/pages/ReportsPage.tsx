@@ -5,6 +5,7 @@ import { Button } from "../components/ui/button";
 import { api } from "../lib/axios";
 import { API_BASE, apiFetch, ServiceRequest } from "../lib/api";
 import { formatSystemDate } from "../lib/datetime";
+import { Pagination } from "../components/ui/Pagination";
 
 const statusLabels: Record<string, string> = {
   draft: "مسودة",
@@ -32,6 +33,7 @@ type ActiveRequestType = {
 };
 
 const emptyFilters: Filters = { from_date: "", to_date: "", employee_id: "", request_type_id: "" };
+const reportsPageSize = 15;
 
 export function ReportsPage() {
   const [filters, setFilters] = useState<Filters>(emptyFilters);
@@ -42,6 +44,7 @@ export function ReportsPage() {
   const [pdfAction, setPdfAction] = useState<{ id: number; action: "preview" | "download" } | null>(null);
   const [viewedRequest, setViewedRequest] = useState<ServiceRequest | null>(null);
   const [error, setError] = useState("");
+  const [reportPage, setReportPage] = useState(1);
 
   async function loadRequests(event?: FormEvent) {
     event?.preventDefault();
@@ -88,6 +91,15 @@ export function ReportsPage() {
       return matchesFrom && matchesTo && matchesEmployee && matchesType;
     });
   }, [filters, requests]);
+  const paginatedRequests = useMemo(() => {
+    const start = (reportPage - 1) * reportsPageSize;
+    return filteredRequests.slice(start, start + reportsPageSize);
+  }, [filteredRequests, reportPage]);
+
+  useEffect(() => {
+    const totalPages = Math.max(1, Math.ceil(filteredRequests.length / reportsPageSize));
+    if (reportPage > totalPages) setReportPage(totalPages);
+  }, [filteredRequests.length, reportPage]);
 
   const summary = useMemo(() => {
     const completed = filteredRequests.filter((request) => ["completed", "closed"].includes(request.status)).length;
@@ -191,23 +203,23 @@ export function ReportsPage() {
 
       <Card className="p-5">
         <form onSubmit={loadRequests} className="grid gap-3 lg:grid-cols-[repeat(4,minmax(0,1fr))_auto]">
-          <Field label="من تاريخ"><input type="date" value={filters.from_date} onChange={(e) => setFilters({ ...filters, from_date: e.target.value })} className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none focus:border-bank-600 focus:ring-2 focus:ring-bank-100" /></Field>
-          <Field label="إلى تاريخ"><input type="date" value={filters.to_date} onChange={(e) => setFilters({ ...filters, to_date: e.target.value })} className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none focus:border-bank-600 focus:ring-2 focus:ring-bank-100" /></Field>
+          <Field label="من تاريخ"><input type="date" value={filters.from_date} onChange={(e) => { setFilters({ ...filters, from_date: e.target.value }); setReportPage(1); }} className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none focus:border-bank-600 focus:ring-2 focus:ring-bank-100" /></Field>
+          <Field label="إلى تاريخ"><input type="date" value={filters.to_date} onChange={(e) => { setFilters({ ...filters, to_date: e.target.value }); setReportPage(1); }} className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none focus:border-bank-600 focus:ring-2 focus:ring-bank-100" /></Field>
           <Field label="الموظف">
-            <select value={filters.employee_id} onChange={(e) => setFilters({ ...filters, employee_id: e.target.value })} className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none focus:border-bank-600 focus:ring-2 focus:ring-bank-100">
+            <select value={filters.employee_id} onChange={(e) => { setFilters({ ...filters, employee_id: e.target.value }); setReportPage(1); }} className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none focus:border-bank-600 focus:ring-2 focus:ring-bank-100">
               <option value="">كل الموظفين</option>
               {employees.map((employee) => <option key={employee.id} value={employee.id}>{employee.name}</option>)}
             </select>
           </Field>
           <Field label="نوع الطلب">
-            <select value={filters.request_type_id} onChange={(e) => setFilters({ ...filters, request_type_id: e.target.value })} className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none focus:border-bank-600 focus:ring-2 focus:ring-bank-100">
+            <select value={filters.request_type_id} onChange={(e) => { setFilters({ ...filters, request_type_id: e.target.value }); setReportPage(1); }} className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none focus:border-bank-600 focus:ring-2 focus:ring-bank-100">
               <option value="">كل الأنواع</option>
               {requestTypes.map((item) => <option key={item.id} value={item.id}>{item.name_ar || item.code || `نوع ${item.id}`}</option>)}
             </select>
           </Field>
           <div className="flex items-end gap-2">
             <Button type="submit" disabled={isLoading} className="gap-2"><Filter className="h-4 w-4" /> تطبيق</Button>
-            <button type="button" onClick={() => setFilters(emptyFilters)} className="h-10 rounded-md border border-slate-300 px-3 text-sm font-semibold text-slate-700">مسح</button>
+            <button type="button" onClick={() => { setFilters(emptyFilters); setReportPage(1); }} className="h-10 rounded-md border border-slate-300 px-3 text-sm font-semibold text-slate-700">مسح</button>
           </div>
         </form>
       </Card>
@@ -238,7 +250,7 @@ export function ReportsPage() {
             <tbody className="divide-y divide-slate-100">
               {isLoading && <tr><td colSpan={7} className="p-6 text-center text-slate-500">جار تحميل التقرير...</td></tr>}
               {!isLoading && filteredRequests.length === 0 && <tr><td colSpan={7} className="p-6 text-center text-slate-500">لا توجد نتائج مطابقة.</td></tr>}
-              {!isLoading && filteredRequests.map((request) => (
+              {!isLoading && paginatedRequests.map((request) => (
                 <tr key={request.id} className="hover:bg-slate-50">
                   <td className="p-3 font-semibold text-bank-700">{request.request_number}</td>
                   <td className="p-3 text-slate-900">{request.title}</td>
@@ -281,6 +293,7 @@ export function ReportsPage() {
             </tbody>
           </table>
         </div>
+        <Pagination page={reportPage} totalItems={filteredRequests.length} pageSize={reportsPageSize} onPageChange={setReportPage} />
       </Card>
     </div>
   );

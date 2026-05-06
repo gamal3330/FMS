@@ -76,6 +76,7 @@ settings = get_settings()
 BACKUP_SETTINGS_CATEGORY = "database"
 BACKUP_SETTINGS_KEY = "backup_settings"
 DEFAULT_BACKUP_SETTINGS = BackupSettingsPayload().model_dump()
+DEFAULT_LOGIN_INTRO_TEXT = "منصة داخلية موحدة لاستقبال الطلبات، تتبع مراحل الاعتماد، مراقبة مؤشرات الخدمة، وتوثيق الأثر التشغيلي."
 LOCAL_UPDATES_DIR = (Path.cwd() / settings.upload_dir / "local_updates").resolve()
 LOCAL_UPDATE_MAX_BYTES = 1024 * 1024 * 1024
 LOCAL_UPDATE_REQUIRED_ROOTS = {"backend", "frontend", "scripts", "updates"}
@@ -520,11 +521,14 @@ def restart_backend_script_path() -> Path:
 def get_public_profile(db: Session = Depends(get_db)):
     item = get_or_create_singleton(db, SettingsGeneral)
     security = get_or_create_singleton(db, SecurityPolicy)
+    if not item.login_intro_text:
+        item.login_intro_text = DEFAULT_LOGIN_INTRO_TEXT
     db.commit()
     db.refresh(item)
     db.refresh(security)
     return {
         "system_name": item.system_name,
+        "login_intro_text": item.login_intro_text,
         "language": item.language,
         "timezone": item.timezone,
         "logo_url": item.logo_url,
@@ -536,6 +540,8 @@ def get_public_profile(db: Session = Depends(get_db)):
 @router.get("/general-profile", response_model=SettingsGeneralRead)
 def get_general_profile(db: Session = Depends(get_db), _: User = SettingsActor):
     item = get_or_create_singleton(db, SettingsGeneral)
+    if not item.login_intro_text:
+        item.login_intro_text = DEFAULT_LOGIN_INTRO_TEXT
     db.commit()
     db.refresh(item)
     return item

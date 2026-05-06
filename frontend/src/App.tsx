@@ -7,6 +7,7 @@ import { Dashboard } from "./pages/Dashboard";
 import { Login } from "./pages/Login";
 import MessagesPage from "./pages/MessagesPage";
 import { ReportsPage } from "./pages/ReportsPage";
+import { RequestDetails } from "./pages/RequestDetails";
 import { Requests } from "./pages/Requests";
 import SettingsPage from "./pages/SettingsPage.jsx";
 import DepartmentsPage from "./pages/settings/DepartmentsPage.jsx";
@@ -74,13 +75,16 @@ function ProtectedApp() {
       currentUser={currentUser}
       canAccessSettings={canAccessSettings(currentUser)}
       onLogout={() => {
-        localStorage.removeItem("qib_token");
-        navigate("/login", { replace: true });
+        apiFetch("/auth/logout", { method: "POST" }).finally(() => {
+          localStorage.removeItem("qib_token");
+          navigate("/login", { replace: true });
+        });
       }}
     >
       <Routes>
         <Route path="/dashboard" element={screenElement("dashboard", <Dashboard />)} />
         <Route path="/requests" element={screenElement("requests", <Requests />)} />
+        <Route path="/requests/:requestId" element={screenElement("requests", <RequestDetails />)} />
         <Route path="/approvals" element={screenElement("approvals", <Approvals />)} />
         <Route path="/messages" element={screenElement("messages", <MessagesPage />)} />
         <Route

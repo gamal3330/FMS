@@ -15,3 +15,16 @@ class AuditLogRead(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class LoginActivityRead(BaseModel):
+    id: int
+    actor_id: int | None = None
+    actor_name: str | None = None
+    actor_email: str | None = None
+    action: str
+    identifier: str | None = None
+    ip_address: str | None = None
+    user_agent: str | None = None
+    failed_login_attempts: int | None = None
+    created_at: datetime
