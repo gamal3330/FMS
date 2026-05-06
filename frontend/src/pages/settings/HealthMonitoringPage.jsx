@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { Activity, AlertTriangle, CheckCircle2, Clock, Database, HardDrive, LogIn, RefreshCw, Server, Trash2, XCircle } from "lucide-react";
 import { api, getErrorMessage } from "../../lib/axios";
+import { formatSystemDateTime } from "../../lib/datetime";
 import { Card } from "../../components/ui/card";
 import { Button } from "../../components/ui/button";
+import { Pagination } from "../../components/ui/Pagination";
 
 const statusLabels = {
   healthy: "سليم",
@@ -40,10 +42,13 @@ const loginActionLabels = {
   logout: "خروج"
 };
 
+const loginActivityPageSize = 15;
+
 export default function HealthMonitoringPage() {
   const [summary, setSummary] = useState(null);
   const [loginActivity, setLoginActivity] = useState([]);
   const [loginActivityError, setLoginActivityError] = useState("");
+  const [loginActivityPage, setLoginActivityPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [running, setRunning] = useState(false);
   const [clearingLogs, setClearingLogs] = useState(false);
@@ -59,8 +64,9 @@ export default function HealthMonitoringPage() {
       const { data } = await api.get("/health/summary");
       setSummary(data);
       try {
-        const activity = await api.get("/audit-logs/login-activity?limit=30");
+        const activity = await api.get("/audit-logs/login-activity?limit=300");
         setLoginActivity(activity.data || []);
+        setLoginActivityPage(1);
       } catch (error) {
         setLoginActivity([]);
         setLoginActivityError(getErrorMessage(error));
@@ -145,7 +151,7 @@ export default function HealthMonitoringPage() {
         icon: Clock,
         status: summary.backup?.status,
         lines: [
-          ["آخر نسخة", summary.backup?.last_backup_at || "لا توجد نسخة"],
+          ["آخر نسخة", summary.backup?.last_backup_at ? formatSystemDateTime(summary.backup.last_backup_at) : "لا توجد نسخة"],
           ["الحالة", summary.backup?.message || "-"]
         ]
       },
@@ -161,6 +167,16 @@ export default function HealthMonitoringPage() {
       }
     ];
   }, [summary]);
+
+  const paginatedLoginActivity = useMemo(() => {
+    const start = (loginActivityPage - 1) * loginActivityPageSize;
+    return loginActivity.slice(start, start + loginActivityPageSize);
+  }, [loginActivity, loginActivityPage]);
+
+  useEffect(() => {
+    const totalPages = Math.max(1, Math.ceil(loginActivity.length / loginActivityPageSize));
+    if (loginActivityPage > totalPages) setLoginActivityPage(totalPages);
+  }, [loginActivity.length, loginActivityPage]);
 
   return (
     <section className="space-y-6 text-right" dir="rtl">
@@ -224,7 +240,7 @@ export default function HealthMonitoringPage() {
                         <td className="p-3"><StatusBadge status={check.status} /></td>
                         <td className="p-3">{formatMs(check.latency_ms)}</td>
                         <td className="p-3">{check.message || "-"}</td>
-                        <td className="p-3">{check.checked_at || "-"}</td>
+                        <td className="p-3">{formatSystemDateTime(check.checked_at)}</td>
                       </tr>
                     ))}
                     {!summary?.recent_checks?.length && (
@@ -257,7 +273,7 @@ export default function HealthMonitoringPage() {
                     </div>
                     <p className="mt-3 whitespace-pre-wrap break-words text-sm font-semibold leading-6 text-slate-900">{log.message}</p>
                     <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-500">
-                      <span>الوقت: {log.occurred_at || "-"}</span>
+                      <span>الوقت: {formatSystemDateTime(log.occurred_at)}</span>
                       <span>المرجع: {log.reference || "-"}</span>
                     </div>
                   </div>
@@ -298,7 +314,7 @@ export default function HealthMonitoringPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {loginActivity.map((log) => (
+                  {paginatedLoginActivity.map((log) => (
                     <tr key={log.id} className="hover:bg-slate-50">
                       <td className="p-3"><LoginActionBadge action={log.action} /></td>
                       <td className="p-3">
@@ -309,7 +325,7 @@ export default function HealthMonitoringPage() {
                       <td className="p-3 text-slate-700">{log.ip_address || "-"}</td>
                       <td className="p-3 text-slate-700">{log.failed_login_attempts ?? "-"}</td>
                       <td className="max-w-[260px] truncate p-3 text-xs text-slate-500" title={log.user_agent || ""}>{log.user_agent || "-"}</td>
-                      <td className="p-3 text-slate-600">{log.created_at || "-"}</td>
+                      <td className="p-3 text-slate-600">{formatSystemDateTime(log.created_at)}</td>
                     </tr>
                   ))}
                   {!loginActivity.length && (
@@ -318,6 +334,12 @@ export default function HealthMonitoringPage() {
                 </tbody>
               </table>
             </div>
+            <Pagination
+              page={loginActivityPage}
+              totalItems={loginActivity.length}
+              pageSize={loginActivityPageSize}
+              onPageChange={setLoginActivityPage}
+            />
           </Card>
         </>
       )}
