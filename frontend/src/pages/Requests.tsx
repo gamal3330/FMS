@@ -243,40 +243,14 @@ export function Requests() {
   const [isLinkedMessagesLoading, setIsLinkedMessagesLoading] = useState(false);
   const [requestSearch, setRequestSearch] = useState("");
   const [requestsPage, setRequestsPage] = useState(1);
+  const [requestsHasMore, setRequestsHasMore] = useState(false);
 
   const availableRequestTypes = useMemo(() => managedRequestTypes, [managedRequestTypes]);
   const selectedType = useMemo(
     () => availableRequestTypes.find((item) => item.value === requestType) ?? availableRequestTypes[0] ?? null,
     [availableRequestTypes, requestType]
   );
-  const filteredItems = useMemo(() => {
-    const term = requestSearch.trim().toLowerCase();
-    if (!term) return items;
-    return items.filter((item) => {
-      const searchable = [
-        item.request_number,
-        item.title,
-        requestTypeLabel(item),
-        requestSectionLabel(item),
-        statusLabels[item.status] ?? item.status,
-        priorities.find((type) => type.value === item.priority)?.label ?? item.priority,
-        formatSystemDate(item.created_at)
-      ]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase();
-      return searchable.includes(term);
-    });
-  }, [items, requestSearch, sectionLabels]);
-  const paginatedItems = useMemo(() => {
-    const start = (requestsPage - 1) * requestPageSize;
-    return filteredItems.slice(start, start + requestPageSize);
-  }, [filteredItems, requestsPage]);
-
-  useEffect(() => {
-    const totalPages = Math.max(1, Math.ceil(filteredItems.length / requestPageSize));
-    if (requestsPage > totalPages) setRequestsPage(totalPages);
-  }, [filteredItems.length, requestsPage]);
+  const requestListTotal = requestsHasMore ? requestsPage * requestPageSize + 1 : (requestsPage - 1) * requestPageSize + items.length;
 
   function updateField(name: string, value: string) {
     setFormData((current) => ({ ...current, [name]: value }));
@@ -301,13 +275,22 @@ export function Requests() {
     );
   }
 
-  async function loadRequests() {
+  async function loadRequests(page = requestsPage) {
     setIsLoading(true);
     try {
-      const data = await apiFetch<ServiceRequest[]>("/requests");
+      const query = new URLSearchParams({
+        page: String(page),
+        per_page: String(requestPageSize)
+      });
+      const term = requestSearch.trim();
+      if (term) query.set("search", term);
+      const data = await apiFetch<ServiceRequest[]>(`/requests?${query.toString()}`);
       setItems(data);
+      setRequestsHasMore(data.length === requestPageSize);
+      if (data.length === 0 && page > 1) setRequestsPage(page - 1);
     } catch {
       setItems([]);
+      setRequestsHasMore(false);
     } finally {
       setIsLoading(false);
     }
@@ -372,9 +355,12 @@ export function Requests() {
 
   useEffect(() => {
     loadActiveRequestTypes();
-    loadRequests();
     apiFetch<CurrentUser>("/auth/me").then(setCurrentUser).catch(() => setCurrentUser(null));
   }, []);
+
+  useEffect(() => {
+    loadRequests(requestsPage);
+  }, [requestsPage, requestSearch]);
 
   function handleTypeChange(event: ChangeEvent<HTMLSelectElement>) {
     const nextType = event.target.value;
@@ -414,7 +400,8 @@ export function Requests() {
         setMessage("تم إرسال الطلب بنجاح وإضافته إلى مسار الموافقات.");
       }
       resetForm();
-      await loadRequests();
+      setRequestsPage(1);
+      await loadRequests(1);
     } catch {
       setError("تعذر إرسال الطلب. تحقق من الاتصال بالخادم وصلاحية الجلسة.");
     } finally {
@@ -528,7 +515,7 @@ export function Requests() {
               اختر نوع الطلب، أدخل البيانات المطلوبة، ثم أرسل الطلب ليتم توجيهه تلقائياً إلى مسار الموافقات المناسب.
             </p>
           </div>
-          <Button onClick={loadRequests} disabled={isLoading} className="gap-2 self-start lg:self-auto">
+          <Button onClick={() => loadRequests(requestsPage)} disabled={isLoading} className="gap-2 self-start lg:self-auto">
             <RefreshCw className={`h-4 w-4 ${isLoading ? "animate-spin" : ""}`} />
             تحديث القائمة
           </Button>
@@ -696,7 +683,7 @@ export function Requests() {
                   setRequestSearch(event.target.value);
                   setRequestsPage(1);
                 }}
-                placeholder="بحث برقم الطلب أو العنوان أو الحالة"
+                placeholder="بحث برقم الطلب أو العنوان"
                 className="pr-10"
               />
             </label>
@@ -727,14 +714,14 @@ export function Requests() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {filteredItems.length === 0 && (
+                {items.length === 0 && (
                   <tr>
                     <td colSpan={8} className="p-6 text-center text-slate-500">
-                      {items.length === 0 ? "لا توجد طلبات لعرضها حالياً." : "لا توجد نتائج مطابقة للبحث."}
+                      {requestSearch.trim() ? "لا توجد نتائج مطابقة للبحث." : "لا توجد طلبات لعرضها حالياً."}
                     </td>
                   </tr>
                 )}
-                {paginatedItems.map((item) => (
+                {items.map((item) => (
                   <tr key={item.id} className="align-top hover:bg-slate-50">
                     <td className="px-3 py-4">
                       <span className="block break-words text-sm font-black leading-6 text-bank-700">{item.request_number}</span>
@@ -801,7 +788,7 @@ export function Requests() {
               </tbody>
             </table>
           </div>
-          <Pagination page={requestsPage} totalItems={filteredItems.length} pageSize={requestPageSize} onPageChange={setRequestsPage} />
+          <Pagination page={requestsPage} totalItems={requestListTotal} pageSize={requestPageSize} onPageChange={setRequestsPage} />
         </Card>
 
         {linkedRequest && (
