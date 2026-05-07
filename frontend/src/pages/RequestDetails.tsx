@@ -12,6 +12,7 @@ import {
   Printer,
   RefreshCw,
   Send,
+  Sparkles,
   UserCheck,
   XCircle
 } from "lucide-react";
@@ -19,6 +20,8 @@ import { API_BASE, apiFetch, ApprovalStep, Attachment, ServiceRequest } from "..
 import { formatSystemDateTime } from "../lib/datetime";
 import { Button } from "../components/ui/button";
 import { Card } from "../components/ui/card";
+import AISuggestionPanel from "../components/ai/AISuggestionPanel";
+import AISummaryBox from "../components/ai/AISummaryBox";
 
 interface LinkedMessage {
   id: number;
@@ -28,6 +31,13 @@ interface LinkedMessage {
   sender_name: string;
   recipient_names?: string[];
   created_at?: string | null;
+}
+
+interface AIStatus {
+  is_enabled: boolean;
+  allow_message_drafting: boolean;
+  allow_summarization: boolean;
+  allow_reply_suggestion: boolean;
 }
 
 const statusLabels: Record<string, string> = {
@@ -107,6 +117,10 @@ export function RequestDetails() {
   const [messages, setMessages] = useState<LinkedMessage[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
+  const [aiDraft, setAiDraft] = useState<{ subject: string; body: string } | null>(null);
+  const [aiError, setAiError] = useState("");
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiStatus, setAiStatus] = useState<AIStatus>({ is_enabled: false, allow_message_drafting: false, allow_summarization: false, allow_reply_suggestion: false });
 
   async function loadDetails() {
     if (!requestId) return;
@@ -128,17 +142,54 @@ export function RequestDetails() {
 
   useEffect(() => {
     loadDetails();
+    loadAiStatus();
   }, [requestId]);
 
   const timeline = useMemo(() => buildTimeline(request, messages), [request, messages]);
+  const canUseAiDrafting = Boolean(aiStatus.is_enabled && aiStatus.allow_message_drafting);
+  const canUseAiSummaries = Boolean(aiStatus.is_enabled && aiStatus.allow_summarization);
 
-  function composeMessage() {
+  async function loadAiStatus() {
+    try {
+      setAiStatus(await apiFetch<AIStatus>("/ai/status"));
+    } catch {
+      setAiStatus({ is_enabled: false, allow_message_drafting: false, allow_summarization: false, allow_reply_suggestion: false });
+    }
+  }
+
+  function composeMessage(draft?: { subject?: string; body?: string }) {
     if (!request) return;
+    if (draft?.body || draft?.subject) {
+      sessionStorage.setItem("qib_ai_compose_draft", JSON.stringify({ subject: draft.subject || "", body: draft.body || "", message_type: "clarification_request" }));
+    }
     const params = new URLSearchParams({
+      compose: "1",
       related_request_id: request.request_number,
-      subject: `بخصوص الطلب ${request.request_number}`
+      subject: draft?.subject || `بخصوص الطلب ${request.request_number}`
     });
     navigate(`/messages?${params.toString()}`);
+  }
+
+  async function suggestClarificationMessage() {
+    if (!canUseAiDrafting) return;
+    if (!request) return;
+    setAiError("");
+    setAiDraft(null);
+    setAiLoading(true);
+    try {
+      const data = await apiFetch<{ subject: string; body: string }>("/ai/messages/draft", {
+        method: "POST",
+        body: JSON.stringify({
+          instruction: "اقترح رسالة طلب استيضاح مهنية بخصوص هذا الطلب مع طلب المعلومات الناقصة بشكل واضح",
+          related_request_id: request.id
+        })
+      });
+      setAiDraft({ subject: data.subject || "", body: data.body || "" });
+    } catch (error) {
+      setAiError(readApiError(error));
+    } finally {
+      setAiLoading(false);
+    }
   }
 
   if (isLoading) {
@@ -177,7 +228,7 @@ export function RequestDetails() {
           </div>
           <div className="flex flex-wrap gap-2">
             <StatusPill status={request.status} />
-            <Button type="button" onClick={composeMessage} className="gap-2">
+            <Button type="button" onClick={() => composeMessage()} className="gap-2">
               <Send className="h-4 w-4" />
               مراسلة بخصوص الطلب
             </Button>
@@ -232,7 +283,38 @@ export function RequestDetails() {
           </Card>
 
           <Card className="p-5">
-            <SectionTitle icon={MessageSquare} title="المراسلات المرتبطة" />
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+              <SectionTitle icon={MessageSquare} title="المراسلات المرتبطة" />
+              {canUseAiDrafting && (
+                <button
+                  type="button"
+                  onClick={suggestClarificationMessage}
+                  disabled={aiLoading}
+                  className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-bank-200 bg-bank-50 px-3 text-sm font-bold text-bank-800 hover:bg-bank-100 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  <Sparkles className={`h-4 w-4 ${aiLoading ? "animate-pulse" : ""}`} />
+                  {aiLoading ? "جاري الاقتراح..." : "اقتراح رسالة استيضاح"}
+                </button>
+              )}
+            </div>
+            {canUseAiSummaries && (
+              <div className="mt-4">
+                <AISummaryBox relatedRequestId={String(request.id)} buttonLabel="تلخيص المراسلات المرتبطة بالطلب" compact />
+              </div>
+            )}
+            {canUseAiDrafting && aiError && <div className="mt-3 rounded-md border border-red-100 bg-red-50 p-3 text-sm text-red-700">{aiError}</div>}
+            {canUseAiDrafting && aiDraft && (
+              <div className="mt-3">
+                <AISuggestionPanel
+                  title="رسالة استيضاح مقترحة"
+                  subject={aiDraft.subject}
+                  body={aiDraft.body}
+                  onUse={() => composeMessage(aiDraft)}
+                  onRetry={suggestClarificationMessage}
+                  onCancel={() => setAiDraft(null)}
+                />
+              </div>
+            )}
             <div className="mt-4 space-y-3">
               {messages.map((message) => (
                 <div key={message.id} className="rounded-md border border-slate-200 bg-white p-4">
@@ -404,6 +486,16 @@ function itemTone(tone: string) {
   if (tone === "danger") return "bg-red-50 text-red-700";
   if (tone === "message") return "bg-bank-50 text-bank-700";
   return "bg-slate-100 text-slate-600";
+}
+
+function readApiError(error: unknown) {
+  const message = error instanceof Error ? error.message : "تعذر تنفيذ طلب المساعد الذكي.";
+  try {
+    const parsed = JSON.parse(message);
+    return parsed.detail || message;
+  } catch {
+    return message;
+  }
 }
 
 async function downloadPdf(request: ServiceRequest) {

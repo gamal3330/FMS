@@ -35,6 +35,7 @@ import {
   Send,
   SendHorizonal,
   Signature,
+  Sparkles,
   Strikethrough,
   Trash2,
   Underline,
@@ -46,6 +47,9 @@ import {
 import { API_BASE, apiFetch } from "../lib/api";
 import { formatSystemDateTime } from "../lib/datetime";
 import { Button } from "../components/ui/button";
+import AIAssistantBox from "../components/ai/AIAssistantBox";
+import AISuggestionPanel from "../components/ai/AISuggestionPanel";
+import AISummaryBox from "../components/ai/AISummaryBox";
 
 type MessageUser = {
   id: number;
@@ -118,7 +122,6 @@ type MessageSettings = {
   enable_department_broadcasts: boolean;
   enable_read_receipts: boolean;
   enable_linked_requests: boolean;
-  auto_refresh_seconds: number;
   max_attachment_mb: number;
   max_recipients: number;
   default_message_type: string;
@@ -128,6 +131,13 @@ type MessageCapabilities = {
   can_send_circular: boolean;
   can_send_department_broadcast: boolean;
   can_use_templates: boolean;
+};
+
+type AIStatus = {
+  is_enabled: boolean;
+  allow_message_drafting: boolean;
+  allow_summarization: boolean;
+  allow_reply_suggestion: boolean;
 };
 
 type Mailbox = "inbox" | "sent" | "drafts" | "archived" | "compose";
@@ -143,7 +153,6 @@ const defaultMessageSettings: MessageSettings = {
   enable_department_broadcasts: true,
   enable_read_receipts: true,
   enable_linked_requests: true,
-  auto_refresh_seconds: 20,
   max_attachment_mb: 25,
   max_recipients: 200,
   default_message_type: defaultMessageType
@@ -206,6 +215,10 @@ export default function MessagesPage() {
   const [hasMore, setHasMore] = useState(false);
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [mailPanelCollapsed, setMailPanelCollapsed] = useState(false);
+  const [selectedAiSuggestion, setSelectedAiSuggestion] = useState<{ type: "reply"; body: string } | null>(null);
+  const [selectedAiLoading, setSelectedAiLoading] = useState("");
+  const [selectedAiError, setSelectedAiError] = useState("");
+  const [aiStatus, setAiStatus] = useState<AIStatus>({ is_enabled: false, allow_message_drafting: false, allow_summarization: false, allow_reply_suggestion: false });
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const queryComposeInitialized = useRef(false);
 
@@ -236,6 +249,9 @@ export default function MessagesPage() {
     () => messageTypeOptions.filter((option) => option.value !== "circular" || messageCapabilities.can_send_circular),
     [messageTypeOptions, messageCapabilities.can_send_circular]
   );
+  const canUseAiDrafting = Boolean(aiStatus.is_enabled && aiStatus.allow_message_drafting);
+  const canUseAiSummaries = Boolean(aiStatus.is_enabled && aiStatus.allow_summarization);
+  const canUseAiReplies = Boolean(aiStatus.is_enabled && aiStatus.allow_reply_suggestion);
 
   async function loadUsers() {
     setIsUsersLoading(true);
@@ -290,11 +306,13 @@ export default function MessagesPage() {
     loadSignature();
     loadTemplates();
     loadTypes();
+    loadAiStatus();
   }, []);
 
   useEffect(() => {
     if (queryComposeInitialized.current || searchParams.get("compose") !== "1") return;
     queryComposeInitialized.current = true;
+    const storedAiDraft = readStoredAiDraft();
     setEditingDraftId(null);
     setForwardSource(null);
     setReplySource(null);
@@ -302,9 +320,9 @@ export default function MessagesPage() {
     setRecipientSearch("");
     setForm({
       recipient_ids: [],
-      message_type: searchParams.get("message_type") || defaultMessageType,
-      subject: searchParams.get("subject") || "",
-      body: "",
+      message_type: searchParams.get("message_type") || storedAiDraft?.message_type || defaultMessageType,
+      subject: searchParams.get("subject") || storedAiDraft?.subject || "",
+      body: storedAiDraft?.body || "",
       related_request_id: searchParams.get("related_request_id") || ""
     });
     setMailbox("compose");
@@ -317,12 +335,6 @@ export default function MessagesPage() {
 
   useEffect(() => {
     if (mailbox === "compose") return;
-    const timer = window.setInterval(() => loadMessages(mailbox), Math.max(messageSettings.auto_refresh_seconds || 20, 5) * 1000);
-    return () => window.clearInterval(timer);
-  }, [mailbox, unreadOnly, search, archiveView, typeFilter, messageSettings.auto_refresh_seconds]);
-
-  useEffect(() => {
-    if (mailbox === "compose") return;
     function refreshMessagesImmediately() {
       loadMessages(mailbox);
     }
@@ -332,6 +344,8 @@ export default function MessagesPage() {
 
   useEffect(() => {
     if (!selectedId || mailbox === "compose") return;
+    setSelectedAiSuggestion(null);
+    setSelectedAiError("");
     loadMessageDetails(selectedId);
   }, [selectedId, mailbox]);
 
@@ -617,6 +631,14 @@ export default function MessagesPage() {
     }
   }
 
+  async function loadAiStatus() {
+    try {
+      setAiStatus(await apiFetch<AIStatus>("/ai/status"));
+    } catch {
+      setAiStatus({ is_enabled: false, allow_message_drafting: false, allow_summarization: false, allow_reply_suggestion: false });
+    }
+  }
+
   function messageTypeLabel(value: string) {
     return getMessageTypeLabel(value, messageTypeOptions);
   }
@@ -806,6 +828,42 @@ export default function MessagesPage() {
       }
       bodyRef.current?.focus();
     });
+  }
+
+  function applyAiDraft(draft: { subject?: string; body?: string }) {
+    setForm((current) => ({
+      ...current,
+      subject: draft.subject || current.subject,
+      body: draft.body || current.body
+    }));
+    if (draft.body) updateBody(textToHtml(draft.body));
+  }
+
+  function applyAiBody(body: string) {
+    updateBody(textToHtml(body));
+  }
+
+  async function suggestAiReply(message: InternalMessage) {
+    if (!canUseAiReplies) return;
+    setSelectedAiError("");
+    setSelectedAiSuggestion(null);
+    setSelectedAiLoading("reply");
+    try {
+      const data = await apiFetch<{ body: string }>("/ai/messages/suggest-reply", {
+        method: "POST",
+        body: JSON.stringify({ message_id: message.id })
+      });
+      setSelectedAiSuggestion({ type: "reply", body: data.body || "" });
+    } catch (error) {
+      setSelectedAiError(readApiError(error));
+    } finally {
+      setSelectedAiLoading("");
+    }
+  }
+
+  function useAiReply(message: InternalMessage, body: string) {
+    beginReply(message);
+    window.requestAnimationFrame(() => updateBody(textToHtml(body)));
   }
 
   function syncEditorBody() {
@@ -1266,6 +1324,18 @@ export default function MessagesPage() {
                 </div>
               </div>
 
+              {canUseAiDrafting && (
+                <div className="border-t border-slate-100 bg-slate-50/60 p-5">
+                  <AIAssistantBox
+                    body={form.body}
+                    relatedRequestId={form.related_request_id}
+                    requestType={form.message_type}
+                    onUseDraft={applyAiDraft}
+                    onUseBody={applyAiBody}
+                  />
+                </div>
+              )}
+
               <div className="bg-white">
                 <div className="sticky top-0 z-[1] border-b border-slate-200 bg-white/95 px-5 py-3 shadow-sm backdrop-blur">
                   <div className="mb-2 flex items-center justify-between gap-3">
@@ -1481,6 +1551,12 @@ export default function MessagesPage() {
                     </button>
                   ) : (
                     <div className="flex flex-wrap items-center gap-2">
+                      {canUseAiReplies && (
+                        <button type="button" onClick={() => suggestAiReply(selected)} disabled={selectedAiLoading === "reply"} className="inline-flex h-10 items-center gap-2 rounded-md border border-bank-200 bg-bank-50 px-3 text-sm font-bold text-bank-800 hover:bg-bank-100 disabled:cursor-not-allowed disabled:opacity-60">
+                          <Sparkles className="h-4 w-4" />
+                          {selectedAiLoading === "reply" ? "جاري الاقتراح..." : "اقتراح رد"}
+                        </button>
+                      )}
                       <button type="button" onClick={() => beginReply(selected)} className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50">
                         <Reply className="h-4 w-4" />
                         رد
@@ -1496,6 +1572,17 @@ export default function MessagesPage() {
                     </div>
                   )}
                 </div>
+                {canUseAiReplies && selectedAiError && <div className="rounded-md border border-red-100 bg-red-50 p-3 text-sm text-red-700">{selectedAiError}</div>}
+                {canUseAiReplies && selectedAiSuggestion?.type === "reply" && (
+                  <AISuggestionPanel
+                    title="اقتراح رد"
+                    body={selectedAiSuggestion.body}
+                    onUse={() => useAiReply(selected, selectedAiSuggestion.body)}
+                    onRetry={() => suggestAiReply(selected)}
+                    onCancel={() => setSelectedAiSuggestion(null)}
+                  />
+                )}
+                {canUseAiSummaries && <AISummaryBox messageId={selected.id} buttonLabel="تلخيص الرسالة" compact />}
                 <div
                   className="min-h-[260px] rounded-md bg-slate-50 p-4 text-sm leading-7 text-slate-700"
                   dangerouslySetInnerHTML={{ __html: selected.body ? sanitizeMessageHtml(selected.body) : selected.is_draft ? "لا يوجد محتوى في المسودة بعد." : "" }}
@@ -1748,6 +1835,36 @@ function sanitizeMessageHtml(value: string) {
     }
   });
   return template.innerHTML;
+}
+
+function textToHtml(value: string) {
+  return escapeHtml(value || "").replace(/\n/g, "<br>");
+}
+
+function readStoredAiDraft() {
+  const raw = sessionStorage.getItem("qib_ai_compose_draft");
+  if (!raw) return null;
+  sessionStorage.removeItem("qib_ai_compose_draft");
+  try {
+    const parsed = JSON.parse(raw);
+    return {
+      subject: String(parsed.subject || ""),
+      body: parsed.body ? textToHtml(String(parsed.body)) : "",
+      message_type: String(parsed.message_type || "")
+    };
+  } catch {
+    return null;
+  }
+}
+
+function readApiError(error: unknown) {
+  const message = error instanceof Error ? error.message : "تعذر تنفيذ طلب المساعد الذكي.";
+  try {
+    const parsed = JSON.parse(message);
+    return parsed.detail || message;
+  } catch {
+    return message;
+  }
 }
 
 function formatBytes(value: number) {

@@ -1,4 +1,5 @@
 from app.models.audit import AuditLog
+from app.models.ai import AISettings, AIPromptTemplate, AIUsageLog
 from app.models.health import SystemAlert, SystemHealthCheck
 from app.models.message import InternalMessage, InternalMessageAttachment, InternalMessageRecipient
 from app.models.notification import Notification
@@ -26,6 +27,9 @@ from app.models.user import Department, Role, User
 
 __all__ = [
     "AuditLog",
+    "AISettings",
+    "AIPromptTemplate",
+    "AIUsageLog",
     "ApprovalStep",
     "AppliedMigration",
     "Attachment",

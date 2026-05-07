@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy import text
 from sqlalchemy.engine import make_url
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import get_current_user, oauth2_scheme, require_roles
 from app.core.config import get_settings
@@ -23,6 +23,7 @@ from app.core.security import decode_access_token
 from app.db.init_db import seed_database
 from app.db.session import Base, SessionLocal, engine, get_db
 from app.models.enums import UserRole
+from app.models.ai import AIUsageLog
 from app.models.settings import (
     IntegrationConfig,
     NotificationSettings,
@@ -64,7 +65,9 @@ from app.schemas.settings import (
     WorkflowApprovalPayload,
     WorkflowApprovalRead,
 )
+from app.schemas.ai import AIConnectionTestResponse, AISettingsRead, AISettingsUpdate, AIUsageLogRead
 from app.services.audit import write_audit
+from app.services.ai_service import ai_settings_read, encrypt_api_key, get_or_create_ai_settings, provider_for_settings
 from app.services.update_manager import ensure_current_version, normalize_version, version_key
 
 router = APIRouter(prefix="/settings", tags=["Settings"])
@@ -72,6 +75,7 @@ workflows_router = APIRouter(prefix="/workflows", tags=["Workflow Settings"])
 request_types_router = APIRouter(prefix="/request-types", tags=["Request Type Settings"])
 sla_rules_router = APIRouter(prefix="/sla-rules", tags=["SLA Settings"])
 SettingsActor = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.IT_MANAGER))
+AISettingsActor = Depends(require_roles(UserRole.SUPER_ADMIN))
 settings = get_settings()
 BACKUP_SETTINGS_CATEGORY = "database"
 BACKUP_SETTINGS_KEY = "backup_settings"
@@ -708,6 +712,100 @@ def update_security_policy(payload: SecurityPolicyPayload, db: Session = Depends
     db.commit()
     db.refresh(item)
     return item
+
+
+@router.get("/ai", response_model=AISettingsRead)
+def get_ai_settings(db: Session = Depends(get_db), _: User = AISettingsActor):
+    item = get_or_create_ai_settings(db)
+    db.commit()
+    db.refresh(item)
+    return ai_settings_read(item)
+
+
+@router.put("/ai", response_model=AISettingsRead)
+def update_ai_settings(payload: AISettingsUpdate, db: Session = Depends(get_db), actor: User = AISettingsActor):
+    item = get_or_create_ai_settings(db)
+    data = payload.model_dump()
+    api_key = data.pop("api_key", None)
+    for field, value in data.items():
+        setattr(item, field, value)
+    if api_key and api_key.strip():
+        item.api_key_encrypted = encrypt_api_key(api_key.strip())
+    write_audit(
+        db,
+        "ai_settings_saved",
+        "ai_settings",
+        actor=actor,
+        entity_id=str(item.id),
+        metadata={
+            "is_enabled": item.is_enabled,
+            "provider": item.provider,
+            "model_name": item.model_name,
+            "api_key_configured": bool(item.api_key_encrypted),
+        },
+    )
+    db.commit()
+    db.refresh(item)
+    return ai_settings_read(item)
+
+
+@router.post("/ai/test", response_model=AIConnectionTestResponse)
+def test_ai_connection(db: Session = Depends(get_db), actor: User = AISettingsActor):
+    item = get_or_create_ai_settings(db)
+    prompt = "اختبار اتصال بالمساعد الذكي. أجب بجملة عربية قصيرة تؤكد نجاح الاتصال فقط."
+    usage = AIUsageLog(
+        user_id=actor.id,
+        feature="connection_test",
+        entity_type="ai_settings",
+        entity_id=str(item.id),
+        input_length=len(prompt),
+        status="success",
+    )
+    db.add(usage)
+    try:
+        output = provider_for_settings(item).generate_text(prompt, max_tokens=80).strip()
+        usage.output_length = len(output)
+        write_audit(db, "ai_connection_tested", "ai_settings", actor=actor, entity_id=str(item.id), metadata={"ok": True})
+        db.commit()
+        return AIConnectionTestResponse(ok=True, message="تم الاتصال بمزود الذكاء الاصطناعي بنجاح.", sample=output[:500] or None)
+    except HTTPException as exc:
+        usage.status = "failed"
+        usage.error_message = str(exc.detail)[:1000]
+        write_audit(db, "ai_connection_tested", "ai_settings", actor=actor, entity_id=str(item.id), metadata={"ok": False, "error": str(exc.detail)[:300]})
+        db.commit()
+        return AIConnectionTestResponse(ok=False, message=str(exc.detail), sample=None)
+    except Exception as exc:
+        usage.status = "failed"
+        usage.error_message = str(exc)[:1000]
+        write_audit(db, "ai_connection_tested", "ai_settings", actor=actor, entity_id=str(item.id), metadata={"ok": False, "error": str(exc)[:300]})
+        db.commit()
+        return AIConnectionTestResponse(ok=False, message="فشل اختبار الاتصال بمزود الذكاء الاصطناعي.", sample=None)
+
+
+@router.get("/ai/usage-logs", response_model=list[AIUsageLogRead])
+def get_ai_usage_logs(db: Session = Depends(get_db), _: User = AISettingsActor):
+    rows = db.scalars(
+        select(AIUsageLog)
+        .options(selectinload(AIUsageLog.user))
+        .order_by(AIUsageLog.created_at.desc())
+        .limit(200)
+    ).all()
+    return [
+        AIUsageLogRead(
+            id=row.id,
+            user_id=row.user_id,
+            user_name=row.user.full_name_ar if row.user else None,
+            feature=row.feature,
+            entity_type=row.entity_type,
+            entity_id=row.entity_id,
+            input_length=row.input_length,
+            output_length=row.output_length,
+            status=row.status,
+            error_message=row.error_message,
+            created_at=row.created_at,
+        )
+        for row in rows
+    ]
 
 
 @router.get("/database/status")

@@ -37,7 +37,8 @@ SCREEN_DEFINITIONS = [
 
 ALL_SCREEN_KEYS = {item["key"] for item in SCREEN_DEFINITIONS}
 MANAGEMENT_SCREEN_KEYS = {"dashboard", "requests", "approvals", "messages", "reports", "request_types", "users", "departments", "specialized_sections", "health_monitoring", "settings"}
-EMPLOYEE_SCREEN_KEYS = {"dashboard", "requests", "approvals", "messages"}
+EMPLOYEE_SCREEN_KEYS = {"requests", "approvals", "messages"}
+DASHBOARD_SCREEN_ROLES = {UserRole.SUPER_ADMIN, UserRole.IT_MANAGER, UserRole.EXECUTIVE}
 
 
 class ScreenPermissionsPayload(BaseModel):
@@ -97,9 +98,17 @@ def import_error(row: int, field: str, message: str) -> dict[str, str | int]:
 def default_screens_for_role(role: UserRole) -> list[str]:
     if role in {UserRole.SUPER_ADMIN, UserRole.IT_MANAGER}:
         return sorted(MANAGEMENT_SCREEN_KEYS)
-    if role in {UserRole.EXECUTIVE, UserRole.INFOSEC, UserRole.IT_STAFF}:
+    if role == UserRole.EXECUTIVE:
         return ["dashboard", "requests", "approvals", "messages", "reports"]
+    if role in {UserRole.INFOSEC, UserRole.IT_STAFF}:
+        return ["requests", "approvals", "messages", "reports"]
     return sorted(EMPLOYEE_SCREEN_KEYS)
+
+
+def available_screens_for_user(user: User) -> list[dict[str, str]]:
+    if user.role in DASHBOARD_SCREEN_ROLES:
+        return SCREEN_DEFINITIONS
+    return [screen for screen in SCREEN_DEFINITIONS if screen["key"] != "dashboard"]
 
 
 def get_screen_permission_setting(db: Session, user_id: int) -> PortalSetting | None:
@@ -113,6 +122,8 @@ def read_user_screens(db: Session, user: User) -> list[str]:
     value = setting.setting_value if isinstance(setting.setting_value, dict) else {}
     screens = value.get("screens", [])
     clean_screens = [screen for screen in screens if screen in ALL_SCREEN_KEYS]
+    if user.role not in DASHBOARD_SCREEN_ROLES:
+        clean_screens = [screen for screen in clean_screens if screen != "dashboard"]
     if "messages_permission_initialized" not in value and "messages" in default_screens_for_role(user.role) and "messages" not in clean_screens:
         clean_screens.append("messages")
     if user.role in {UserRole.SUPER_ADMIN, UserRole.IT_MANAGER} and "settings" in clean_screens and "health_monitoring" not in clean_screens:
@@ -122,6 +133,8 @@ def read_user_screens(db: Session, user: User) -> list[str]:
 
 def save_user_screens(db: Session, user: User, screens: list[str], actor: User) -> None:
     clean_screens = sorted({screen for screen in screens if screen in ALL_SCREEN_KEYS})
+    if user.role not in DASHBOARD_SCREEN_ROLES:
+        clean_screens = [screen for screen in clean_screens if screen != "dashboard"]
     setting = get_screen_permission_setting(db, user.id)
     if not setting:
         setting = PortalSetting(category="screen_permissions", setting_key=str(user.id), setting_value={})
@@ -440,7 +453,7 @@ def list_users(db: Session = Depends(get_db), _: User = Depends(require_roles(Us
 
 @router.get("/screen-permissions/me", response_model=ScreenPermissionsRead)
 def my_screen_permissions(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    return {"screens": read_user_screens(db, current_user), "available_screens": SCREEN_DEFINITIONS}
+    return {"screens": read_user_screens(db, current_user), "available_screens": available_screens_for_user(current_user)}
 
 
 @router.get("/{user_id}/screen-permissions", response_model=ScreenPermissionsRead)
@@ -448,7 +461,7 @@ def get_user_screen_permissions(user_id: int, db: Session = Depends(get_db), _: 
     user = db.get(User, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    return {"screens": read_user_screens(db, user), "available_screens": SCREEN_DEFINITIONS}
+    return {"screens": read_user_screens(db, user), "available_screens": available_screens_for_user(user)}
 
 
 @router.put("/{user_id}/screen-permissions", response_model=ScreenPermissionsRead)
@@ -461,7 +474,7 @@ def update_user_screen_permissions(user_id: int, payload: ScreenPermissionsPaylo
     save_user_screens(db, user, payload.screens, actor)
     write_audit(db, "user_screen_permissions_updated", "user", actor=actor, entity_id=str(user.id), metadata={"screens": payload.screens})
     db.commit()
-    return {"screens": read_user_screens(db, user), "available_screens": SCREEN_DEFINITIONS}
+    return {"screens": read_user_screens(db, user), "available_screens": available_screens_for_user(user)}
 
 
 @router.post("", response_model=UserRead)

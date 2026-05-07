@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
@@ -12,6 +12,7 @@ from app.models.request import ApprovalStep, ServiceRequest
 from app.models.user import Department, User
 from app.schemas.dashboard import DashboardStats
 from app.services.workflow import IMPLEMENTATION_STEP_ROLES
+from app.api.v1.users import read_user_screens
 
 router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
 MANAGEMENT_STATS_ROLES = {UserRole.IT_MANAGER, UserRole.EXECUTIVE, UserRole.SUPER_ADMIN}
@@ -316,6 +317,9 @@ def recent_request_activity(db: Session, scoped_ids) -> list[dict]:
 
 @router.get("/stats", response_model=DashboardStats)
 def stats(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    if "dashboard" not in read_user_screens(db, current_user):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Dashboard statistics are not enabled for this user")
+
     now = datetime.now(timezone.utc)
     scoped_ids = scoped_request_ids(current_user)
 

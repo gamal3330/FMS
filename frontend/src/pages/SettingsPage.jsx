@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { AlertTriangle, CheckCircle2, Database, Download, FileText, History, LockKeyhole, Mail, PackageCheck, RefreshCw, Settings2, Upload } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Database, Download, FileText, History, LockKeyhole, Mail, PackageCheck, RefreshCw, Settings2, Sparkles, Upload } from "lucide-react";
 import { api, getErrorMessage } from "../lib/axios";
 import { Card } from "../components/ui/card";
 import { Button } from "../components/ui/button";
@@ -12,15 +12,20 @@ const tabs = [
   ["general", "الإعدادات العامة", Settings2],
   ["email", "البريد SMTP", Mail],
   ["messageTemplates", "إعدادات المراسلات", FileText],
+  ["ai", "الذكاء الاصطناعي", Sparkles],
   ["security", "إعدادات الأمان", LockKeyhole],
   ["database", "قاعدة البيانات", Database],
   ["updates", "إدارة التحديثات", PackageCheck],
   ["localUpdates", "التحديث المحلي", Upload]
 ];
 
-export default function SettingsPage() {
-  const [active, setActive] = useState("general");
+export default function SettingsPage({ initialTab = "general" }) {
+  const [active, setActive] = useState(initialTab);
   const [dialog, setDialog] = useState({ type: "success", message: "" });
+
+  useEffect(() => {
+    setActive(initialTab);
+  }, [initialTab]);
 
   function notify(message, type = "success") {
     setDialog({ type, message });
@@ -50,6 +55,7 @@ export default function SettingsPage() {
           {active === "general" && <Panel title="الإعدادات العامة"><GeneralSettings notify={notify} /></Panel>}
           {active === "email" && <Panel title="إعدادات البريد SMTP"><EmailSettings notify={notify} /></Panel>}
           {active === "messageTemplates" && <Panel title="إعدادات المراسلات"><MessageTemplatesSettings notify={notify} /></Panel>}
+          {active === "ai" && <Panel title="الذكاء الاصطناعي"><AISettingsPanel notify={notify} /></Panel>}
           {active === "requestTypes" && <Panel title="أنواع الطلبات"><RequestTypesSettings notify={notify} /></Panel>}
           {active === "security" && <Panel title="إعدادات الأمان"><SecuritySettings notify={notify} /></Panel>}
           {active === "database" && <Panel title="قاعدة البيانات والنسخ الاحتياطي"><DatabaseSettings notify={notify} /></Panel>}
@@ -79,6 +85,254 @@ function RequestTypesSettings({ notify }) {
     try { await api.post("/request-types", form); notify("تم حفظ نوع الطلب"); await load(); } catch (error) { notify(getErrorMessage(error), "error"); }
   }
   return <div className="space-y-4"><form onSubmit={save} className="grid gap-3 md:grid-cols-4"><Input value={form.request_type} onChange={(e) => setForm({ ...form, request_type: e.target.value })} required /><Input value={form.label_ar} onChange={(e) => setForm({ ...form, label_ar: e.target.value })} required /><label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.is_enabled} onChange={(e) => setForm({ ...form, is_enabled: e.target.checked })} /> Enabled</label><label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.require_attachment} onChange={(e) => setForm({ ...form, require_attachment: e.target.checked })} /> Require Attachment</label><Button type="submit">حفظ</Button></form><SimpleError error={error} /><SimpleTable headers={["Type", "Arabic Label", "Enabled", "Attachment"]} rows={items.map((i) => [i.request_type, i.label_ar, i.is_enabled ? "Yes" : "No", i.require_attachment ? "Yes" : "No"])} /></div>;
+}
+
+const defaultAISettings = {
+  is_enabled: false,
+  provider: "openai_compatible",
+  api_base_url: "",
+  api_key: "",
+  api_key_configured: false,
+  model_name: "gpt-4o-mini",
+  max_input_chars: 6000,
+  allow_message_drafting: true,
+  allow_summarization: true,
+  allow_reply_suggestion: true,
+  mask_sensitive_data: true
+};
+
+const aiProviderHints = {
+  openai_compatible: {
+    apiPlaceholder: "https://provider.example/v1/chat/completions",
+    modelPlaceholder: "gpt-4o-mini",
+    apiKeyPlaceholder: "أدخل مفتاح الخدمة",
+    note: "استخدم هذا الخيار لأي مزود يدعم Chat Completions المتوافق مع OpenAI."
+  },
+  ollama: {
+    apiPlaceholder: "http://localhost:11434",
+    modelPlaceholder: "llama3.1:8b أو qwen2.5:7b",
+    apiKeyPlaceholder: "Ollama لا يحتاج API Key عادةً",
+    note: "إذا كان النظام يعمل داخل Docker على نفس الجهاز، استخدم غالباً http://host.docker.internal:11434 بدلاً من localhost."
+  },
+  generic_http: {
+    apiPlaceholder: "https://provider.example/generate",
+    modelPlaceholder: "اسم النموذج لدى المزود",
+    apiKeyPlaceholder: "أدخل مفتاح الخدمة إن وجد",
+    note: "يرسل النظام model و prompt وينتظر text أو output في الاستجابة."
+  },
+  mock: {
+    apiPlaceholder: "لا يحتاج رابط",
+    modelPlaceholder: "mock",
+    apiKeyPlaceholder: "لا يحتاج مفتاح",
+    note: "مزود محلي للاختبار فقط ولا يتصل بأي خدمة خارجية."
+  }
+};
+
+function AISettingsPanel({ notify }) {
+  const [form, setForm] = useState(defaultAISettings);
+  const [logs, setLogs] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState(null);
+  const [error, setError] = useState("");
+
+  async function load() {
+    setLoading(true);
+    setError("");
+    try {
+      const [settingsResponse, logsResponse] = await Promise.all([
+        api.get("/settings/ai"),
+        api.get("/settings/ai/usage-logs")
+      ]);
+      setForm({ ...defaultAISettings, ...settingsResponse.data, api_key: "" });
+      setLogs(logsResponse.data || []);
+    } catch (error) {
+      const message = getErrorMessage(error);
+      setError(message);
+      notify(message, "error");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => { load(); }, []);
+
+  function update(field, value) {
+    setForm((current) => ({ ...current, [field]: value }));
+  }
+
+  function updateProvider(value) {
+    setForm((current) => {
+      const next = { ...current, provider: value };
+      if (value === "ollama" && (!current.api_base_url || current.api_base_url.includes("/v1/chat/completions"))) {
+        next.api_base_url = "http://localhost:11434";
+      }
+      if (value === "ollama" && (!current.model_name || current.model_name === "gpt-4o-mini" || current.model_name === "mock")) {
+        next.model_name = "llama3.1:8b";
+      }
+      if (value === "mock") {
+        next.api_base_url = "";
+        next.model_name = "mock";
+      }
+      return next;
+    });
+  }
+
+  async function save(event) {
+    event.preventDefault();
+    setSaving(true);
+    setError("");
+    try {
+      const payload = {
+        is_enabled: Boolean(form.is_enabled),
+        provider: form.provider || "openai_compatible",
+        api_base_url: form.api_base_url || null,
+        api_key: form.api_key || null,
+        model_name: form.model_name || "gpt-4o-mini",
+        max_input_chars: Number(form.max_input_chars || 6000),
+        allow_message_drafting: Boolean(form.allow_message_drafting),
+        allow_summarization: Boolean(form.allow_summarization),
+        allow_reply_suggestion: Boolean(form.allow_reply_suggestion),
+        mask_sensitive_data: Boolean(form.mask_sensitive_data)
+      };
+      const { data } = await api.put("/settings/ai", payload);
+      setForm({ ...defaultAISettings, ...data, api_key: "" });
+      notify("تم حفظ إعدادات المساعد الذكي");
+      await load();
+    } catch (error) {
+      const message = getErrorMessage(error);
+      setError(message);
+      notify(message, "error");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function testConnection() {
+    setTesting(true);
+    setTestResult(null);
+    setError("");
+    try {
+      const { data } = await api.post("/settings/ai/test");
+      setTestResult(data);
+      notify(data.message, data.ok ? "success" : "error");
+      await load();
+    } catch (error) {
+      const message = getErrorMessage(error);
+      setTestResult({ ok: false, message });
+      setError(message);
+      notify(message, "error");
+    } finally {
+      setTesting(false);
+    }
+  }
+
+  if (loading) {
+    return <div className="rounded-md border border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">جاري تحميل إعدادات الذكاء الاصطناعي...</div>;
+  }
+  const providerHint = aiProviderHints[form.provider || "openai_compatible"] || aiProviderHints.openai_compatible;
+
+  return (
+    <form onSubmit={save} className="space-y-5 text-right" dir="rtl">
+      <div className="rounded-lg border border-bank-100 bg-bank-50/70 p-4">
+        <div className="flex items-start gap-3">
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-white text-bank-700">
+            <Sparkles className="h-5 w-5" />
+          </span>
+          <div>
+            <p className="font-bold text-slate-950">المساعد الذكي للمراسلات</p>
+            <p className="mt-1 text-sm leading-6 text-slate-600">
+              المساعد يولد مسودات واقتراحات فقط، ولا يستطيع إرسال أو اعتماد أو حذف أي رسالة.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <Toggle label="تفعيل المساعد الذكي" checked={Boolean(form.is_enabled)} onChange={(value) => update("is_enabled", value)} />
+        <Toggle label="إخفاء البيانات الحساسة" checked={Boolean(form.mask_sensitive_data)} onChange={(value) => update("mask_sensitive_data", value)} />
+        <Toggle label="السماح بتوليد الرسائل" checked={Boolean(form.allow_message_drafting)} onChange={(value) => update("allow_message_drafting", value)} />
+        <Toggle label="السماح بتلخيص المراسلات" checked={Boolean(form.allow_summarization)} onChange={(value) => update("allow_summarization", value)} />
+        <Toggle label="السماح باقتراح الردود" checked={Boolean(form.allow_reply_suggestion)} onChange={(value) => update("allow_reply_suggestion", value)} />
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-2">
+        <label className="block space-y-2 text-sm font-medium text-slate-700">
+          مزود الخدمة
+          <select value={form.provider || "openai_compatible"} onChange={(event) => updateProvider(event.target.value)} className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none focus:border-bank-600 focus:ring-2 focus:ring-bank-100">
+            <option value="openai_compatible">OpenAI-compatible Chat Completions</option>
+            <option value="ollama">Ollama محلي</option>
+            <option value="generic_http">Generic HTTP Text API</option>
+            <option value="mock">Mock محلي للاختبار</option>
+          </select>
+        </label>
+        <LabeledInput label="API Base URL" value={form.api_base_url || ""} onChange={(event) => update("api_base_url", event.target.value)} placeholder={providerHint.apiPlaceholder} />
+        <LabeledInput label="Model Name" value={form.model_name || ""} onChange={(event) => update("model_name", event.target.value)} placeholder={providerHint.modelPlaceholder} />
+        <LabeledInput label="الحد الأقصى لطول النص" type="number" min="500" max="50000" value={form.max_input_chars || 6000} onChange={(event) => update("max_input_chars", event.target.value)} />
+        <label className="block space-y-2 text-sm font-medium text-slate-700 md:col-span-2">
+          API Key
+          <Input type="password" value={form.api_key || ""} onChange={(event) => update("api_key", event.target.value)} placeholder={form.api_key_configured ? "تم حفظ مفتاح سابق. اتركه فارغاً للإبقاء عليه." : providerHint.apiKeyPlaceholder} />
+        </label>
+        <p className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm leading-6 text-slate-600 md:col-span-2">
+          {providerHint.note}
+        </p>
+      </div>
+
+      <SimpleError error={error} />
+      {testResult && (
+        <div className={`rounded-lg border p-4 ${testResult.ok ? "border-emerald-100 bg-emerald-50 text-emerald-800" : "border-red-100 bg-red-50 text-red-800"}`}>
+          <div className="flex items-start gap-3">
+            {testResult.ok ? <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0" /> : <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" />}
+            <div>
+              <p className="text-sm font-black">{testResult.message}</p>
+              {testResult.sample && <p className="mt-2 rounded-md bg-white/70 p-3 text-sm leading-7 text-slate-700">{testResult.sample}</p>}
+            </div>
+          </div>
+        </div>
+      )}
+      <div className="flex flex-wrap gap-3">
+        <Button type="submit" disabled={saving}>{saving ? "جاري الحفظ..." : "حفظ إعدادات الذكاء الاصطناعي"}</Button>
+        <button type="button" onClick={testConnection} disabled={testing || saving} className="inline-flex h-10 items-center gap-2 rounded-md border border-bank-200 bg-bank-50 px-4 text-sm font-bold text-bank-800 hover:bg-bank-100 disabled:cursor-not-allowed disabled:opacity-60">
+          <RefreshCw className={`h-4 w-4 ${testing ? "animate-spin" : ""}`} />
+          {testing ? "جاري اختبار الاتصال..." : "اختبار الاتصال"}
+        </button>
+        <button type="button" onClick={load} className="h-10 rounded-md border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50">تحديث السجل</button>
+      </div>
+
+      <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <div>
+            <h4 className="font-bold text-slate-950">سجل استخدام المساعد الذكي</h4>
+            <p className="mt-1 text-sm text-slate-500">لا يتم تخزين نصوص المطالبات الكاملة، فقط أطوال الإدخال والإخراج والحالة.</p>
+          </div>
+          <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-600">{logs.length}</span>
+        </div>
+        <SimpleTable
+          headers={["المستخدم", "الخاصية", "التاريخ", "الحالة"]}
+          rows={logs.map((log) => [
+            log.user_name || log.user_id || "-",
+            aiFeatureLabel(log.feature),
+            formatSystemDateTime(log.created_at),
+            log.status === "success" ? "ناجح" : `فشل${log.error_message ? ` - ${log.error_message}` : ""}`
+          ])}
+        />
+      </div>
+    </form>
+  );
+}
+
+function aiFeatureLabel(value) {
+  const labels = {
+    draft: "توليد مسودة",
+    improve: "تحسين الصياغة",
+    formalize: "جعلها رسمية",
+    shorten: "اختصار النص",
+    suggest_reply: "اقتراح رد",
+    summarize: "تلخيص",
+    missing_info: "فحص المعلومات الناقصة"
+  };
+  return labels[value] || value;
 }
 
 const defaultMessageTypes = [
@@ -116,7 +370,6 @@ function MessageTemplatesSettings({ notify }) {
     enable_department_broadcasts: true,
     enable_read_receipts: true,
     enable_linked_requests: true,
-    auto_refresh_seconds: 20,
     max_attachment_mb: 25,
     max_recipients: 200,
     default_message_type: "internal_correspondence",
@@ -191,9 +444,9 @@ function MessageTemplatesSettings({ notify }) {
     setSettingsSaving(true);
     setError("");
     try {
+      const { auto_refresh_seconds: _autoRefreshSeconds, ...settingsWithoutPolling } = messageSettings;
       const payload = {
-        ...messageSettings,
-        auto_refresh_seconds: Number(messageSettings.auto_refresh_seconds || 20),
+        ...settingsWithoutPolling,
         max_attachment_mb: Number(messageSettings.max_attachment_mb || 25),
         max_recipients: Number(messageSettings.max_recipients || 200)
       };
@@ -288,7 +541,7 @@ function MessageTemplatesSettings({ notify }) {
         <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
           <div>
             <h4 className="font-bold text-slate-950">التحكم العام بالمراسلات</h4>
-            <p className="mt-1 text-sm leading-6 text-slate-500">تحكم في تشغيل المراسلات، المرفقات، المسودات، التواقيع، القوالب، التعاميم، وسجل القراءة.</p>
+            <p className="mt-1 text-sm leading-6 text-slate-500">تحكم في تشغيل المراسلات، المرفقات، المسودات، التواقيع، القوالب، التعاميم، وسجل القراءة. يتم تحديث الوارد لحظياً عبر WebSocket.</p>
           </div>
           <Button type="button" onClick={saveMessageSettings} disabled={settingsSaving}>{settingsSaving ? "جاري الحفظ..." : "حفظ إعدادات المراسلات"}</Button>
         </div>
@@ -306,7 +559,6 @@ function MessageTemplatesSettings({ notify }) {
         </div>
 
         <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-          <LabeledInput label="تحديث الوارد كل / ثانية" type="number" min="5" max="300" value={messageSettings.auto_refresh_seconds || 20} onChange={(event) => updateMessageSetting("auto_refresh_seconds", event.target.value)} />
           <LabeledInput label="أقصى حجم للمرفق MB" type="number" min="1" max="100" value={messageSettings.max_attachment_mb || 25} onChange={(event) => updateMessageSetting("max_attachment_mb", event.target.value)} />
           <LabeledInput label="أقصى عدد مستلمين" type="number" min="1" max="1000" value={messageSettings.max_recipients || 200} onChange={(event) => updateMessageSetting("max_recipients", event.target.value)} />
           <label className="block space-y-2 text-sm font-medium text-slate-700">
