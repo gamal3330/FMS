@@ -322,6 +322,15 @@ export default function MessagesPage() {
   }, [mailbox, unreadOnly, search, archiveView, typeFilter, messageSettings.auto_refresh_seconds]);
 
   useEffect(() => {
+    if (mailbox === "compose") return;
+    function refreshMessagesImmediately() {
+      loadMessages(mailbox);
+    }
+    window.addEventListener("qib-messages-updated", refreshMessagesImmediately);
+    return () => window.removeEventListener("qib-messages-updated", refreshMessagesImmediately);
+  }, [mailbox, unreadOnly, search, archiveView, typeFilter, senderFilter, relatedRequestFilter, dateFrom, dateTo]);
+
+  useEffect(() => {
     if (!selectedId || mailbox === "compose") return;
     loadMessageDetails(selectedId);
   }, [selectedId, mailbox]);
@@ -700,6 +709,8 @@ export default function MessagesPage() {
   }
 
   function startNewMessage() {
+    setMailPanelCollapsed(true);
+    window.dispatchEvent(new CustomEvent("qib-sidebar-collapse", { detail: { collapsed: true } }));
     setForm({ recipient_ids: [], message_type: messageSettings.default_message_type || defaultMessageType, subject: "", body: "", related_request_id: "" });
     setSelectedTemplateKey("");
     setSelectedDepartmentIds([]);
@@ -909,7 +920,7 @@ export default function MessagesPage() {
             <Tab collapsed={mailPanelCollapsed} active={mailbox === "inbox"} onClick={() => setMailbox("inbox")} icon={Inbox} label={`الوارد${unreadCount ? ` (${unreadCount})` : ""}`} />
             <Tab collapsed={mailPanelCollapsed} active={mailbox === "sent"} onClick={() => setMailbox("sent")} icon={Send} label="المرسل" />
             {messageSettings.enable_drafts && <Tab collapsed={mailPanelCollapsed} active={mailbox === "drafts"} onClick={() => setMailbox("drafts")} icon={Save} label="المسودات" />}
-            <Tab collapsed={mailPanelCollapsed} active={mailbox === "compose"} onClick={startNewMessage} icon={SendHorizonal} label="رسالة جديدة" />
+            <Tab collapsed={mailPanelCollapsed} active={mailbox === "compose"} onClick={startNewMessage} icon={SendHorizonal} label="رسالة جديدة" featured />
           </div>
           <button type="button" onClick={() => loadMessages(mailbox)} disabled={isLoading || mailbox === "compose"} className="flex h-10 w-full items-center justify-center gap-2 rounded-md border border-slate-200 bg-white text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60" title="تحديث">
             <RefreshCw className={`h-4 w-4 ${isLoading ? "animate-spin" : ""}`} />
@@ -1656,9 +1667,22 @@ function ToolGroup({ label, children }: { label: string; children: ReactNode }) 
   );
 }
 
-function Tab({ active, onClick, icon: Icon, label, collapsed = false }: { active: boolean; onClick: () => void; icon: typeof Mail; label: string; collapsed?: boolean }) {
+function Tab({ active, onClick, icon: Icon, label, collapsed = false, featured = false }: { active: boolean; onClick: () => void; icon: typeof Mail; label: string; collapsed?: boolean; featured?: boolean }) {
+  if (featured) {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        title={label}
+        className={`relative flex h-11 items-center justify-center gap-2 rounded-md border-2 border-bank-700 bg-white text-xs font-bold text-bank-700 shadow-sm transition hover:bg-bank-50 focus:outline-none focus:ring-2 focus:ring-bank-100 ${active ? "bg-bank-50 ring-2 ring-bank-100" : ""} ${collapsed ? "w-full px-0" : "px-3"}`}
+      >
+        <Icon className="relative h-5 w-5" />
+        {!collapsed && <span className="relative">{label}</span>}
+      </button>
+    );
+  }
   return (
-    <button type="button" onClick={onClick} title={label} className={`flex h-10 items-center justify-center gap-2 rounded-md text-sm font-semibold ${active ? "bg-bank-50 text-bank-700" : "text-slate-600 hover:bg-slate-50"} ${collapsed ? "w-full" : ""}`}>
+    <button type="button" onClick={onClick} title={label} className={`flex h-10 items-center justify-center gap-2 rounded-md text-xs font-bold ${active ? "bg-bank-50 text-bank-700" : "text-slate-600 hover:bg-slate-50"} ${collapsed ? "w-full" : ""}`}>
       <Icon className="h-4 w-4" />
       {!collapsed && label}
     </button>

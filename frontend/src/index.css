@@ -8,10 +8,26 @@
   --bank-600: 18 128 70;
   --bank-700: 13 99 55;
   --bank-900: 8 53 31;
+  --app-bg: #f6f8f7;
+  --app-surface: #ffffff;
+  --app-surface-muted: #f8fafc;
+  --app-border: #e2e8f0;
+  --app-text: #0f172a;
+  --app-text-muted: #64748b;
   direction: rtl;
-  color: #0f172a;
-  background: #f6f8f7;
+  color: var(--app-text);
+  background: var(--app-bg);
   font-family: "Tajawal", "Cairo", "Segoe UI", Tahoma, Arial, sans-serif;
+}
+
+:root[data-theme="dark"] {
+  --app-bg: #0f172a;
+  --app-surface: #111827;
+  --app-surface-muted: #1e293b;
+  --app-border: #334155;
+  --app-text: #e5e7eb;
+  --app-text-muted: #94a3b8;
+  color-scheme: dark;
 }
 
 html {
@@ -24,6 +40,8 @@ body {
   margin: 0;
   direction: rtl;
   text-align: right;
+  color: var(--app-text);
+  background: var(--app-bg);
   font-family: "Tajawal", "Cairo", "Segoe UI", Tahoma, Arial, sans-serif;
 }
 
@@ -65,13 +83,67 @@ th, td {
   text-align: left;
 }
 
-:where(body, body *) {
+:root:not([data-theme="dark"]) :where(body, body *) {
   color: #000 !important;
+}
+
+:root[data-theme="dark"] :where(body, body *) {
+  border-color: var(--app-border) !important;
+}
+
+:root[data-theme="dark"] :where(.bg-white, .bg-white\/95) {
+  background-color: rgb(17 24 39 / var(--tw-bg-opacity, 1)) !important;
+}
+
+:root[data-theme="dark"] :where(.bg-slate-50, .bg-slate-100) {
+  background-color: rgb(30 41 59 / var(--tw-bg-opacity, 1)) !important;
+}
+
+:root[data-theme="dark"] :where(.bg-slate-200, .bg-slate-300) {
+  background-color: rgb(51 65 85 / var(--tw-bg-opacity, 1)) !important;
+}
+
+:root[data-theme="dark"] :where(.bg-bank-50, .bg-bank-100) {
+  background-color: rgb(var(--bank-900) / 0.32) !important;
+}
+
+:root[data-theme="dark"] :where(.text-slate-950, .text-slate-900, .text-slate-800, .text-slate-700) {
+  color: rgb(241 245 249) !important;
+}
+
+:root[data-theme="dark"] :where(.text-slate-600, .text-slate-500, .text-slate-400) {
+  color: rgb(148 163 184) !important;
+}
+
+:root[data-theme="dark"] :where(.text-bank-700, .text-bank-800, .text-bank-900) {
+  color: rgb(190 242 215) !important;
+}
+
+:root[data-theme="dark"] :where(.border-slate-100, .border-slate-200, .border-slate-300) {
+  border-color: rgb(51 65 85) !important;
+}
+
+:root[data-theme="dark"] :where(input, select, textarea, .message-rich-editor) {
+  background-color: rgb(15 23 42) !important;
+  border-color: rgb(51 65 85) !important;
+  color: rgb(241 245 249) !important;
+}
+
+:root[data-theme="dark"] :where(.hover\:bg-slate-50:hover, .hover\:bg-slate-100:hover, tr:hover) {
+  background-color: rgb(30 41 59 / 0.9) !important;
+}
+
+:root[data-theme="dark"] :where(.shadow-sm, .shadow-xl, .shadow-2xl) {
+  --tw-shadow-color: rgb(0 0 0 / 0.45);
 }
 
 ::placeholder {
   color: rgb(0 0 0 / 0.55) !important;
   opacity: 1;
+}
+
+:root[data-theme="dark"] ::placeholder {
+  color: rgb(148 163 184 / 0.85) !important;
 }
 
 .message-rich-editor:empty::before {
@@ -106,6 +178,10 @@ th, td {
   margin: 0.75rem 0;
   padding: 0.5rem 0.75rem;
   background: rgb(248 250 252);
+}
+
+:root[data-theme="dark"] .message-rich-editor :where(blockquote) {
+  background: rgb(15 23 42);
 }
 
 @keyframes toastIn {

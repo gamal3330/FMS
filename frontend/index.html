@@ -43,6 +43,8 @@
         }
 
         var root = document.documentElement;
+        var theme = localStorage.getItem("qib_theme") || "light";
+        root.setAttribute("data-theme", theme === "dark" ? "dark" : "light");
         root.style.setProperty("--bank-50", rgb(mix(color, "#ffffff", 0.93)));
         root.style.setProperty("--bank-100", rgb(mix(color, "#ffffff", 0.82)));
         root.style.setProperty("--bank-600", rgb(mix(color, "#ffffff", 0.08)));

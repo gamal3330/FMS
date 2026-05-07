@@ -1,7 +1,9 @@
 from datetime import datetime, time, timezone
+import asyncio
 from pathlib import Path
 from uuid import uuid4
 
+import anyio
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from fastapi.responses import FileResponse
 from sqlalchemy import func, select
@@ -17,6 +19,7 @@ from app.models.settings import PortalSetting
 from app.models.user import User
 from app.schemas.message import InternalMessageCreate, InternalMessageDraftUpsert, InternalMessageForward, InternalMessageRead, InternalMessageReply, MessageAttachmentRead, MessageBulkAction, MessageCapabilitiesRead, MessageCounters, MessageReadReceipt, MessageSettingsRead, MessageSettingsUpdate, MessageSignatureRead, MessageSignatureUpdate, MessageTemplateRead, MessageTemplatesUpdate, MessageTypeRead, MessageTypesUpdate, MessageUserRead
 from app.services.audit import write_audit
+from app.services.realtime import message_notification_payload, notification_manager
 
 router = APIRouter(prefix="/messages", tags=["Internal Messages"])
 settings = get_settings()
@@ -482,6 +485,21 @@ def replace_message_recipients(db: Session, message: InternalMessage, recipients
         db.add(InternalMessageRecipient(message_id=message.id, recipient_id=recipient.id))
 
 
+def notify_message_recipients(message: InternalMessage, sender: User) -> None:
+    recipient_ids = [recipient.recipient_id for recipient in message.recipients if recipient.recipient_id != sender.id]
+    if not recipient_ids:
+        return
+    payload = message_notification_payload(message, sender)
+    try:
+        anyio.from_thread.run(notification_manager.broadcast_to_users, recipient_ids, payload)
+    except RuntimeError:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        loop.create_task(notification_manager.broadcast_to_users(recipient_ids, payload))
+
+
 @router.get("/users", response_model=list[MessageUserRead])
 def list_message_users(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     if not user_allowed_by_message_scope(db, current_user):
@@ -829,7 +847,9 @@ def send_draft(draft_id: int, payload: InternalMessageDraftUpsert, db: Session =
     replace_message_recipients(db, draft, recipients)
     write_audit(db, "internal_message_draft_sent", "internal_message", actor=current_user, entity_id=str(draft.id))
     db.commit()
-    return message_read(load_message_with_access(db, draft.id, current_user), current_user)
+    sent_message = load_message_with_access(db, draft.id, current_user)
+    notify_message_recipients(sent_message, current_user)
+    return message_read(sent_message, current_user)
 
 
 @router.delete("/drafts/{draft_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -874,6 +894,7 @@ def send_message(payload: InternalMessageCreate, db: Session = Depends(get_db), 
         )
         .where(InternalMessage.id == message.id)
     )
+    notify_message_recipients(message, current_user)
     return message_read(message, current_user)
 
 
@@ -900,7 +921,9 @@ async def send_message_with_attachments(
         metadata={"attachments": len(attachments), "related_request_id": related_request_id},
     )
     db.commit()
-    return message_read(load_message_with_access(db, message.id, current_user), current_user)
+    sent_message = load_message_with_access(db, message.id, current_user)
+    notify_message_recipients(sent_message, current_user)
+    return message_read(sent_message, current_user)
 
 
 @router.post("/bulk/archive", status_code=status.HTTP_204_NO_CONTENT)
@@ -1005,6 +1028,7 @@ def reply_message(message_id: int, payload: InternalMessageReply, db: Session = 
     write_audit(db, "internal_message_replied", "internal_message", actor=current_user, entity_id=str(reply.id))
     db.commit()
     reply = load_message_with_access(db, reply.id, current_user)
+    notify_message_recipients(reply, current_user)
     return message_read(reply, current_user)
 
 
@@ -1038,7 +1062,9 @@ async def reply_message_with_attachments(
     await save_message_attachments(db, reply, attachments, current_user)
     write_audit(db, "internal_message_replied", "internal_message", actor=current_user, entity_id=str(reply.id), metadata={"attachments": len(attachments)})
     db.commit()
-    return message_read(load_message_with_access(db, reply.id, current_user), current_user)
+    sent_reply = load_message_with_access(db, reply.id, current_user)
+    notify_message_recipients(sent_reply, current_user)
+    return message_read(sent_reply, current_user)
 
 
 @router.post("/{message_id}/forward", response_model=InternalMessageRead, status_code=status.HTTP_201_CREATED)
@@ -1077,7 +1103,9 @@ def forward_message(message_id: int, payload: InternalMessageForward, db: Sessio
         metadata={"original_message_id": original.id},
     )
     db.commit()
-    return message_read(load_message_with_access(db, forward.id, current_user), current_user)
+    sent_forward = load_message_with_access(db, forward.id, current_user)
+    notify_message_recipients(sent_forward, current_user)
+    return message_read(sent_forward, current_user)
 
 
 @router.post("/{message_id}/read", response_model=InternalMessageRead)

@@ -1,4 +1,4 @@
-import { Activity, BarChart3, Bell, Building2, FileText, KeyRound, LayoutDashboard, LogOut, Mail, Network, PanelRightClose, PanelRightOpen, ScrollText, Settings, ShieldCheck, UserCircle, Users, X } from "lucide-react";
+import { Activity, BarChart3, Bell, BellRing, Building2, FileText, KeyRound, LayoutDashboard, LogOut, Mail, Moon, Network, PanelRightClose, PanelRightOpen, ScrollText, Settings, ShieldCheck, Sun, UserCircle, Users, X } from "lucide-react";
 import { ReactNode, useEffect, useRef, useState } from "react";
 import { NavLink } from "react-router-dom";
 import { API_BASE, apiFetch, CurrentUser, ServiceRequest } from "../lib/api";
@@ -50,6 +50,11 @@ export function Layout({
   const [notificationOpen, setNotificationOpen] = useState(false);
   const [allowedScreens, setAllowedScreens] = useState<Set<string> | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem("qib_sidebar_collapsed") === "true");
+  const [theme, setTheme] = useState<"light" | "dark">(() => (localStorage.getItem("qib_theme") === "dark" ? "dark" : "light"));
+  const [browserNotificationPermission, setBrowserNotificationPermission] = useState<NotificationPermission | "unsupported">(() => {
+    if (typeof window === "undefined" || !("Notification" in window)) return "unsupported";
+    return Notification.permission;
+  });
   const knownNotificationKeys = useRef<Set<string>>(new Set());
   const notificationsInitialized = useRef(false);
   const messageCountersInitialized = useRef(false);
@@ -77,6 +82,20 @@ export function Layout({
   useEffect(() => {
     localStorage.setItem("qib_sidebar_collapsed", String(sidebarCollapsed));
   }, [sidebarCollapsed]);
+
+  useEffect(() => {
+    function handleSidebarCollapse(event: Event) {
+      const nextValue = event instanceof CustomEvent ? event.detail?.collapsed : undefined;
+      setSidebarCollapsed(typeof nextValue === "boolean" ? nextValue : true);
+    }
+    window.addEventListener("qib-sidebar-collapse", handleSidebarCollapse);
+    return () => window.removeEventListener("qib-sidebar-collapse", handleSidebarCollapse);
+  }, []);
+
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", theme);
+    localStorage.setItem("qib_theme", theme);
+  }, [theme]);
 
   useEffect(() => {
     applyBrandColor(localStorage.getItem("qib_brand_color") || "#0d6337");
@@ -182,6 +201,54 @@ export function Layout({
     return () => window.clearTimeout(timer);
   }, [messageToast.message]);
 
+  useEffect(() => {
+    if (!("Notification" in window)) {
+      setBrowserNotificationPermission("unsupported");
+      return;
+    }
+    setBrowserNotificationPermission(Notification.permission);
+  }, [currentUser?.id]);
+
+  useEffect(() => {
+    if (!currentUser || !canSeeScreen("messages")) return;
+    const token = localStorage.getItem("qib_token");
+    if (!token) return;
+    const wsToken = token;
+
+    let socket: WebSocket | null = null;
+    let reconnectTimer = 0;
+    let closedByEffect = false;
+
+    function connect() {
+      socket = new WebSocket(buildWebSocketUrl("/ws/notifications", wsToken));
+      socket.onmessage = (event) => {
+        const payload = parseRealtimePayload(event.data);
+        if (!payload || payload.type !== "new_message") return;
+        previousMessageUnreadCount.current += 1;
+        messageCountersInitialized.current = true;
+        setMessageUnreadCount((value) => value + 1);
+        setMessageToast({ message: `${payload.body}${payload.subject ? `: ${payload.subject}` : ""}` });
+        showBrowserNotification(payload);
+        window.dispatchEvent(new Event("qib-messages-updated"));
+      };
+      socket.onclose = () => {
+        if (closedByEffect) return;
+        reconnectTimer = window.setTimeout(connect, 5000);
+      };
+      socket.onerror = () => {
+        socket?.close();
+      };
+    }
+
+    connect();
+
+    return () => {
+      closedByEffect = true;
+      window.clearTimeout(reconnectTimer);
+      socket?.close();
+    };
+  }, [currentUser?.id, allowedScreens]);
+
   async function changePassword(event: React.FormEvent) {
     event.preventDefault();
     setPasswordErrors({});
@@ -203,6 +270,25 @@ export function Layout({
       setPasswordErrors(mapPasswordError(extractErrorMessage(error)));
     } finally {
       setPasswordSaving(false);
+    }
+  }
+
+  async function requestBrowserNotifications() {
+    if (!("Notification" in window)) {
+      setFeedback({ type: "error", message: "المتصفح لا يدعم إشعارات سطح المكتب" });
+      setBrowserNotificationPermission("unsupported");
+      return;
+    }
+    const permission = await Notification.requestPermission();
+    setBrowserNotificationPermission(permission);
+    if (permission === "granted") {
+      setFeedback({ type: "success", message: "تم تفعيل إشعارات المتصفح" });
+      new Notification("تم تفعيل الإشعارات", {
+        body: "ستصلك إشعارات عند وصول رسائل جديدة.",
+        dir: "rtl"
+      });
+    } else if (permission === "denied") {
+      setFeedback({ type: "error", message: "تم حظر إشعارات المتصفح. يمكنك تفعيلها من إعدادات الموقع في المتصفح." });
     }
   }
 
@@ -365,6 +451,27 @@ export function Layout({
                   )}
                 </NavLink>
               )}
+              {canSeeScreen("messages") && browserNotificationPermission !== "granted" && (
+                <button
+                  type="button"
+                  onClick={requestBrowserNotifications}
+                  disabled={browserNotificationPermission === "unsupported"}
+                  className="hidden h-10 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-sm font-bold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60 sm:inline-flex"
+                  title={browserNotificationPermission === "denied" ? "الإشعارات محظورة من المتصفح" : "تفعيل إشعارات المتصفح"}
+                >
+                  <BellRing className="h-4 w-4" />
+                  <span>{browserNotificationPermission === "denied" ? "الإشعارات محظورة" : "تفعيل الإشعارات"}</span>
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setTheme((value) => (value === "dark" ? "light" : "dark"))}
+                className="flex h-10 w-10 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                aria-label={theme === "dark" ? "تفعيل الوضع النهاري" : "تفعيل الوضع الليلي"}
+                title={theme === "dark" ? "الوضع النهاري" : "الوضع الليلي"}
+              >
+                {theme === "dark" ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
+              </button>
               {notificationOpen && (
                 <div className="absolute left-0 top-12 w-72 rounded-lg border border-slate-200 bg-white p-4 text-right shadow-xl">
                   <p className="font-bold text-slate-950">الإشعارات</p>
@@ -443,4 +550,46 @@ function mapPasswordError(message: string) {
   if (message.includes("الحالية")) return { current_password: message };
   if (message.includes("تأكيد") || message.includes("متطابق")) return { confirm_password: message };
   return { new_password: message };
+}
+
+type RealtimeMessagePayload = {
+  type: string;
+  title?: string;
+  body?: string;
+  subject?: string;
+  message_id?: number;
+  message_uid?: string;
+  sender_name?: string;
+  preview?: string;
+};
+
+function buildWebSocketUrl(path: string, token: string) {
+  const base = API_BASE.replace(/\/$/, "");
+  const url = new URL(`${base}${path}`, window.location.origin);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  url.searchParams.set("token", token);
+  return url.toString();
+}
+
+function parseRealtimePayload(raw: string): RealtimeMessagePayload | null {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+async function showBrowserNotification(payload: RealtimeMessagePayload) {
+  if (!("Notification" in window)) return;
+  if (Notification.permission !== "granted") return;
+  const notification = new Notification(payload.title || "رسالة جديدة", {
+    body: payload.subject || payload.body || "وصلت رسالة داخلية جديدة",
+    tag: payload.message_uid || String(payload.message_id || "qib-message"),
+    dir: "rtl"
+  });
+  notification.onclick = () => {
+    window.focus();
+    window.location.assign("/messages");
+    notification.close();
+  };
 }

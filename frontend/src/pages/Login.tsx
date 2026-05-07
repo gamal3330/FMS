@@ -29,7 +29,7 @@ export function Login({ onLogin }: { onLogin: (token: string) => void }) {
   useEffect(() => {
     document.title = systemName;
   }, [systemName]);
-
+  ي
   useEffect(() => {
     applyBrandColor(localStorage.getItem("qib_brand_color") || "#0d6337");
     applyStoredFavicon();
