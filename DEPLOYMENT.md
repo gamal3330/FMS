@@ -69,6 +69,67 @@ APP_DIR=/opt/fms BRANCH=main ./scripts/deploy-release.sh
 
 هذا هو المسار المفضل للإنتاج لأنه يحافظ على سجل Git واضح، ويعيد بناء الحاويات بنفس البيئة، ثم ينفذ migrations عبر مدير التحديثات.
 
+## تشغيل النظام عبر HTTPS
+
+تم تجهيز مسار اختياري لتشغيل الواجهة على HTTPS من داخل Docker بدون تعطيل تشغيل HTTP الحالي.
+
+### 1. شهادة داخلية مؤقتة للتجربة
+
+استخدمها للاختبار الداخلي فقط:
+
+```bash
+./scripts/create-self-signed-cert.sh
+```
+
+ثم شغل النظام بملف HTTPS الإضافي:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.https.yml up -d --build
+```
+
+سيفتح النظام على:
+
+```text
+https://server-ip
+```
+
+ملاحظة: لأن الشهادة داخلية `self-signed` سيعرض المتصفح تحذيراً، ويجب الوثوق بالشهادة يدوياً أو استبدالها بشهادة رسمية.
+
+### 2. شهادة رسمية أو شهادة داخلية من المؤسسة
+
+ضع ملفات الشهادة في:
+
+```text
+deploy/nginx/certs/fullchain.pem
+deploy/nginx/certs/privkey.pem
+```
+
+ثم شغل:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.https.yml up -d --build
+```
+
+إذا كان لديك دومين مثل `fms.example.com`، حدّث `.env`:
+
+```env
+CORS_ORIGINS=https://fms.example.com
+FRONTEND_PORT=80
+FRONTEND_HTTPS_PORT=443
+```
+
+ملف HTTPS المستخدم:
+
+```text
+frontend/nginx.https.conf
+```
+
+وهو يدعم:
+
+- تحويل HTTP إلى HTTPS.
+- WebSocket على `/api/v1/ws/notifications`.
+- رفع ملفات حتى 1GB.
+
 ## المسار الثاني: تحديث محلي عبر ZIP
 
 استخدم هذا المسار عندما يكون السيرفر داخليًا أو لا يستطيع الوصول إلى GitHub.

@@ -29,6 +29,8 @@ backend/uploads/
 backend/backups/
 backend/*.log
 *.log
+deploy/nginx/certs/*
+!deploy/nginx/certs/.gitkeep
 
 # OS / editor
 .DS_Store
