@@ -30,12 +30,14 @@ export function Layout({
   children,
   currentUser,
   canAccessSettings,
-  onLogout
+  onLogout,
+  onPasswordChanged
 }: {
   children: ReactNode;
   currentUser: CurrentUser | null;
   canAccessSettings: boolean;
   onLogout: () => void;
+  onPasswordChanged?: () => void;
 }) {
   const [systemName, setSystemName] = useState(() => localStorage.getItem("qib_system_name") || "");
   const [logoUrl, setLogoUrl] = useState(() => localStorage.getItem("qib_logo_url") || "");
@@ -43,6 +45,7 @@ export function Layout({
   const [passwordForm, setPasswordForm] = useState({ current_password: "", new_password: "", confirm_password: "" });
   const [passwordErrors, setPasswordErrors] = useState<{ current_password?: string; new_password?: string; confirm_password?: string }>({});
   const [passwordSaving, setPasswordSaving] = useState(false);
+  const [passwordChangeRequired, setPasswordChangeRequired] = useState(Boolean(currentUser?.force_password_change));
   const [feedback, setFeedback] = useState<{ type: "success" | "error" | "info"; message: string }>({ type: "success", message: "" });
   const [messageToast, setMessageToast] = useState<{ message: string }>({ message: "" });
   const [notificationCount, setNotificationCount] = useState(0);
@@ -63,26 +66,33 @@ export function Layout({
   const isEmployee = currentUser?.role === "employee";
   const canSeeScreen = (screenKey: string) => !allowedScreens || allowedScreens.has(screenKey);
   const visibleBaseNav = baseNav.filter((item) => !(isEmployee && item.hiddenForEmployee)).filter((item) => canSeeScreen(item.screenKey));
-  const nav = canAccessSettings
-    ? [
-        ...visibleBaseNav,
-        { label: "إدارة أنواع الطلبات", href: "/request-types", icon: ScrollText, screenKey: "request_types" },
-        { label: "المستخدمون والصلاحيات", href: "/settings/users-permissions", icon: Users, screenKey: "users" },
-        { label: "الإدارات", href: "/departments", icon: Building2, screenKey: "departments" },
-        { label: "الأقسام المختصة", href: "/specialized-sections", icon: Network, screenKey: "specialized_sections" },
-        { label: "مراقبة صحة النظام", href: "/settings/health-monitoring", icon: Activity, screenKey: "health_monitoring" },
-        { label: "إعدادات المراسلات", href: "/settings/messaging", icon: Mail, screenKey: "settings" },
-        { label: "الذكاء الاصطناعي", href: "/settings/ai", icon: Sparkles, screenKey: "settings" },
-        { label: "قاعدة البيانات", href: "/settings/database", icon: Database, screenKey: "settings" },
-        { label: "إدارة التحديثات", href: "/settings/updates", icon: PackageCheck, screenKey: "settings" },
-        { label: "التحديث المحلي", href: "/settings/updates/local", icon: UploadCloud, screenKey: "settings" },
-        { label: "الإعدادات", href: "/settings", icon: Settings, screenKey: "settings" }
-      ].filter((item) => canSeeScreen(item.screenKey))
-    : visibleBaseNav;
+  const managementNav = [
+    { label: "إدارة أنواع الطلبات", href: "/request-types", icon: ScrollText, screenKey: "request_types" },
+    { label: "المستخدمون والصلاحيات", href: "/settings/users-permissions", icon: Users, screenKey: "users" },
+    { label: "الإدارات", href: "/departments", icon: Building2, screenKey: "departments" },
+    { label: "الأقسام المختصة", href: "/specialized-sections", icon: Network, screenKey: "specialized_sections" },
+    { label: "مراقبة صحة النظام", href: "/settings/health-monitoring", icon: Activity, screenKey: "health_monitoring" },
+    { label: "إعدادات المراسلات", href: "/settings/messaging", icon: Mail, screenKey: "messaging_settings" },
+    { label: "الذكاء الاصطناعي", href: "/settings/ai", icon: Sparkles, screenKey: "ai_settings" },
+    { label: "قاعدة البيانات", href: "/settings/database", icon: Database, screenKey: "database_settings" },
+    { label: "إدارة التحديثات", href: "/settings/updates", icon: PackageCheck, screenKey: "update_management" },
+    { label: "التحديث المحلي", href: "/settings/updates/local", icon: UploadCloud, screenKey: "update_management" },
+    { label: "الإعدادات", href: "/settings", icon: Settings, screenKey: "settings" }
+  ];
+  const nav = [
+    ...visibleBaseNav,
+    ...(canAccessSettings ? managementNav : managementNav.filter((item) => canSeeScreen(item.screenKey)))
+  ].filter((item) => canSeeScreen(item.screenKey));
 
   useEffect(() => {
     document.title = systemName;
   }, [systemName]);
+
+  useEffect(() => {
+    const isRequired = Boolean(currentUser?.force_password_change);
+    setPasswordChangeRequired(isRequired);
+    if (isRequired) setPasswordDialogOpen(true);
+  }, [currentUser?.force_password_change]);
 
   useEffect(() => {
     localStorage.setItem("qib_sidebar_collapsed", String(sidebarCollapsed));
@@ -117,14 +127,14 @@ export function Layout({
   }, []);
 
   useEffect(() => {
-    if (!currentUser) return;
+    if (!currentUser || passwordChangeRequired) return;
     apiFetch<{ system_name?: string; logo_url?: string; brand_color?: string }>("/settings/public-profile")
       .then((profile) => applyBranding(profile))
       .catch(() => undefined);
-  }, [currentUser?.id]);
+  }, [currentUser?.id, passwordChangeRequired]);
 
   useEffect(() => {
-    if (!currentUser) {
+    if (!currentUser || passwordChangeRequired) {
       setAllowedScreens(null);
       setMessageUnreadCount(0);
       return;
@@ -132,10 +142,10 @@ export function Layout({
     apiFetch<{ screens: string[]; available_screens?: { key: string; label: string }[] }>("/users/screen-permissions/me")
       .then((data) => setAllowedScreens(new Set(normalizeScreens(data.screens, data.available_screens))))
       .catch(() => setAllowedScreens(null));
-  }, [currentUser?.id]);
+  }, [currentUser?.id, passwordChangeRequired]);
 
   useEffect(() => {
-    if (!currentUser || !canSeeScreen("messages")) {
+    if (!currentUser || passwordChangeRequired || !canSeeScreen("messages")) {
       setMessageUnreadCount(0);
       messageCountersInitialized.current = false;
       previousMessageUnreadCount.current = 0;
@@ -164,14 +174,14 @@ export function Layout({
       window.clearInterval(timer);
       window.removeEventListener("qib-messages-updated", loadMessageCounters);
     };
-  }, [currentUser?.id, allowedScreens]);
+  }, [currentUser?.id, allowedScreens, passwordChangeRequired]);
 
   useEffect(() => {
     knownNotificationKeys.current = new Set();
     notificationsInitialized.current = false;
     setNotificationCount(0);
 
-    if (currentUser?.role !== "it_staff") return;
+    if (passwordChangeRequired || currentUser?.role !== "it_staff") return;
 
     let isActive = true;
     async function loadExecutionNotifications() {
@@ -198,7 +208,7 @@ export function Layout({
       isActive = false;
       window.clearInterval(timer);
     };
-  }, [currentUser?.id, currentUser?.role]);
+  }, [currentUser?.id, currentUser?.role, passwordChangeRequired]);
 
   useEffect(() => {
     if (!messageToast.message) return;
@@ -215,7 +225,7 @@ export function Layout({
   }, [currentUser?.id]);
 
   useEffect(() => {
-    if (!currentUser || !canSeeScreen("messages")) return;
+    if (!currentUser || passwordChangeRequired || !canSeeScreen("messages")) return;
     const token = localStorage.getItem("qib_token");
     if (!token) return;
     const wsToken = token;
@@ -252,7 +262,7 @@ export function Layout({
       window.clearTimeout(reconnectTimer);
       socket?.close();
     };
-  }, [currentUser?.id, allowedScreens]);
+  }, [currentUser?.id, allowedScreens, passwordChangeRequired]);
 
   async function changePassword(event: React.FormEvent) {
     event.preventDefault();
@@ -267,10 +277,13 @@ export function Layout({
         method: "POST",
         body: JSON.stringify(passwordForm)
       });
+      setPasswordChangeRequired(false);
+      onPasswordChanged?.();
       setPasswordDialogOpen(false);
       setPasswordForm({ current_password: "", new_password: "", confirm_password: "" });
       setPasswordErrors({});
-      setFeedback({ type: "success", message: "تم تغيير كلمة المرور بنجاح" });
+      setFeedback({ type: "success", message: "تم تغيير كلمة المرور بنجاح. يمكنك الآن استخدام النظام." });
+      window.setTimeout(() => window.location.reload(), 500);
     } catch (error) {
       setPasswordErrors(mapPasswordError(extractErrorMessage(error)));
     } finally {
@@ -317,22 +330,33 @@ export function Layout({
           <form onSubmit={changePassword} className="w-full max-w-sm rounded-lg border border-slate-200 bg-white p-5 shadow-xl">
             <div className="mb-4 flex items-start justify-between gap-4">
               <div>
-                <h3 className="text-base font-bold text-slate-950">تغيير كلمة المرور</h3>
-                <p className="mt-1 text-sm text-slate-500">أدخل كلمة المرور الحالية ثم الجديدة.</p>
+                <h3 className="text-base font-bold text-slate-950">{passwordChangeRequired ? "يجب تغيير كلمة المرور" : "تغيير كلمة المرور"}</h3>
+                <p className="mt-1 text-sm text-slate-500">
+                  {passwordChangeRequired ? "تم تفعيل إجبار تغيير كلمة المرور لهذا الحساب. أدخل كلمة المرور الحالية ثم عيّن كلمة مرور جديدة للمتابعة." : "أدخل كلمة المرور الحالية ثم الجديدة."}
+                </p>
               </div>
-              <button type="button" onClick={() => setPasswordDialogOpen(false)} className="flex h-8 w-8 items-center justify-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-700" aria-label="إغلاق">
-                <X className="h-4 w-4" />
-              </button>
+              {!passwordChangeRequired && (
+                <button type="button" onClick={() => setPasswordDialogOpen(false)} className="flex h-8 w-8 items-center justify-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-700" aria-label="إغلاق">
+                  <X className="h-4 w-4" />
+                </button>
+              )}
             </div>
+            {passwordChangeRequired && (
+              <div className="mb-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-semibold leading-6 text-amber-800">
+                لن تتمكن من استخدام النظام قبل إكمال تغيير كلمة المرور.
+              </div>
+            )}
             <div className="space-y-3">
               <PasswordField label="كلمة المرور الحالية" error={passwordErrors.current_password} value={passwordForm.current_password} onChange={(value) => { setPasswordErrors((current) => ({ ...current, current_password: "" })); setPasswordForm((current) => ({ ...current, current_password: value })); }} />
               <PasswordField label="كلمة المرور الجديدة" error={passwordErrors.new_password} value={passwordForm.new_password} onChange={(value) => { setPasswordErrors((current) => ({ ...current, new_password: "" })); setPasswordForm((current) => ({ ...current, new_password: value })); }} />
               <PasswordField label="تأكيد كلمة المرور الجديدة" error={passwordErrors.confirm_password} value={passwordForm.confirm_password} onChange={(value) => { setPasswordErrors((current) => ({ ...current, confirm_password: "" })); setPasswordForm((current) => ({ ...current, confirm_password: value })); }} />
             </div>
             <div className="mt-5 flex justify-end gap-2">
-              <button type="button" onClick={() => setPasswordDialogOpen(false)} className="h-9 rounded-md border border-slate-300 px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50">إلغاء</button>
+              {!passwordChangeRequired && (
+                <button type="button" onClick={() => setPasswordDialogOpen(false)} className="h-9 rounded-md border border-slate-300 px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50">إلغاء</button>
+              )}
               <button type="submit" disabled={passwordSaving} className="h-9 rounded-md bg-bank-700 px-4 text-sm font-semibold text-white hover:bg-bank-800 disabled:opacity-60">
-                {passwordSaving ? "جاري الحفظ..." : "حفظ"}
+                {passwordSaving ? "جاري الحفظ..." : passwordChangeRequired ? "تغيير كلمة المرور والمتابعة" : "حفظ"}
               </button>
             </div>
           </form>
@@ -496,7 +520,14 @@ export function Layout({
             </div>
           </div>
         </header>
-        <div className="min-w-0 max-w-full p-5">{children}</div>
+        <div className="min-w-0 max-w-full p-5">
+          {passwordChangeRequired ? (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 p-6 text-center text-amber-900">
+              <h3 className="text-lg font-bold">تغيير كلمة المرور مطلوب</h3>
+              <p className="mt-2 text-sm leading-6">أكمل تغيير كلمة المرور من النافذة الظاهرة حتى يتم تحميل بيانات النظام.</p>
+            </div>
+          ) : children}
+        </div>
       </main>
     </div>
   );

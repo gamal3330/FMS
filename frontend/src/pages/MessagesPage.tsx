@@ -58,6 +58,7 @@ type MessageUser = {
   role: string;
   department_id?: number | null;
   department_name?: string | null;
+  department_manager_id?: number | null;
 };
 
 type InternalMessage = {
@@ -118,13 +119,33 @@ type MessageSettings = {
   enable_drafts: boolean;
   enable_templates: boolean;
   enable_signatures: boolean;
+  allow_archiving: boolean;
+  allow_general_messages: boolean;
+  allow_replies: boolean;
+  allow_forwarding: boolean;
+  allow_multiple_recipients: boolean;
+  allow_user_delete_own_messages: boolean;
+  prevent_hard_delete: boolean;
+  exclude_official_messages_from_delete: boolean;
+  exclude_confidential_messages_from_delete: boolean;
+  allow_send_to_user: boolean;
+  allow_send_to_department: boolean;
+  allow_broadcast: boolean;
   enable_circulars: boolean;
   enable_department_broadcasts: boolean;
   enable_read_receipts: boolean;
+  enable_unread_badge: boolean;
   enable_linked_requests: boolean;
+  enable_message_notifications: boolean;
+  notify_on_new_message: boolean;
+  notify_on_reply: boolean;
   max_attachment_mb: number;
+  max_attachments_per_message: number;
   max_recipients: number;
   default_message_type: string;
+  allowed_extensions: string[];
+  block_executable_files: boolean;
+  department_recipient_behavior: string;
 };
 
 type MessageCapabilities = {
@@ -154,12 +175,32 @@ const defaultMessageSettings: MessageSettings = {
   enable_drafts: true,
   enable_templates: true,
   enable_signatures: true,
+  allow_archiving: true,
+  allow_general_messages: true,
+  allow_replies: true,
+  allow_forwarding: false,
+  allow_multiple_recipients: true,
+  allow_user_delete_own_messages: false,
+  prevent_hard_delete: true,
+  exclude_official_messages_from_delete: true,
+  exclude_confidential_messages_from_delete: true,
+  allow_send_to_user: true,
+  allow_send_to_department: true,
+  allow_broadcast: false,
   enable_circulars: true,
   enable_department_broadcasts: true,
   enable_read_receipts: true,
+  enable_unread_badge: true,
   enable_linked_requests: true,
+  enable_message_notifications: true,
+  notify_on_new_message: true,
+  notify_on_reply: true,
   max_attachment_mb: 25,
+  max_attachments_per_message: 10,
   max_recipients: 200,
+  allowed_extensions: ["pdf", "png", "jpg", "jpeg"],
+  block_executable_files: true,
+  department_recipient_behavior: "selected_department_users",
   default_message_type: defaultMessageType
 };
 const defaultMessageCapabilities: MessageCapabilities = {
@@ -228,7 +269,7 @@ export default function MessagesPage() {
   const queryComposeInitialized = useRef(false);
 
   const selected = useMemo(() => messages.find((message) => message.id === selectedId) || null, [messages, selectedId]);
-  const unreadCount = messages.filter((message) => !message.is_read).length;
+  const unreadCount = messageSettings.enable_unread_badge ? messages.filter((message) => !message.is_read).length : 0;
   const inboxStyleGroups = useMemo(() => {
     if (mailbox !== "inbox") return null;
     const unread = messages.filter((message) => !message.is_read).sort(sortByNewest);
@@ -343,6 +384,13 @@ export default function MessagesPage() {
   }, [mailbox, unreadOnly, archiveView, typeFilter]);
 
   useEffect(() => {
+    if (!messageSettings.allow_archiving && mailbox === "archived") {
+      setMailbox("inbox");
+      setArchiveView("inbox");
+    }
+  }, [messageSettings.allow_archiving, mailbox]);
+
+  useEffect(() => {
     if (mailbox === "compose") return;
     function refreshMessagesImmediately() {
       loadMessages(mailbox);
@@ -403,6 +451,10 @@ export default function MessagesPage() {
     setError("");
     try {
       if (replySource) {
+        if (!messageSettings.allow_replies) {
+          setError("الرد على الرسائل معطل من إعدادات المراسلات.");
+          return;
+        }
         if (attachments.length > 0) {
           const data = new FormData();
           data.append("message_type", form.message_type);
@@ -416,6 +468,10 @@ export default function MessagesPage() {
           });
         }
       } else if (forwardSource) {
+        if (!messageSettings.allow_forwarding) {
+          setError("تحويل الرسائل معطل من إعدادات المراسلات.");
+          return;
+        }
         await apiFetch<InternalMessage>(`/messages/${forwardSource.id}/forward`, {
           method: "POST",
           body: JSON.stringify({ recipient_ids: form.recipient_ids, message_type: form.message_type, note: form.body.trim() || undefined })
@@ -501,6 +557,10 @@ export default function MessagesPage() {
 
   async function archiveSelected() {
     if (!selected) return;
+    if (!messageSettings.allow_archiving) {
+      setError("الأرشفة معطلة من إعدادات المراسلات.");
+      return;
+    }
     try {
       await apiFetch<void>(`/messages/${selected.id}/archive`, { method: "POST" });
       setMessages((current) => current.filter((message) => message.id !== selected.id));
@@ -509,6 +569,27 @@ export default function MessagesPage() {
       setFeedback("تمت أرشفة الرسالة.");
     } catch {
       setError("تعذر أرشفة الرسالة.");
+    }
+  }
+
+  async function deleteSelectedMessage() {
+    if (!selected || selected.is_draft) return;
+    if (!messageSettings.allow_user_delete_own_messages) {
+      setError("حذف الرسائل غير مفعل من إعدادات الأرشفة والاحتفاظ.");
+      return;
+    }
+    const label = messageSettings.prevent_hard_delete ? "سيتم حذف الرسالة من صندوقك فقط ولن يتم حذفها نهائياً من النظام." : "سيتم حذف الرسالة من صندوقك.";
+    if (!window.confirm(`${label}\nهل تريد المتابعة؟`)) return;
+    try {
+      await apiFetch<void>(`/messages/${selected.id}/delete`, { method: "POST" });
+      setMessages((current) => current.filter((message) => message.id !== selected.id));
+      setSelectedId(null);
+      setSelectedIds((current) => current.filter((id) => id !== selected.id));
+      window.dispatchEvent(new Event("qib-messages-updated"));
+      setFeedback("تم حذف الرسالة من صندوقك.");
+    } catch (error) {
+      const detail = error instanceof Error ? extractApiError(error.message) : "";
+      setError(detail || "تعذر حذف الرسالة.");
     }
   }
 
@@ -524,6 +605,10 @@ export default function MessagesPage() {
 
   async function bulkArchive() {
     if (selectedIds.length === 0) return;
+    if (!messageSettings.allow_archiving) {
+      setError("الأرشفة معطلة من إعدادات المراسلات.");
+      return;
+    }
     try {
       await apiFetch<void>("/messages/bulk/archive", { method: "POST", body: JSON.stringify({ message_ids: selectedIds }) });
       setMessages((current) => current.filter((message) => !selectedIds.includes(message.id)));
@@ -533,6 +618,27 @@ export default function MessagesPage() {
       setFeedback("تمت أرشفة الرسائل المحددة.");
     } catch {
       setError("تعذر تنفيذ الأرشفة الجماعية.");
+    }
+  }
+
+  async function bulkDeleteMessages() {
+    if (selectedIds.length === 0) return;
+    if (!messageSettings.allow_user_delete_own_messages) {
+      setError("حذف الرسائل غير مفعل من إعدادات الأرشفة والاحتفاظ.");
+      return;
+    }
+    const label = messageSettings.prevent_hard_delete ? "سيتم حذف الرسائل المحددة من صندوقك فقط ولن يتم حذفها نهائياً من النظام." : "سيتم حذف الرسائل المحددة من صندوقك.";
+    if (!window.confirm(`${label}\nهل تريد المتابعة؟`)) return;
+    try {
+      await apiFetch<void>("/messages/bulk/delete", { method: "POST", body: JSON.stringify({ message_ids: selectedIds }) });
+      setMessages((current) => current.filter((message) => !selectedIds.includes(message.id)));
+      setSelectedIds([]);
+      setSelectedId(null);
+      window.dispatchEvent(new Event("qib-messages-updated"));
+      setFeedback("تم حذف الرسائل المحددة من صندوقك.");
+    } catch (error) {
+      const detail = error instanceof Error ? extractApiError(error.message) : "";
+      setError(detail || "تعذر حذف الرسائل المحددة.");
     }
   }
 
@@ -688,6 +794,10 @@ export default function MessagesPage() {
   }
 
   function beginForward(message: InternalMessage) {
+    if (!messageSettings.allow_forwarding) {
+      setError("تحويل الرسائل معطل من إعدادات المراسلات.");
+      return;
+    }
     setForwardSource(message);
     setReplySource(null);
     setSelectedDepartmentIds([]);
@@ -714,6 +824,10 @@ export default function MessagesPage() {
   }
 
   function beginReply(message: InternalMessage) {
+    if (!messageSettings.allow_replies) {
+      setError("الرد على الرسائل معطل من إعدادات المراسلات.");
+      return;
+    }
     setReplySource(message);
     setForwardSource(null);
     setSelectedDepartmentIds([]);
@@ -792,6 +906,15 @@ export default function MessagesPage() {
   }
 
   function addRecipient(userId: number) {
+    if (!messageSettings.allow_multiple_recipients && form.recipient_ids.length > 0 && !form.recipient_ids.includes(userId)) {
+      setForm((current) => ({ ...current, recipient_ids: [userId] }));
+      setRecipientSearch("");
+      return;
+    }
+    if (!form.recipient_ids.includes(userId) && form.recipient_ids.length >= messageSettings.max_recipients) {
+      setError(`عدد المستلمين أكبر من الحد المسموح ${messageSettings.max_recipients}`);
+      return;
+    }
     setForm((current) => ({
       ...current,
       recipient_ids: current.recipient_ids.includes(userId) ? current.recipient_ids : [...current.recipient_ids, userId]
@@ -800,7 +923,19 @@ export default function MessagesPage() {
   }
 
   function applyDepartmentRecipients(nextDepartmentIds: number[]) {
-    const ids = users.filter((user) => user.department_id && nextDepartmentIds.includes(user.department_id)).map((user) => user.id);
+    const departmentUsers = users.filter((user) => user.department_id && nextDepartmentIds.includes(user.department_id));
+    const ids =
+      messageSettings.department_recipient_behavior === "department_manager_only"
+        ? departmentUsers.filter((user) => user.department_manager_id === user.id).map((user) => user.id)
+        : departmentUsers.map((user) => user.id);
+    if (!messageSettings.allow_multiple_recipients && ids.length > 1) {
+      setError("اختيار أكثر من مستلم غير مفعل من إعدادات المراسلات.");
+      return;
+    }
+    if (ids.length > messageSettings.max_recipients) {
+      setError(`عدد مستلمي الإدارات أكبر من الحد المسموح ${messageSettings.max_recipients}`);
+      return;
+    }
     setForm((current) => ({
       ...current,
       recipient_ids: Array.from(new Set([...current.recipient_ids.filter((id) => !departmentRecipientIds.includes(id)), ...ids])),
@@ -821,12 +956,55 @@ export default function MessagesPage() {
     applyDepartmentRecipients([]);
   }
 
+  function departmentRecipientBehaviorText() {
+    if (messageSettings.department_recipient_behavior === "department_manager_only") {
+      return "عند اختيار إدارة سيتم إضافة مدير الإدارة فقط إلى المستلمين.";
+    }
+    if (messageSettings.department_recipient_behavior === "all_department_users") {
+      return "عند اختيار إدارة سيتم إضافة كل المستخدمين النشطين في هذه الإدارة إلى المستلمين.";
+    }
+    return "عند اختيار إدارة سيتم إضافة مستخدميها إلى المستلميِن، ويمكنك إزالة أي مستلم لا تريده قبل الإرسال.";
+  }
+
   function removeRecipient(userId: number) {
     setForm((current) => ({ ...current, recipient_ids: current.recipient_ids.filter((id) => id !== userId) }));
   }
 
   function removeAttachment(index: number) {
     setAttachments((current) => current.filter((_, itemIndex) => itemIndex !== index));
+  }
+
+  function addAttachments(files: FileList | null) {
+    if (!files) return;
+    const incoming = Array.from(files);
+    const allowed = new Set((messageSettings.allowed_extensions || []).map((item) => item.toLowerCase().replace(/^\./, "")));
+    const blocked = new Set(["exe", "bat", "cmd", "ps1", "sh", "js", "vbs", "msi"]);
+    const maxBytes = Number(messageSettings.max_attachment_mb || 25) * 1024 * 1024;
+    const validFiles: File[] = [];
+    for (const file of incoming) {
+      const extension = file.name.split(".").pop()?.toLowerCase() || "";
+      if (!extension || !allowed.has(extension)) {
+        setError(`نوع الملف غير مسموح: ${file.name}`);
+        continue;
+      }
+      if (messageSettings.block_executable_files && blocked.has(extension)) {
+        setError("لا يمكن إرفاق ملفات تنفيذية.");
+        continue;
+      }
+      if (file.size > maxBytes) {
+        setError(`حجم ${file.name} أكبر من الحد المسموح ${messageSettings.max_attachment_mb}MB`);
+        continue;
+      }
+      validFiles.push(file);
+    }
+    if (validFiles.length === 0) return;
+    setAttachments((current) => {
+      const availableSlots = Math.max(Number(messageSettings.max_attachments_per_message || 10) - current.length, 0);
+      if (validFiles.length > availableSlots) {
+        setError(`أقصى عدد مرفقات للرسالة هو ${messageSettings.max_attachments_per_message}`);
+      }
+      return [...current, ...validFiles.slice(0, availableSlots)];
+    });
   }
 
   function updateBody(nextBody: string) {
@@ -993,10 +1171,12 @@ export default function MessagesPage() {
             <RefreshCw className={`h-4 w-4 ${isLoading ? "animate-spin" : ""}`} />
             {!mailPanelCollapsed && "تحديث"}
           </button>
-          <button type="button" onClick={() => setMailbox("archived")} className={`flex h-10 w-full items-center justify-center gap-2 rounded-md border text-sm font-semibold ${mailbox === "archived" ? "border-bank-200 bg-bank-50 text-bank-700" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`} title="الأرشيف">
-            <Archive className="h-4 w-4" />
-            {!mailPanelCollapsed && "الأرشيف"}
-          </button>
+          {messageSettings.allow_archiving && (
+            <button type="button" onClick={() => setMailbox("archived")} className={`flex h-10 w-full items-center justify-center gap-2 rounded-md border text-sm font-semibold ${mailbox === "archived" ? "border-bank-200 bg-bank-50 text-bank-700" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`} title="الأرشيف">
+              <Archive className="h-4 w-4" />
+              {!mailPanelCollapsed && "الأرشيف"}
+            </button>
+          )}
 
           {mailbox !== "compose" && !mailPanelCollapsed && (
             <div className="rounded-lg border border-slate-200 bg-white shadow-sm">
@@ -1104,7 +1284,8 @@ export default function MessagesPage() {
                   <span className="text-xs font-semibold text-slate-500">المحدد: {selectedIds.length}</span>
                   {mailbox !== "drafts" && (
                     <>
-                      <button type="button" onClick={bulkArchive} disabled={selectedIds.length === 0} className="h-8 rounded-md border border-slate-300 bg-white px-3 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-50">أرشفة</button>
+                      {messageSettings.allow_archiving && <button type="button" onClick={bulkArchive} disabled={selectedIds.length === 0} className="h-8 rounded-md border border-slate-300 bg-white px-3 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-50">أرشفة</button>}
+                      {messageSettings.allow_user_delete_own_messages && <button type="button" onClick={bulkDeleteMessages} disabled={selectedIds.length === 0} className="h-8 rounded-md border border-red-200 bg-white px-3 text-xs font-bold text-red-700 hover:bg-red-50 disabled:opacity-50">حذف</button>}
                       {mailbox === "inbox" && <button type="button" onClick={bulkMarkRead} disabled={selectedIds.length === 0} className="h-8 rounded-md border border-slate-300 bg-white px-3 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-50">تعليم كمقروء</button>}
                     </>
                   )}
@@ -1125,6 +1306,7 @@ export default function MessagesPage() {
                         selectedId={selected?.id ?? null}
                         mailbox={mailbox}
                         archiveView={archiveView}
+                        showUnreadBadge={messageSettings.enable_unread_badge}
                         onSelect={selectMessage}
                         onToggleSelection={toggleMessageSelection}
                       />
@@ -1139,13 +1321,14 @@ export default function MessagesPage() {
                         selectedId={selected?.id ?? null}
                         mailbox={mailbox}
                         archiveView={archiveView}
+                        showUnreadBadge={messageSettings.enable_unread_badge}
                         onSelect={selectMessage}
                         onToggleSelection={toggleMessageSelection}
                       />
                     )}
                   </>
                 ) : (
-                  messages.map((message) => <MessageListItem key={message.id} message={message} messageTypeOptions={messageTypeOptions} selectedIds={selectedIds} selectedId={selected?.id ?? null} mailbox={mailbox} archiveView={archiveView} onSelect={selectMessage} onToggleSelection={toggleMessageSelection} />)
+                  messages.map((message) => <MessageListItem key={message.id} message={message} messageTypeOptions={messageTypeOptions} selectedIds={selectedIds} selectedId={selected?.id ?? null} mailbox={mailbox} archiveView={archiveView} showUnreadBadge={messageSettings.enable_unread_badge} onSelect={selectMessage} onToggleSelection={toggleMessageSelection} />)
                 )}
                 {hasMore && (
                   <div className="p-4">
@@ -1262,11 +1445,16 @@ export default function MessagesPage() {
                     {replySource ? (
                       <div className="rounded-md border border-sky-100 bg-sky-50 px-4 py-3 text-sm leading-6 text-sky-900">
                         <p className="font-bold">سيتم الرد على أطراف المحادثة تلقائياً</p>
-                        <p className="text-xs text-sky-700">الرسالة الأصلية من: {replySource.sender_name}</p>
+                      <p className="text-xs text-sky-700">الرسالة الأصلية من: {replySource.sender_name}</p>
                       </div>
                     ) : (
                       <>
-                      <div className="rounded-md border border-slate-200 bg-white">
+                      {!messageSettings.allow_send_to_user && !messageSettings.allow_send_to_department && (
+                        <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-bold text-amber-900">
+                          تم تعطيل اختيار المستلمين من إعدادات المراسلات.
+                        </div>
+                      )}
+                      {messageSettings.allow_send_to_user && <div className="rounded-md border border-slate-200 bg-white">
                         <div className="flex min-h-12 flex-wrap items-center gap-2 px-3 py-2">
                           <span className="shrink-0 text-sm font-bold text-slate-700">إلى</span>
                           {selectedRecipients.map((user) => (
@@ -1300,8 +1488,8 @@ export default function MessagesPage() {
                             ))}
                           </div>
                         )}
-                      </div>
-                      {messageSettings.enable_circulars && messageSettings.enable_department_broadcasts && messageCapabilities.can_send_department_broadcast && <div className="rounded-md border border-bank-100 bg-bank-50/60 p-3">
+                      </div>}
+                      {messageSettings.allow_send_to_department && messageSettings.allow_multiple_recipients && messageSettings.enable_circulars && messageSettings.enable_department_broadcasts && messageCapabilities.can_send_department_broadcast && <div className="rounded-md border border-bank-100 bg-bank-50/60 p-3">
                         <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                           <span className="text-xs font-bold text-slate-600">تعميم حسب الإدارات</span>
                           <button type="button" onClick={clearDepartmentRecipients} disabled={selectedDepartmentIds.length === 0} className="h-8 rounded-md border border-slate-200 bg-white px-3 text-xs font-bold text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50">
@@ -1323,7 +1511,7 @@ export default function MessagesPage() {
                           {departmentOptions.length === 0 && <p className="p-2 text-xs text-slate-500">لا توجد إدارات متاحة ضمن قائمة المستلمين.</p>}
                         </div>
                         <p className="mt-2 text-xs leading-5 text-slate-500">
-                          يمكنك اختيار أكثر من إدارة. سيتم تحديث مستلمي الإدارات تلقائياً مع إبقاء المستلمين الذين أضفتهم يدوياً.
+                          {departmentRecipientBehaviorText()} يمكنك اختيار أكثر من إدارة، وسيتم إبقاء المستلمين الذين أضفتهم يدوياً.
                         </p>
                       </div>}
                       </>
@@ -1356,7 +1544,16 @@ export default function MessagesPage() {
                       <label className="inline-flex h-9 cursor-pointer items-center gap-2 rounded-md bg-bank-700 px-3 text-xs font-bold text-white shadow-sm hover:bg-bank-800">
                         <Paperclip className="h-4 w-4" />
                         إرفاق ملف
-                        <input type="file" multiple onChange={(event) => setAttachments((current) => [...current, ...Array.from(event.target.files || [])])} className="hidden" />
+                        <input
+                          type="file"
+                          multiple={messageSettings.max_attachments_per_message > 1}
+                          accept={(messageSettings.allowed_extensions || []).map((extension) => `.${extension}`).join(",")}
+                          onChange={(event) => {
+                            addAttachments(event.target.files);
+                            event.currentTarget.value = "";
+                          }}
+                          className="hidden"
+                        />
                       </label>
                     )}
                   </div>
@@ -1554,35 +1751,55 @@ export default function MessagesPage() {
                       </button>
                     </div>
                   ) : mailbox === "archived" ? (
-                    <button type="button" onClick={restoreSelected} className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50">
-                      <Undo2 className="h-4 w-4" />
-                      استعادة
-                    </button>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button type="button" onClick={restoreSelected} className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+                        <Undo2 className="h-4 w-4" />
+                        استعادة
+                      </button>
+                      {messageSettings.allow_user_delete_own_messages && (
+                        <button type="button" onClick={deleteSelectedMessage} className="inline-flex h-10 items-center gap-2 rounded-md border border-red-200 bg-white px-3 text-sm font-semibold text-red-700 hover:bg-red-50">
+                          <Trash2 className="h-4 w-4" />
+                          حذف
+                        </button>
+                      )}
+                    </div>
                   ) : (
                     <div className="flex flex-wrap items-center gap-2">
-                      {canUseAiReplies && (
+                      {messageSettings.allow_replies && canUseAiReplies && (
                         <button type="button" onClick={() => suggestAiReply(selected)} disabled={selectedAiLoading === "reply"} className="inline-flex h-10 items-center gap-2 rounded-md border border-bank-200 bg-bank-50 px-3 text-sm font-bold text-bank-800 hover:bg-bank-100 disabled:cursor-not-allowed disabled:opacity-60">
                           <Sparkles className="h-4 w-4" />
                           {selectedAiLoading === "reply" ? "جاري الاقتراح..." : "اقتراح رد"}
                         </button>
                       )}
-                      <button type="button" onClick={() => beginReply(selected)} className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50">
-                        <Reply className="h-4 w-4" />
-                        رد
-                      </button>
-                      <button type="button" onClick={() => beginForward(selected)} className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50">
-                        <ArrowBigLeftDash className="h-4 w-4" />
-                        تحويل
-                      </button>
-                      <button type="button" onClick={archiveSelected} className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50">
-                        <Archive className="h-4 w-4" />
-                        أرشفة
-                      </button>
+                      {messageSettings.allow_replies && (
+                        <button type="button" onClick={() => beginReply(selected)} className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+                          <Reply className="h-4 w-4" />
+                          رد
+                        </button>
+                      )}
+                      {messageSettings.allow_forwarding && (
+                        <button type="button" onClick={() => beginForward(selected)} className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+                          <ArrowBigLeftDash className="h-4 w-4" />
+                          تحويل
+                        </button>
+                      )}
+                      {messageSettings.allow_archiving && (
+                        <button type="button" onClick={archiveSelected} className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+                          <Archive className="h-4 w-4" />
+                          أرشفة
+                        </button>
+                      )}
+                      {messageSettings.allow_user_delete_own_messages && (
+                        <button type="button" onClick={deleteSelectedMessage} className="inline-flex h-10 items-center gap-2 rounded-md border border-red-200 bg-white px-3 text-sm font-semibold text-red-700 hover:bg-red-50">
+                          <Trash2 className="h-4 w-4" />
+                          حذف
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>
-                {canUseAiReplies && selectedAiError && <div className="rounded-md border border-red-100 bg-red-50 p-3 text-sm text-red-700">{selectedAiError}</div>}
-                {canUseAiReplies && selectedAiSuggestion?.type === "reply" && (
+                {messageSettings.allow_replies && canUseAiReplies && selectedAiError && <div className="rounded-md border border-red-100 bg-red-50 p-3 text-sm text-red-700">{selectedAiError}</div>}
+                {messageSettings.allow_replies && canUseAiReplies && selectedAiSuggestion?.type === "reply" && (
                   <AISuggestionPanel
                     title="اقتراح رد"
                     body={selectedAiSuggestion.body}
@@ -1673,6 +1890,7 @@ function MessageSection({
   selectedId,
   mailbox,
   archiveView,
+  showUnreadBadge,
   onSelect,
   onToggleSelection
 }: {
@@ -1684,6 +1902,7 @@ function MessageSection({
   selectedId: number | null;
   mailbox: Mailbox;
   archiveView: "inbox" | "sent";
+  showUnreadBadge: boolean;
   onSelect: (message: InternalMessage) => void;
   onToggleSelection: (messageId: number) => void;
 }) {
@@ -1694,7 +1913,7 @@ function MessageSection({
         <span>{count}</span>
       </div>
       {messages.map((message) => (
-        <MessageListItem key={message.id} message={message} messageTypeOptions={messageTypeOptions} selectedIds={selectedIds} selectedId={selectedId} mailbox={mailbox} archiveView={archiveView} onSelect={onSelect} onToggleSelection={onToggleSelection} />
+        <MessageListItem key={message.id} message={message} messageTypeOptions={messageTypeOptions} selectedIds={selectedIds} selectedId={selectedId} mailbox={mailbox} archiveView={archiveView} showUnreadBadge={showUnreadBadge} onSelect={onSelect} onToggleSelection={onToggleSelection} />
       ))}
     </div>
   );
@@ -1707,6 +1926,7 @@ function MessageListItem({
   selectedId,
   mailbox,
   archiveView,
+  showUnreadBadge = true,
   onSelect,
   onToggleSelection
 }: {
@@ -1716,6 +1936,7 @@ function MessageListItem({
   selectedId: number | null;
   mailbox: Mailbox;
   archiveView: "inbox" | "sent";
+  showUnreadBadge?: boolean;
   onSelect: (message: InternalMessage) => void;
   onToggleSelection: (messageId: number) => void;
 }) {
@@ -1747,7 +1968,7 @@ function MessageListItem({
           </p>
           {message.message_uid && <p className="mt-1 truncate text-[11px] font-bold text-slate-400">معرف الرسالة: {message.message_uid}</p>}
         </div>
-        {!message.is_read && mailbox === "inbox" && <span className="mt-1 h-2.5 w-2.5 shrink-0 rounded-full bg-bank-700" />}
+        {showUnreadBadge && !message.is_read && mailbox === "inbox" && <span className="mt-1 h-2.5 w-2.5 shrink-0 rounded-full bg-bank-700" />}
       </div>
       <p className={`mt-3 line-clamp-2 text-right text-xs leading-5 ${message.is_read ? "text-slate-500" : "font-semibold text-slate-700"}`}>{messageBodyPreview(message.body) || (message.is_draft ? "لا يوجد محتوى بعد." : "")}</p>
     </button>

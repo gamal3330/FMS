@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status
 from fastapi.responses import StreamingResponse
@@ -13,7 +14,7 @@ from app.core.security import get_password_hash, verify_password
 from app.db.session import get_db
 from app.models.audit import AuditLog
 from app.models.enums import UserRole
-from app.models.settings import PortalSetting, SecurityPolicy, SpecializedSection
+from app.models.settings import PortalSetting, SecurityPolicy, SettingsGeneral, SpecializedSection
 from app.models.user import (
     AccessReview,
     AccessReviewItem,
@@ -228,6 +229,34 @@ def read_user_screens(db: Session, user: User) -> list[str]:
     return clean_screens
 
 
+def can_view_users_screen(db: Session, user: User) -> bool:
+    return user.role == UserRole.DIRECT_MANAGER or permission_level_allows(effective_screen_permission_level(db, user, "users"), "view")
+
+
+def require_users_screen_view(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)) -> User:
+    if not can_view_users_screen(db, current_user):
+        raise HTTPException(status_code=403, detail="لا تملك صلاحية عرض شاشة المستخدمين والصلاحيات")
+    return current_user
+
+
+def has_active_approval_delegation(db: Session, user: User) -> bool:
+    now = datetime.now(timezone.utc)
+    return (
+        db.scalar(
+            select(UserDelegation.id)
+            .where(
+                UserDelegation.delegate_user_id == user.id,
+                UserDelegation.is_active == True,
+                UserDelegation.delegation_scope.in_(["approvals_only", "all_allowed_actions"]),
+                UserDelegation.start_date <= now,
+                UserDelegation.end_date >= now,
+            )
+            .limit(1)
+        )
+        is not None
+    )
+
+
 def save_user_screens(db: Session, user: User, screens: list[str], actor: User) -> None:
     clean_screens = sorted({screen for screen in screens if screen in ALL_SCREEN_KEYS})
     if user.role not in DASHBOARD_SCREEN_ROLES:
@@ -309,6 +338,18 @@ def require_actor_password(actor: User, password: str | None) -> None:
         raise HTTPException(status_code=403, detail="كلمة مرور المدير غير صحيحة")
 
 
+def normalize_local_datetime(db: Session, value: datetime) -> datetime:
+    if value.tzinfo is not None:
+        return value.astimezone(timezone.utc)
+    general = db.scalar(select(SettingsGeneral).limit(1))
+    timezone_name = general.timezone if general and general.timezone else "Asia/Qatar"
+    try:
+        local_tz = ZoneInfo(timezone_name)
+    except ZoneInfoNotFoundError:
+        local_tz = ZoneInfo("Asia/Qatar")
+    return value.replace(tzinfo=local_tz).astimezone(timezone.utc)
+
+
 def client_ip(request: Request) -> str | None:
     return request.client.host if request.client else None
 
@@ -371,6 +412,109 @@ def permission_level_to_flags(level: str) -> dict[str, bool]:
         "can_export": level in {"export", "manage"},
         "can_manage": level == "manage",
     }
+
+
+def read_screen_permission_levels(db: Session, *, role_id: int | None = None, user_id: int | None = None, fallback_screens: list[str] | None = None) -> dict[str, str]:
+    stmt = select(ScreenPermission)
+    if role_id is not None:
+        stmt = stmt.where(ScreenPermission.role_id == role_id, ScreenPermission.user_id.is_(None))
+    elif user_id is not None:
+        stmt = stmt.where(ScreenPermission.user_id == user_id)
+    else:
+        return {screen: "view" for screen in fallback_screens or []}
+    rows = db.scalars(stmt).all()
+    permissions = {
+        row.screen_code: row.permission_level if row.permission_level in PERMISSION_LEVELS else "view"
+        for row in rows
+        if row.screen_code in ALL_SCREEN_KEYS
+    }
+    for screen in fallback_screens or []:
+        permissions.setdefault(screen, "view")
+    return permissions
+
+
+def set_screen_permission_levels(db: Session, permissions: dict[str, str], *, role_id: int | None = None, user_id: int | None = None) -> None:
+    for code, level in permissions.items():
+        if code not in ALL_SCREEN_KEYS:
+            continue
+        clean_level = level if level in PERMISSION_LEVELS else "no_access"
+        if role_id is not None:
+            row = db.scalar(select(ScreenPermission).where(ScreenPermission.role_id == role_id, ScreenPermission.user_id.is_(None), ScreenPermission.screen_code == code))
+            if not row:
+                row = ScreenPermission(role_id=role_id, screen_code=code)
+                db.add(row)
+        elif user_id is not None:
+            row = db.scalar(select(ScreenPermission).where(ScreenPermission.user_id == user_id, ScreenPermission.role_id.is_(None), ScreenPermission.screen_code == code))
+            if not row:
+                row = ScreenPermission(user_id=user_id, screen_code=code)
+                db.add(row)
+        else:
+            continue
+        row.permission_level = clean_level
+        for field, value in permission_level_to_flags(clean_level).items():
+            setattr(row, field, value)
+
+
+def permission_level_allows(level: str | None, capability: str) -> bool:
+    clean_level = level if level in PERMISSION_LEVELS else "no_access"
+    return bool(permission_level_to_flags(clean_level).get(f"can_{capability}", False))
+
+
+def role_record_for_user(db: Session, user: User) -> Role | None:
+    if user.role_id:
+        role = db.get(Role, user.role_id)
+        if role:
+            return role
+    return db.scalar(select(Role).where(or_(Role.code == str(user.role), Role.name == str(user.role))))
+
+
+def effective_screen_permission_level(db: Session, user: User, screen_code: str) -> str:
+    if screen_code not in ALL_SCREEN_KEYS:
+        return "no_access"
+    if user.role in {UserRole.SUPER_ADMIN, UserRole.IT_MANAGER}:
+        return "manage"
+
+    user_permission = db.scalar(
+        select(ScreenPermission).where(
+            ScreenPermission.user_id == user.id,
+            ScreenPermission.role_id.is_(None),
+            ScreenPermission.screen_code == screen_code,
+        )
+    )
+    if user_permission:
+        return user_permission.permission_level if user_permission.permission_level in PERMISSION_LEVELS else "no_access"
+
+    role = role_record_for_user(db, user)
+    if role:
+        role_permission = db.scalar(
+            select(ScreenPermission).where(
+                ScreenPermission.role_id == role.id,
+                ScreenPermission.user_id.is_(None),
+                ScreenPermission.screen_code == screen_code,
+            )
+        )
+        if role_permission:
+            return role_permission.permission_level if role_permission.permission_level in PERMISSION_LEVELS else "no_access"
+
+    return "view" if screen_code in read_user_screens(db, user) else "no_access"
+
+
+def require_users_screen_capability(db: Session, current_user: User, capability: str, detail: str) -> User:
+    if not permission_level_allows(effective_screen_permission_level(db, current_user, "users"), capability):
+        raise HTTPException(status_code=403, detail=detail)
+    return current_user
+
+
+def require_users_screen_create(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)) -> User:
+    return require_users_screen_capability(db, current_user, "create", "لا تملك صلاحية إضافة مستخدمين")
+
+
+def require_users_screen_edit(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)) -> User:
+    return require_users_screen_capability(db, current_user, "edit", "لا تملك صلاحية تعديل المستخدمين")
+
+
+def require_users_screen_manage(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)) -> User:
+    return require_users_screen_capability(db, current_user, "manage", "لا تملك صلاحية إدارة المستخدمين")
 
 
 def role_by_code(db: Session, code: str) -> Role | None:
@@ -869,7 +1013,7 @@ def import_batch_details(batch_id: int, db: Session = Depends(get_db), _: User =
 
 
 @router.get("/overview")
-def users_overview(db: Session = Depends(get_db), actor: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.IT_MANAGER, UserRole.DIRECT_MANAGER))):
+def users_overview(db: Session = Depends(get_db), actor: User = Depends(require_users_screen_view)):
     stmt = select(User)
     if actor.role == UserRole.DIRECT_MANAGER:
         stmt = stmt.where(User.department_id == actor.department_id)
@@ -906,7 +1050,7 @@ def users_overview(db: Session = Depends(get_db), actor: User = Depends(require_
 @router.get("/audit-logs")
 def users_audit_logs(
     db: Session = Depends(get_db),
-    _: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.IT_MANAGER)),
+    _: User = Depends(require_users_screen_view),
     action: str | None = Query(default=None),
     user_id: int | None = Query(default=None),
 ):
@@ -1000,7 +1144,7 @@ def revoke_all_sessions(payload: PasswordConfirmPayload, request: Request, db: S
 
 
 @router.get("/organization/tree")
-def organization_tree(db: Session = Depends(get_db), _: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.IT_MANAGER, UserRole.DIRECT_MANAGER))):
+def organization_tree(db: Session = Depends(get_db), _: User = Depends(require_users_screen_view)):
     departments = db.scalars(select(Department).order_by(Department.name_ar)).all()
     users = db.scalars(select(User).order_by(User.full_name_ar)).all()
     return [
@@ -1016,7 +1160,7 @@ def organization_tree(db: Session = Depends(get_db), _: User = Depends(require_r
 
 
 @router.get("/organization/issues")
-def organization_issues(db: Session = Depends(get_db), _: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.IT_MANAGER))):
+def organization_issues(db: Session = Depends(get_db), _: User = Depends(require_users_screen_view)):
     users = db.scalars(select(User)).all()
     departments = {department.id: department for department in db.scalars(select(Department)).all()}
     issues = []
@@ -1086,6 +1230,37 @@ def list_delegations(db: Session = Depends(get_db), _: User = Depends(require_ro
     ]
 
 
+@router.get("/delegations/me")
+def my_active_delegations(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    now = datetime.now(timezone.utc)
+    rows = db.scalars(
+        select(UserDelegation)
+        .options(selectinload(UserDelegation.delegator), selectinload(UserDelegation.delegate))
+        .where(
+            UserDelegation.delegate_user_id == current_user.id,
+            UserDelegation.is_active == True,
+            UserDelegation.start_date <= now,
+            UserDelegation.end_date >= now,
+        )
+        .order_by(UserDelegation.end_date.asc())
+    ).all()
+    return [
+        {
+            "id": row.id,
+            "delegator_user_id": row.delegator_user_id,
+            "delegator_name": row.delegator.full_name_ar if row.delegator else "-",
+            "delegator_role": row.delegator.role if row.delegator else None,
+            "delegate_user_id": row.delegate_user_id,
+            "delegate_name": row.delegate.full_name_ar if row.delegate else "-",
+            "delegation_scope": row.delegation_scope,
+            "start_date": row.start_date,
+            "end_date": row.end_date,
+            "reason": row.reason,
+        }
+        for row in rows
+    ]
+
+
 @router.post("/delegations")
 def create_delegation(payload: DelegationPayload, request: Request, db: Session = Depends(get_db), actor: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.IT_MANAGER))):
     delegator = db.get(User, payload.delegator_user_id)
@@ -1094,18 +1269,22 @@ def create_delegation(payload: DelegationPayload, request: Request, db: Session 
         raise HTTPException(status_code=422, detail="المفوّض أو البديل غير صحيح")
     if payload.delegator_user_id == payload.delegate_user_id:
         raise HTTPException(status_code=422, detail="لا يمكن تفويض المستخدم لنفسه")
+    start_date = normalize_local_datetime(db, payload.start_date)
+    end_date = normalize_local_datetime(db, payload.end_date)
+    if end_date <= start_date:
+        raise HTTPException(status_code=422, detail="تاريخ نهاية التفويض يجب أن يكون بعد تاريخ البداية")
     overlap = db.scalar(
         select(UserDelegation).where(
             UserDelegation.delegator_user_id == payload.delegator_user_id,
             UserDelegation.delegation_scope == payload.delegation_scope,
             UserDelegation.is_active == True,
-            UserDelegation.end_date >= payload.start_date,
-            UserDelegation.start_date <= payload.end_date,
+            UserDelegation.end_date >= start_date,
+            UserDelegation.start_date <= end_date,
         )
     )
     if overlap:
         raise HTTPException(status_code=409, detail="يوجد تفويض نشط متداخل لنفس النطاق")
-    row = UserDelegation(**payload.model_dump(), created_by=actor.id)
+    row = UserDelegation(**payload.model_dump(exclude={"start_date", "end_date"}), start_date=start_date, end_date=end_date, created_by=actor.id)
     db.add(row)
     db.flush()
     write_audit(db, "delegation_created", "delegation", actor=actor, entity_id=str(row.id), ip_address=client_ip(request), user_agent=request_user_agent(request), metadata=payload.model_dump(mode="json"))
@@ -1118,7 +1297,12 @@ def update_delegation(delegation_id: int, payload: DelegationPayload, request: R
     row = db.get(UserDelegation, delegation_id)
     if not row:
         raise HTTPException(status_code=404, detail="التفويض غير موجود")
-    for field, value in payload.model_dump().items():
+    values = payload.model_dump()
+    values["start_date"] = normalize_local_datetime(db, payload.start_date)
+    values["end_date"] = normalize_local_datetime(db, payload.end_date)
+    if values["end_date"] <= values["start_date"]:
+        raise HTTPException(status_code=422, detail="تاريخ نهاية التفويض يجب أن يكون بعد تاريخ البداية")
+    for field, value in values.items():
         setattr(row, field, value)
     write_audit(db, "delegation_updated", "delegation", actor=actor, entity_id=str(row.id), ip_address=client_ip(request), user_agent=request_user_agent(request), metadata=payload.model_dump(mode="json"))
     db.commit()
@@ -1130,10 +1314,18 @@ def delete_delegation(delegation_id: int, request: Request, db: Session = Depend
     row = db.get(UserDelegation, delegation_id)
     if not row:
         raise HTTPException(status_code=404, detail="التفويض غير موجود")
-    row.is_active = False
-    write_audit(db, "delegation_deleted", "delegation", actor=actor, entity_id=str(row.id), ip_address=client_ip(request), user_agent=request_user_agent(request))
+    metadata = {
+        "delegator_user_id": row.delegator_user_id,
+        "delegate_user_id": row.delegate_user_id,
+        "delegation_scope": row.delegation_scope,
+        "start_date": row.start_date.isoformat() if row.start_date else None,
+        "end_date": row.end_date.isoformat() if row.end_date else None,
+        "reason": row.reason,
+    }
+    write_audit(db, "delegation_deleted", "delegation", actor=actor, entity_id=str(row.id), ip_address=client_ip(request), user_agent=request_user_agent(request), metadata=metadata)
+    db.delete(row)
     db.commit()
-    return {"status": "disabled"}
+    return {"status": "deleted"}
 
 
 def access_review_issues(db: Session) -> list[dict]:
@@ -1163,7 +1355,7 @@ def access_review_issues(db: Session) -> list[dict]:
 
 
 @router.get("/access-review")
-def get_access_review(db: Session = Depends(get_db), _: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.IT_MANAGER))):
+def get_access_review(db: Session = Depends(get_db), _: User = Depends(require_users_screen_view)):
     latest = db.scalar(select(AccessReview).order_by(AccessReview.created_at.desc()).limit(1))
     saved_items = []
     if latest:
@@ -1241,7 +1433,7 @@ def mark_access_review_item(item_id: int, request: Request, db: Session = Depend
 
 
 @router.get("", response_model=list[UserRead])
-def list_users(db: Session = Depends(get_db), actor: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.IT_MANAGER, UserRole.DIRECT_MANAGER))):
+def list_users(db: Session = Depends(get_db), actor: User = Depends(require_users_screen_view)):
     stmt = select(User).order_by(User.full_name_ar)
     if actor.role == UserRole.DIRECT_MANAGER:
         stmt = stmt.where(User.department_id == actor.department_id)
@@ -1250,11 +1442,14 @@ def list_users(db: Session = Depends(get_db), actor: User = Depends(require_role
 
 @router.get("/screen-permissions/me", response_model=ScreenPermissionsRead)
 def my_screen_permissions(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    return {"screens": read_user_screens(db, current_user), "available_screens": available_screens_for_user(current_user)}
+    screens = read_user_screens(db, current_user)
+    if has_active_approval_delegation(db, current_user) and "approvals" not in screens:
+        screens.append("approvals")
+    return {"screens": screens, "available_screens": available_screens_for_user(current_user)}
 
 
 @router.get("/{user_id}")
-def get_user_details(user_id: int, db: Session = Depends(get_db), actor: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.IT_MANAGER, UserRole.DIRECT_MANAGER))):
+def get_user_details(user_id: int, db: Session = Depends(get_db), actor: User = Depends(require_users_screen_view)):
     user = db.get(User, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -1309,7 +1504,10 @@ def update_user_screen_permissions(user_id: int, payload: ScreenPermissionsPaylo
 
 
 @router.post("", response_model=UserRead)
-def create_user(payload: UserCreate, request: Request, db: Session = Depends(get_db), actor: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.IT_MANAGER))):
+def create_user(payload: UserCreate, request: Request, db: Session = Depends(get_db), actor: User = Depends(require_users_screen_create)):
+    actor_can_manage_users = permission_level_allows(effective_screen_permission_level(db, actor, "users"), "manage")
+    if actor.role not in {UserRole.SUPER_ADMIN, UserRole.IT_MANAGER} and not actor_can_manage_users and payload.role != UserRole.EMPLOYEE:
+        raise HTTPException(status_code=403, detail="صلاحية إضافة المستخدمين لا تسمح بإنشاء أدوار إدارية")
     ensure_role_assignment_allowed(actor, payload.role)
     validate_user_links(db, payload)
     ensure_user_unique(db, payload)
@@ -1345,12 +1543,18 @@ def create_user(payload: UserCreate, request: Request, db: Session = Depends(get
 
 
 @router.put("/{user_id}", response_model=UserRead)
-def update_user(user_id: int, payload: UserUpdate, request: Request, db: Session = Depends(get_db), actor: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.IT_MANAGER))):
+def update_user(user_id: int, payload: UserUpdate, request: Request, db: Session = Depends(get_db), actor: User = Depends(require_users_screen_edit)):
     user = db.get(User, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     if actor.role != UserRole.SUPER_ADMIN and user.role == UserRole.SUPER_ADMIN:
         raise HTTPException(status_code=403, detail="Only Super Admin can update Super Admin users")
+    actor_can_manage_users = permission_level_allows(effective_screen_permission_level(db, actor, "users"), "manage")
+    if actor.role not in {UserRole.SUPER_ADMIN, UserRole.IT_MANAGER} and not actor_can_manage_users:
+        if user.role == UserRole.IT_MANAGER:
+            raise HTTPException(status_code=403, detail="لا يمكن تعديل مستخدم إداري بهذه الصلاحية")
+        if payload.role != user.role:
+            raise HTTPException(status_code=403, detail="تغيير دور المستخدم يتطلب صلاحية إدارة المستخدمين")
     ensure_not_last_super_admin(db, user, next_role=payload.role, next_active=payload.is_active)
     ensure_role_assignment_allowed(actor, payload.role)
     validate_user_links(db, payload, user_id=user_id)
@@ -1467,7 +1671,7 @@ roles_router = APIRouter(prefix="/roles", tags=["Roles"])
 
 
 @roles_router.get("")
-def list_roles(db: Session = Depends(get_db), _: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.IT_MANAGER))):
+def list_roles(db: Session = Depends(get_db), _: User = Depends(require_users_screen_view)):
     counts = dict(db.execute(select(User.role, func.count()).group_by(User.role)).all())
     roles = db.scalars(select(Role).order_by(Role.label_ar)).all()
     result = []
@@ -1501,6 +1705,9 @@ def update_role(role_id: int, payload: RolePayload, request: Request, db: Sessio
     if duplicate:
         raise HTTPException(status_code=409, detail="كود الدور مستخدم من قبل")
     old_value = role_to_dict(role)
+    active_users = db.scalar(select(func.count()).select_from(User).where(User.role == (role.code or role.name), User.is_active == True)) or 0
+    if active_users and not payload.is_active:
+        raise HTTPException(status_code=409, detail="لا يمكن تعطيل دور مرتبط بمستخدمين نشطين")
     role.label_ar = payload.name_ar
     role.name_ar = payload.name_ar
     role.name_en = payload.name_en or payload.code
@@ -1552,7 +1759,7 @@ def clone_role(role_id: int, request: Request, db: Session = Depends(get_db), ac
 
 
 @roles_router.get("/{role_id}/users")
-def users_in_role(role_id: int, db: Session = Depends(get_db), _: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.IT_MANAGER))):
+def users_in_role(role_id: int, db: Session = Depends(get_db), _: User = Depends(require_users_screen_view)):
     role = db.get(Role, role_id)
     if not role:
         raise HTTPException(status_code=404, detail="الدور غير موجود")
@@ -1564,23 +1771,45 @@ permissions_router = APIRouter(prefix="/permissions", tags=["Permissions"])
 
 
 @permissions_router.get("/screens")
-def screen_permissions_matrix(db: Session = Depends(get_db), _: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.IT_MANAGER))):
+def screen_permissions_matrix(db: Session = Depends(get_db), _: User = Depends(require_users_screen_view)):
     roles = db.scalars(select(Role).order_by(Role.label_ar)).all()
     users = db.scalars(select(User).order_by(User.full_name_ar)).all()
     return {
         "screens": SCREEN_DEFINITIONS,
         "levels": PERMISSION_LEVELS,
-        "roles": [{"id": role.id, "code": role.code or role.name, "name_ar": role.name_ar or role.label_ar, "screens": read_role_screens(db, role.code or role.name)} for role in roles],
-        "users": [{"id": user.id, "name_ar": user.full_name_ar, "role": user.role, "screens": read_user_screens(db, user)} for user in users],
+        "roles": [
+            {
+                "id": role.id,
+                "code": role.code or role.name,
+                "name_ar": role.name_ar or role.label_ar,
+                "screens": read_role_screens(db, role.code or role.name),
+                "permissions": read_screen_permission_levels(db, role_id=role.id, fallback_screens=read_role_screens(db, role.code or role.name)),
+            }
+            for role in roles
+        ],
+        "users": [
+            {
+                "id": user.id,
+                "name_ar": user.full_name_ar,
+                "username": user.username,
+                "employee_id": user.employee_id,
+                "email": user.email,
+                "role": user.role,
+                "screens": read_user_screens(db, user),
+                "permissions": read_screen_permission_levels(db, user_id=user.id, fallback_screens=read_user_screens(db, user)),
+            }
+            for user in users
+        ],
     }
 
 
 @permissions_router.get("/screens/effective/{user_id}")
-def effective_screen_permissions(user_id: int, db: Session = Depends(get_db), _: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.IT_MANAGER))):
+def effective_screen_permissions(user_id: int, db: Session = Depends(get_db), _: User = Depends(require_users_screen_view)):
     user = db.get(User, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="المستخدم غير موجود")
-    return {"user_id": user.id, "screens": read_user_screens(db, user), "available_screens": available_screens_for_user(user)}
+    screens = read_user_screens(db, user)
+    return {"user_id": user.id, "screens": screens, "permissions": read_screen_permission_levels(db, user_id=user.id, fallback_screens=screens), "available_screens": available_screens_for_user(user)}
 
 
 @permissions_router.put("/screens/role/{role_id}")
@@ -1590,19 +1819,11 @@ def update_role_screen_permissions(role_id: int, payload: PermissionLevelPayload
         raise HTTPException(status_code=404, detail="الدور غير موجود")
     screens = [code for code, level in payload.permissions.items() if level != "no_access" and code in ALL_SCREEN_KEYS]
     save_role_screens(db, role, screens, actor)
-    for code, level in payload.permissions.items():
-        if code not in ALL_SCREEN_KEYS:
-            continue
-        row = db.scalar(select(ScreenPermission).where(ScreenPermission.role_id == role.id, ScreenPermission.user_id.is_(None), ScreenPermission.screen_code == code))
-        if not row:
-            row = ScreenPermission(role_id=role.id, screen_code=code)
-            db.add(row)
-        row.permission_level = level if level in PERMISSION_LEVELS else "no_access"
-        for field, value in permission_level_to_flags(row.permission_level).items():
-            setattr(row, field, value)
+    set_screen_permission_levels(db, payload.permissions, role_id=role.id)
     write_audit(db, "screen_permission_changed", "permission", actor=actor, entity_id=str(role.id), ip_address=client_ip(request), user_agent=request_user_agent(request), metadata={"subject": "role", "permissions": payload.permissions})
     db.commit()
-    return {"screens": read_role_screens(db, role.code or role.name)}
+    saved_screens = read_role_screens(db, role.code or role.name)
+    return {"screens": saved_screens, "permissions": read_screen_permission_levels(db, role_id=role.id, fallback_screens=saved_screens)}
 
 
 @permissions_router.put("/screens/user/{user_id}")
@@ -1612,9 +1833,11 @@ def update_user_screen_permission_matrix(user_id: int, payload: PermissionLevelP
         raise HTTPException(status_code=404, detail="المستخدم غير موجود")
     screens = [code for code, level in payload.permissions.items() if level != "no_access" and code in ALL_SCREEN_KEYS]
     save_user_screens(db, user, screens, actor)
+    set_screen_permission_levels(db, payload.permissions, user_id=user.id)
     write_audit(db, "screen_permission_changed", "permission", actor=actor, entity_id=str(user.id), ip_address=client_ip(request), user_agent=request_user_agent(request), metadata={"subject": "user", "permissions": payload.permissions})
     db.commit()
-    return {"screens": read_user_screens(db, user)}
+    saved_screens = read_user_screens(db, user)
+    return {"screens": saved_screens, "permissions": read_screen_permission_levels(db, user_id=user.id, fallback_screens=saved_screens)}
 
 
 @permissions_router.post("/screens/copy")
@@ -1631,18 +1854,29 @@ def copy_screen_permissions(payload: dict, request: Request, db: Session = Depen
 
 
 @permissions_router.get("/actions")
-def action_permissions_matrix(db: Session = Depends(get_db), _: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.IT_MANAGER))):
+def action_permissions_matrix(db: Session = Depends(get_db), _: User = Depends(require_users_screen_view)):
     roles = db.scalars(select(Role).order_by(Role.label_ar)).all()
     users = db.scalars(select(User).order_by(User.full_name_ar)).all()
     return {
         "actions": ACTION_DEFINITIONS,
         "roles": [{"id": role.id, "code": role.code or role.name, "name_ar": role.name_ar or role.label_ar, "permissions": read_action_permissions(db, role_id=role.id)} for role in roles],
-        "users": [{"id": user.id, "name_ar": user.full_name_ar, "role": user.role, "permissions": read_action_permissions(db, user_id=user.id)} for user in users],
+        "users": [
+            {
+                "id": user.id,
+                "name_ar": user.full_name_ar,
+                "username": user.username,
+                "employee_id": user.employee_id,
+                "email": user.email,
+                "role": user.role,
+                "permissions": read_action_permissions(db, user_id=user.id),
+            }
+            for user in users
+        ],
     }
 
 
 @permissions_router.get("/actions/effective/{user_id}")
-def effective_action_permissions(user_id: int, db: Session = Depends(get_db), _: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.IT_MANAGER))):
+def effective_action_permissions(user_id: int, db: Session = Depends(get_db), _: User = Depends(require_users_screen_view)):
     user = db.get(User, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="المستخدم غير موجود")
@@ -1682,7 +1916,7 @@ departments_router = APIRouter(prefix="/departments", tags=["Departments"])
 
 
 @departments_router.get("", response_model=list[DepartmentRead])
-def list_departments(db: Session = Depends(get_db), _: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.IT_MANAGER)), search: str | None = Query(default=None)):
+def list_departments(db: Session = Depends(get_db), _: User = Depends(require_users_screen_view), search: str | None = Query(default=None)):
     stmt = select(Department).order_by(Department.name_ar)
     if search:
         stmt = stmt.where(Department.name_ar.ilike(f"%{search}%") | Department.name_en.ilike(f"%{search}%"))

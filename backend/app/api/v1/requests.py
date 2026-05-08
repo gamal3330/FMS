@@ -17,7 +17,7 @@ from app.models.enums import ApprovalAction, RequestStatus, RequestType, UserRol
 from app.models.message import InternalMessage, InternalMessageRecipient
 from app.models.request import ApprovalStep, Attachment, RequestApprovalStep, RequestComment, ServiceRequest
 from app.models.settings import PortalSetting, RequestTypeField, RequestTypeSetting, SettingsGeneral
-from app.models.user import User
+from app.models.user import User, UserDelegation
 from app.schemas.request import ApprovalDecision, AttachmentRead, CommentCreate, ServiceRequestCreate, ServiceRequestRead, ServiceRequestUpdate
 from app.services.audit import write_audit
 from app.services.pdf_fonts import register_arabic_pdf_font, rtl_text
@@ -151,6 +151,39 @@ def unassigned_it_staff_can_cover_request(db: Session, service_request: ServiceR
         .where(User.role == UserRole.IT_STAFF, User.is_active == True, User.administrative_section == request_section)
     ) or 0
     return section_staff_count == 0
+
+
+def active_approval_delegators(db: Session, user: User) -> list[User]:
+    now = datetime.now(timezone.utc)
+    return db.scalars(
+        select(User)
+        .join(UserDelegation, UserDelegation.delegator_user_id == User.id)
+        .where(
+            UserDelegation.delegate_user_id == user.id,
+            UserDelegation.is_active == True,
+            UserDelegation.delegation_scope.in_(["approvals_only", "all_allowed_actions"]),
+            UserDelegation.start_date <= now,
+            UserDelegation.end_date >= now,
+            User.is_active == True,
+        )
+    ).all()
+
+
+def delegated_approval_filter(db: Session, current_user: User):
+    delegators = active_approval_delegators(db, current_user)
+    if not delegators:
+        return None
+    filters = []
+    direct_manager_ids = [user.id for user in delegators if user.role == UserRole.DIRECT_MANAGER]
+    if direct_manager_ids:
+        team_members = select(User.id).where(User.manager_id.in_(direct_manager_ids))
+        direct_manager_pending = select(ApprovalStep.request_id).where(ApprovalStep.role == UserRole.DIRECT_MANAGER, ApprovalStep.action == ApprovalAction.PENDING)
+        filters.append(and_(ServiceRequest.requester_id.in_(team_members), ServiceRequest.id.in_(direct_manager_pending)))
+    delegated_roles = [user.role for user in delegators if user.role != UserRole.DIRECT_MANAGER]
+    if delegated_roles:
+        delegated_pending = select(ApprovalStep.request_id).where(ApprovalStep.role.in_(delegated_roles), ApprovalStep.action == ApprovalAction.PENDING)
+        filters.append(ServiceRequest.id.in_(delegated_pending))
+    return or_(*filters) if filters else None
 
 
 def user_has_messages_screen(db: Session, user: User) -> bool:
@@ -289,6 +322,17 @@ def ensure_request_access(service_request: ServiceRequest, current_user: User, d
     if current_user.role == UserRole.IT_STAFF and any(step.role == UserRole.IT_STAFF for step in service_request.approvals):
         if request_matches_it_staff_section(service_request, current_user):
             return
+    if db:
+        pending_step = next((step for step in sorted(service_request.approvals or [], key=lambda item: item.step_order) if step.action == ApprovalAction.PENDING), None)
+        if pending_step:
+            for delegator in active_approval_delegators(db, current_user):
+                if str(pending_step.role) != str(delegator.role):
+                    continue
+                if delegator.role == UserRole.DIRECT_MANAGER:
+                    if service_request.requester and service_request.requester.manager_id == delegator.id:
+                        return
+                else:
+                    return
     raise HTTPException(status_code=403, detail="Insufficient permissions")
 
 
@@ -609,18 +653,22 @@ class RequestPdfBuilder:
         self.y -= 120
 
 
-def scoped_requests_stmt(stmt, current_user: User):
+def scoped_requests_stmt(stmt, current_user: User, db: Session | None = None):
     if current_user.role in {UserRole.SUPER_ADMIN, UserRole.IT_MANAGER}:
         return stmt
 
     own_request = ServiceRequest.requester_id == current_user.id
+    delegated_filter = delegated_approval_filter(db, current_user) if db else None
 
     if current_user.role == UserRole.EMPLOYEE:
-        return stmt.where(own_request)
+        return stmt.where(or_(own_request, delegated_filter) if delegated_filter is not None else own_request)
 
     if current_user.role == UserRole.DIRECT_MANAGER:
         team_members = select(User.id).where(User.manager_id == current_user.id)
-        return stmt.where(or_(own_request, ServiceRequest.requester_id.in_(team_members)))
+        conditions = [own_request, ServiceRequest.requester_id.in_(team_members)]
+        if delegated_filter is not None:
+            conditions.append(delegated_filter)
+        return stmt.where(or_(*conditions))
 
     approval_requests = select(ApprovalStep.request_id).where(ApprovalStep.role == current_user.role)
 
@@ -633,15 +681,10 @@ def scoped_requests_stmt(stmt, current_user: User):
             ServiceRequest.form_data["administrative_section"].as_string(),
         )
         if staff_section:
-            return stmt.where(
-                or_(
-                    own_request,
-                    and_(
-                        ServiceRequest.id.in_(approval_requests),
-                        request_section == staff_section,
-                    ),
-                )
-            )
+            conditions = [own_request, and_(ServiceRequest.id.in_(approval_requests), request_section == staff_section)]
+            if delegated_filter is not None:
+                conditions.append(delegated_filter)
+            return stmt.where(or_(*conditions))
         section_has_staff = (
             select(func.count())
             .select_from(User)
@@ -649,12 +692,18 @@ def scoped_requests_stmt(stmt, current_user: User):
             .correlate(ServiceRequest)
             .scalar_subquery()
         )
-        return stmt.where(or_(own_request, and_(ServiceRequest.id.in_(approval_requests), request_section.is_not(None), section_has_staff == 0)))
+        conditions = [own_request, and_(ServiceRequest.id.in_(approval_requests), request_section.is_not(None), section_has_staff == 0)]
+        if delegated_filter is not None:
+            conditions.append(delegated_filter)
+        return stmt.where(or_(*conditions))
 
     if current_user.role in {UserRole.INFOSEC, UserRole.EXECUTIVE, UserRole.IT_STAFF}:
-        return stmt.where(or_(own_request, ServiceRequest.id.in_(approval_requests)))
+        conditions = [own_request, ServiceRequest.id.in_(approval_requests)]
+        if delegated_filter is not None:
+            conditions.append(delegated_filter)
+        return stmt.where(or_(*conditions))
 
-    return stmt.where(own_request)
+    return stmt.where(or_(own_request, delegated_filter) if delegated_filter is not None else own_request)
 
 
 @router.get("", response_model=list[ServiceRequestRead])
@@ -668,7 +717,7 @@ def list_requests(
     per_page: int | None = Query(default=None, ge=1, le=100),
 ):
     stmt = request_query().order_by(ServiceRequest.created_at.desc())
-    stmt = scoped_requests_stmt(stmt, current_user)
+    stmt = scoped_requests_stmt(stmt, current_user, db)
     if status_filter:
         stmt = stmt.where(ServiceRequest.status == status_filter)
     if request_type:

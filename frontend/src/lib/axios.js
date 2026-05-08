@@ -12,6 +12,17 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error?.response?.status === 401 && localStorage.getItem("qib_token")) {
+      localStorage.removeItem("qib_token");
+      window.dispatchEvent(new Event("qib-session-ended"));
+    }
+    return Promise.reject(error);
+  }
+);
+
 export function getErrorMessage(error) {
   if (!error?.response) {
     return error?.message || "تعذر الاتصال بالخادم. تحقق من تشغيل النظام ثم حاول مرة أخرى.";

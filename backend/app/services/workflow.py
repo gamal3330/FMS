@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from app.models.enums import ApprovalAction, RequestStatus, RequestType, UserRole
 from app.models.request import ApprovalStep, RequestApprovalStep, ServiceRequest
 from app.models.settings import WorkflowTemplate, WorkflowTemplateStep
-from app.models.user import User
+from app.models.user import User, UserDelegation
 
 WORKFLOW_CHAINS: dict[RequestType, list[UserRole | str]] = {
     RequestType.EMAIL: [UserRole.DIRECT_MANAGER, UserRole.IT_MANAGER, "implementation"],
@@ -54,11 +54,36 @@ def create_approval_steps(db: Session, service_request: ServiceRequest) -> None:
     service_request.sla_due_at = datetime.now(timezone.utc) + timedelta(hours=SLA_HOURS[service_request.request_type])
 
 
-def user_can_act(user: User, step: ApprovalStep) -> bool:
-    return user.role == UserRole.SUPER_ADMIN or step.role == user.role or step.role in IMPLEMENTATION_STEP_ROLES and user.role in {
+def active_approval_delegators(db: Session, user: User) -> list[User]:
+    now = datetime.now(timezone.utc)
+    return db.scalars(
+        select(User)
+        .join(UserDelegation, UserDelegation.delegator_user_id == User.id)
+        .where(
+            UserDelegation.delegate_user_id == user.id,
+            UserDelegation.is_active == True,
+            UserDelegation.delegation_scope.in_(["approvals_only", "all_allowed_actions"]),
+            UserDelegation.start_date <= now,
+            UserDelegation.end_date >= now,
+            User.is_active == True,
+        )
+    ).all()
+
+
+def user_can_act(db: Session, request: ServiceRequest, user: User, step: ApprovalStep) -> bool:
+    if user.role == UserRole.SUPER_ADMIN or step.role == user.role or step.role in IMPLEMENTATION_STEP_ROLES and user.role in {
         UserRole.IT_STAFF,
         UserRole.IT_MANAGER,
-    }
+    }:
+        return True
+
+    for delegator in active_approval_delegators(db, user):
+        if str(step.role) != str(delegator.role):
+            continue
+        if delegator.role == UserRole.DIRECT_MANAGER:
+            return bool(request.requester and request.requester.manager_id == delegator.id)
+        return True
+    return False
 
 
 def workflow_return_config(db: Session, request: ServiceRequest, step: ApprovalStep) -> tuple[bool, int | None]:
@@ -130,7 +155,7 @@ def advance_workflow(db: Session, request: ServiceRequest, actor: User, action: 
     pending_step = next((step for step in sorted(request.approvals, key=lambda item: item.step_order) if step.action == ApprovalAction.PENDING), None)
     if pending_step is None:
         raise ValueError("No pending approval step")
-    if not user_can_act(actor, pending_step):
+    if not user_can_act(db, request, actor, pending_step):
         raise PermissionError("User cannot act on current step")
     return_target_order = None
     if action == ApprovalAction.RETURNED_FOR_EDIT:

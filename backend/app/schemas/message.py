@@ -10,6 +10,7 @@ class MessageUserRead(BaseModel):
     role: str
     department_id: int | None = None
     department_name: str | None = None
+    department_manager_id: int | None = None
 
     model_config = {"from_attributes": True}
 
@@ -68,14 +69,35 @@ class MessageSettingsRead(BaseModel):
     enable_drafts: bool = True
     enable_templates: bool = True
     enable_signatures: bool = True
+    allow_archiving: bool = True
+    allow_general_messages: bool = True
+    allow_replies: bool = True
+    allow_forwarding: bool = False
+    allow_multiple_recipients: bool = True
+    allow_user_delete_own_messages: bool = False
+    prevent_hard_delete: bool = True
+    exclude_official_messages_from_delete: bool = True
+    exclude_confidential_messages_from_delete: bool = True
+    allow_send_to_user: bool = True
+    allow_send_to_department: bool = True
+    allow_broadcast: bool = False
     enable_circulars: bool = True
     enable_department_broadcasts: bool = True
     enable_read_receipts: bool = True
+    enable_unread_badge: bool = True
     enable_linked_requests: bool = True
+    allow_send_message_from_request: bool = True
+    enable_message_notifications: bool = True
+    notify_on_new_message: bool = True
+    notify_on_reply: bool = True
     auto_refresh_seconds: int = 20
     max_attachment_mb: int = 25
+    max_attachments_per_message: int = 10
     max_recipients: int = 200
     default_message_type: str = "internal_correspondence"
+    allowed_extensions: list[str] = Field(default_factory=lambda: ["pdf", "png", "jpg", "jpeg"])
+    block_executable_files: bool = True
+    department_recipient_behavior: str = "selected_department_users"
     allowed_user_ids: list[int] = Field(default_factory=list)
     blocked_user_ids: list[int] = Field(default_factory=list)
     allowed_department_ids: list[int] = Field(default_factory=list)
@@ -94,6 +116,7 @@ class MessageSettingsUpdate(BaseModel):
     enable_drafts: bool = True
     enable_templates: bool = True
     enable_signatures: bool = True
+    allow_archiving: bool = True
     enable_circulars: bool = True
     enable_department_broadcasts: bool = True
     enable_read_receipts: bool = True

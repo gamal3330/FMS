@@ -134,6 +134,12 @@ function initialData() {
   };
 }
 
+function localDateTimeToIso(value) {
+  if (!value) return value;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toISOString();
+}
+
 export default function UsersPage() {
   const [activeTab, setActiveTab] = useState("overview");
   const [data, setData] = useState(initialData);
@@ -208,7 +214,7 @@ export default function UsersPage() {
     const source = findPermissionSubject(data.screenMatrix, screenSubject);
     const next = {};
     (data.screenMatrix?.screens || []).forEach((screen) => {
-      next[screen.key] = source?.screens?.includes(screen.key) ? "view" : "no_access";
+      next[screen.key] = source?.permissions?.[screen.key] || (source?.screens?.includes(screen.key) ? "view" : "no_access");
     });
     setScreenDraft(next);
   }, [data.screenMatrix, screenSubject.type, screenSubject.id]);
@@ -367,7 +373,9 @@ export default function UsersPage() {
     const payload = {
       ...delegationForm,
       delegator_user_id: Number(delegationForm.delegator_user_id),
-      delegate_user_id: Number(delegationForm.delegate_user_id)
+      delegate_user_id: Number(delegationForm.delegate_user_id),
+      start_date: localDateTimeToIso(delegationForm.start_date),
+      end_date: localDateTimeToIso(delegationForm.end_date)
     };
     await runAction("delegation", async () => {
       await api.post("/users/delegations", payload);
@@ -936,15 +944,45 @@ function UserDetailsDrawer({ details, usersById, departmentsById, onClose }) {
 
 function SubjectSelector({ matrix, subject, setSubject }) {
   const items = subject.type === "role" ? matrix.roles || [] : matrix.users || [];
+  const [userSearch, setUserSearch] = useState("");
+  const query = userSearch.trim().toLowerCase();
+  const selectedItem = items.find((item) => String(item.id) === String(subject.id));
+  const filteredItems =
+    subject.type === "user" && query
+      ? items.filter((item) =>
+          [item.name_ar, item.username, item.employee_id, item.email, item.role]
+            .filter(Boolean)
+            .some((value) => String(value).toLowerCase().includes(query))
+        )
+      : items;
+  const visibleItems = selectedItem && !filteredItems.some((item) => item.id === selectedItem.id) ? [selectedItem, ...filteredItems] : filteredItems;
+  const itemLabel = (item) => {
+    if (subject.type === "role") return item.name_ar || item.role || item.code;
+    return [item.name_ar, item.employee_id, item.username].filter(Boolean).join(" - ");
+  };
   return (
-    <div className="grid gap-3 lg:grid-cols-[220px_1fr]">
-      <Select value={subject.type} onChange={(event) => setSubject({ type: event.target.value, id: "" })}>
+    <div className={`grid gap-3 ${subject.type === "user" ? "lg:grid-cols-[220px_1fr_1.2fr]" : "lg:grid-cols-[220px_1fr]"}`}>
+      <Select value={subject.type} onChange={(event) => {
+        setUserSearch("");
+        setSubject({ type: event.target.value, id: "" });
+      }}>
         <option value="role">حسب الدور</option>
         <option value="user">حسب المستخدم</option>
       </Select>
+      {subject.type === "user" && (
+        <div className="relative">
+          <Search className="pointer-events-none absolute right-3 top-3 h-4 w-4 text-slate-400" />
+          <Input
+            value={userSearch}
+            onChange={(event) => setUserSearch(event.target.value)}
+            className="pr-9"
+            placeholder="ابحث بالاسم، الرقم الوظيفي، اسم المستخدم أو البريد"
+          />
+        </div>
+      )}
       <Select value={subject.id} onChange={(event) => setSubject({ ...subject, id: event.target.value })}>
         <option value="">اختر {subject.type === "role" ? "دورًا" : "مستخدمًا"}</option>
-        {items.map((item) => <option key={item.id} value={item.id}>{item.name_ar || item.role || item.code}</option>)}
+        {visibleItems.map((item) => <option key={item.id} value={item.id}>{itemLabel(item)}</option>)}
       </Select>
     </div>
   );

@@ -19,6 +19,7 @@ class InternalMessage(Base):
     related_request_id: Mapped[int | None] = mapped_column(ForeignKey("service_requests.id"), index=True)
     is_draft: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     is_sender_archived: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    is_sender_deleted: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), index=True)
 
@@ -37,6 +38,7 @@ class InternalMessageRecipient(Base):
     is_read: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     is_archived: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
 
     message = relationship("InternalMessage", back_populates="recipients")
     recipient = relationship("User", foreign_keys=[recipient_id])

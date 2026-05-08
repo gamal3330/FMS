@@ -20,6 +20,8 @@ def log_ai_usage(
     entity_type: str | None = None,
     entity_id: str | None = None,
     error_message: str | None = None,
+    prompt_text: str | None = None,
+    output_text: str | None = None,
 ) -> AIUsageLog:
     log = AIUsageLog(
         user_id=user_id,
@@ -32,6 +34,8 @@ def log_ai_usage(
         latency_ms=latency_ms,
         status=status,
         error_message=(error_message or "")[:1000] or None,
+        prompt_text=prompt_text,
+        output_text=output_text,
     )
     db.add(log)
     db.flush()

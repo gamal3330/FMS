@@ -802,6 +802,8 @@ def get_ai_usage_logs(db: Session = Depends(get_db), _: User = AISettingsActor):
             output_length=row.output_length,
             status=row.status,
             error_message=row.error_message,
+            prompt_text=row.prompt_text,
+            output_text=row.output_text,
             created_at=row.created_at,
         )
         for row in rows

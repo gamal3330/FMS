@@ -263,7 +263,7 @@ function AISettingsPanel({ notify }) {
         </label>
         <LabeledInput label="API Base URL" value={form.api_base_url || ""} onChange={(event) => update("api_base_url", event.target.value)} placeholder={providerHint.apiPlaceholder} />
         <LabeledInput label="Model Name" value={form.model_name || ""} onChange={(event) => update("model_name", event.target.value)} placeholder={providerHint.modelPlaceholder} />
-        <LabeledInput label="الحد الأقصى لطول النص" type="number" min="500" max="50000" value={form.max_input_chars || 6000} onChange={(event) => update("max_input_chars", event.target.value)} />
+        <LabeledInput label="الحد الأقصى لطول النص" type="number" min="100" max="50000" value={form.max_input_chars || 6000} onChange={(event) => update("max_input_chars", event.target.value)} />
         <label className="block space-y-2 text-sm font-medium text-slate-700 md:col-span-2">
           API Key
           <Input type="password" value={form.api_key || ""} onChange={(event) => update("api_key", event.target.value)} placeholder={form.api_key_configured ? "تم حفظ مفتاح سابق. اتركه فارغاً للإبقاء عليه." : providerHint.apiKeyPlaceholder} />
@@ -1047,6 +1047,26 @@ export function DatabaseSettings({ notify }) {
     });
   }
 
+  async function decryptBackup(backup) {
+    const admin_password = window.prompt("أدخل كلمة مرور مدير النظام لفك تشفير النسخة");
+    if (!admin_password) return;
+    await runAction(`decrypt-${backup.id}`, async () => {
+      const response = await api.post(
+        `/settings/database/backups/${backup.id}/decrypt-download`,
+        { admin_password, confirmation_text: "DECRYPT BACKUP" },
+        { responseType: "blob" }
+      );
+      const fileName = backup.file_name.endsWith(".enc") ? backup.file_name.slice(0, -4) : `${backup.file_name}.zip`;
+      const url = URL.createObjectURL(response.data);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = fileName;
+      link.click();
+      URL.revokeObjectURL(url);
+      notify("تم فك تشفير النسخة وتنزيلها");
+    });
+  }
+
   async function verifyBackup(backup) {
     await runAction(`verify-${backup.id}`, async () => {
       await api.post(`/settings/database/backups/${backup.id}/verify`);
@@ -1216,6 +1236,9 @@ export function DatabaseSettings({ notify }) {
               backup.verified_at ? formatDateTime(backup.verified_at) : "لا",
               <div key={backup.id} className="flex flex-wrap gap-2">
                 <button type="button" onClick={() => downloadBackup(backup)} className="rounded-md border px-2 py-1 text-xs font-bold">تحميل</button>
+                {(backup.metadata_json?.encrypted || backup.file_name?.endsWith(".enc")) && (
+                  <button type="button" onClick={() => decryptBackup(backup)} className="rounded-md border border-bank-200 px-2 py-1 text-xs font-bold text-bank-800">فك التشفير</button>
+                )}
                 <button type="button" onClick={() => verifyBackup(backup)} className="rounded-md border px-2 py-1 text-xs font-bold">تحقق</button>
                 <button type="button" onClick={() => deleteBackup(backup)} className="rounded-md border border-red-200 px-2 py-1 text-xs font-bold text-red-700">حذف</button>
               </div>

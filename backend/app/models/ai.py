@@ -74,6 +74,8 @@ class AIUsageLog(Base):
     latency_ms: Mapped[int] = mapped_column(Integer, default=0)
     status: Mapped[str] = mapped_column(String(30), default="success", index=True)
     error_message: Mapped[str | None] = mapped_column(Text)
+    prompt_text: Mapped[str | None] = mapped_column(Text)
+    output_text: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
 
     user = relationship("User")

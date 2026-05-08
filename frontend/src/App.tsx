@@ -22,7 +22,6 @@ import UpdateManagementPage from "./pages/settings/UpdateManagementPage.jsx";
 import UsersPage from "./pages/settings/UsersPage.jsx";
 import { apiFetch, CurrentUser } from "./lib/api";
 
-const SETTINGS_ROLES = new Set(["super_admin", "it_manager"]);
 const SCREEN_ROUTES: Record<string, string> = {
   dashboard: "/dashboard",
   requests: "/requests",
@@ -37,10 +36,6 @@ const SCREEN_ROUTES: Record<string, string> = {
   health_monitoring: "/settings/health-monitoring"
 };
 const DEFAULT_SCREEN_ORDER = ["dashboard", "requests", "approvals", "messages", "reports", "settings", "request_types", "users", "departments", "specialized_sections", "health_monitoring"];
-
-function canAccessSettings(user: CurrentUser | null) {
-  return Boolean(user && SETTINGS_ROLES.has(user.role));
-}
 
 function ProtectedApp() {
   const navigate = useNavigate();
@@ -58,6 +53,10 @@ function ProtectedApp() {
     apiFetch<CurrentUser>("/auth/me")
       .then((user) => {
         setCurrentUser(user);
+        if (user.force_password_change) {
+          setScreenPermissions([]);
+          return undefined;
+        }
         return apiFetch<{ screens: string[]; available_screens?: { key: string; label: string }[] }>("/users/screen-permissions/me")
           .then((permissions) => setScreenPermissions(normalizeScreens(permissions.screens, permissions.available_screens)))
           .catch(() => setScreenPermissions(null));
@@ -68,6 +67,23 @@ function ProtectedApp() {
       })
       .finally(() => setIsLoading(false));
   }, [navigate, token]);
+
+  useEffect(() => {
+    function endSession() {
+      localStorage.removeItem("qib_token");
+      navigate("/login", { replace: true });
+    }
+    window.addEventListener("qib-session-ended", endSession);
+    return () => window.removeEventListener("qib-session-ended", endSession);
+  }, [navigate]);
+
+  useEffect(() => {
+    if (!token || !currentUser) return;
+    const timer = window.setInterval(() => {
+      apiFetch<CurrentUser>("/auth/me").catch(() => undefined);
+    }, 10000);
+    return () => window.clearInterval(timer);
+  }, [token, currentUser?.id]);
 
   if (!token) {
     return <Navigate to="/login" replace />;
@@ -95,15 +111,36 @@ function ProtectedApp() {
     return canAccessScreen(screenKey) ? element : <Navigate to={defaultPath()} replace />;
   }
 
+  function canAccessAnyAdminScreen() {
+    return [
+      "settings",
+      "request_types",
+      "users",
+      "departments",
+      "specialized_sections",
+      "messaging_settings",
+      "ai_settings",
+      "database_settings",
+      "update_management",
+      "health_monitoring"
+    ].some(canAccessScreen);
+  }
+
   return (
     <Layout
       currentUser={currentUser}
-      canAccessSettings={canAccessSettings(currentUser)}
+      canAccessSettings={canAccessAnyAdminScreen()}
       onLogout={() => {
         apiFetch("/auth/logout", { method: "POST" }).finally(() => {
           localStorage.removeItem("qib_token");
           navigate("/login", { replace: true });
         });
+      }}
+      onPasswordChanged={() => {
+        setCurrentUser((user) => (user ? { ...user, force_password_change: false } : user));
+        apiFetch<{ screens: string[]; available_screens?: { key: string; label: string }[] }>("/users/screen-permissions/me")
+          .then((permissions) => setScreenPermissions(normalizeScreens(permissions.screens, permissions.available_screens)))
+          .catch(() => setScreenPermissions(null));
       }}
     >
       <Routes>
@@ -118,51 +155,51 @@ function ProtectedApp() {
         />
         <Route
           path="/settings"
-          element={canAccessSettings(currentUser) && canAccessScreen("settings") ? <SettingsPage /> : <Navigate to={defaultPath()} replace />}
+          element={canAccessScreen("settings") ? <SettingsPage /> : <Navigate to={defaultPath()} replace />}
         />
         <Route
           path="/settings/ai"
-          element={canAccessSettings(currentUser) && canAccessScreen("settings") ? <AISettingsPage /> : <Navigate to={defaultPath()} replace />}
+          element={canAccessScreen("ai_settings") ? <AISettingsPage /> : <Navigate to={defaultPath()} replace />}
         />
         <Route
           path="/settings/database"
-          element={canAccessSettings(currentUser) && canAccessScreen("settings") ? <DatabaseSettingsPage /> : <Navigate to={defaultPath()} replace />}
+          element={canAccessScreen("database_settings") ? <DatabaseSettingsPage /> : <Navigate to={defaultPath()} replace />}
         />
         <Route
           path="/settings/messaging"
-          element={canAccessSettings(currentUser) && canAccessScreen("settings") ? <MessagingSettingsPage /> : <Navigate to={defaultPath()} replace />}
+          element={canAccessScreen("messaging_settings") ? <MessagingSettingsPage /> : <Navigate to={defaultPath()} replace />}
         />
         <Route
           path="/settings/updates"
-          element={canAccessSettings(currentUser) && canAccessScreen("settings") ? <UpdateManagementPage /> : <Navigate to={defaultPath()} replace />}
+          element={canAccessScreen("update_management") ? <UpdateManagementPage /> : <Navigate to={defaultPath()} replace />}
         />
         <Route
           path="/settings/updates/local"
-          element={canAccessSettings(currentUser) && canAccessScreen("settings") ? <LocalUpdatePage /> : <Navigate to={defaultPath()} replace />}
+          element={canAccessScreen("update_management") ? <LocalUpdatePage /> : <Navigate to={defaultPath()} replace />}
         />
         <Route
           path="/request-types"
-          element={canAccessSettings(currentUser) && canAccessScreen("request_types") ? <RequestTypesPage /> : <Navigate to={defaultPath()} replace />}
+          element={canAccessScreen("request_types") ? <RequestTypesPage /> : <Navigate to={defaultPath()} replace />}
         />
         <Route
           path="/users"
-          element={canAccessSettings(currentUser) && canAccessScreen("users") ? <UsersPage /> : <Navigate to={defaultPath()} replace />}
+          element={canAccessScreen("users") ? <UsersPage /> : <Navigate to={defaultPath()} replace />}
         />
         <Route
           path="/settings/users-permissions"
-          element={canAccessSettings(currentUser) && canAccessScreen("users") ? <UsersPage /> : <Navigate to={defaultPath()} replace />}
+          element={canAccessScreen("users") ? <UsersPage /> : <Navigate to={defaultPath()} replace />}
         />
         <Route
           path="/departments"
-          element={canAccessSettings(currentUser) && canAccessScreen("departments") ? <DepartmentsPage /> : <Navigate to={defaultPath()} replace />}
+          element={canAccessScreen("departments") ? <DepartmentsPage /> : <Navigate to={defaultPath()} replace />}
         />
         <Route
           path="/specialized-sections"
-          element={canAccessSettings(currentUser) && canAccessScreen("specialized_sections") ? <SpecializedSectionsPage /> : <Navigate to={defaultPath()} replace />}
+          element={canAccessScreen("specialized_sections") ? <SpecializedSectionsPage /> : <Navigate to={defaultPath()} replace />}
         />
         <Route
           path="/settings/health-monitoring"
-          element={canAccessSettings(currentUser) && canAccessScreen("health_monitoring") ? <HealthMonitoringPage /> : <Navigate to={defaultPath()} replace />}
+          element={canAccessScreen("health_monitoring") ? <HealthMonitoringPage /> : <Navigate to={defaultPath()} replace />}
         />
         <Route path="/settings/request-types" element={<Navigate to="/request-types" replace />} />
         <Route path="/settings/users" element={<Navigate to="/settings/users-permissions" replace />} />

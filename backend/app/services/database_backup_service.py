@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
@@ -11,11 +12,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import HTTPException
+from fastapi.encoders import jsonable_encoder
+from cryptography.fernet import Fernet, InvalidToken
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.config import get_settings
 from app.models.database import DatabaseBackup, DatabaseBackupSettings
+from app.models.enums import UserRole
+from app.models.notification import Notification
 from app.models.user import User
 from app.services.audit import write_audit
 from app.services.database_jobs_service import create_job, finish_job
@@ -44,6 +49,23 @@ def backups_root(db: Session | None = None) -> Path:
         path = PROJECT_ROOT / path
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def encryption_key() -> bytes:
+    digest = hashlib.sha256(settings.secret_key.encode("utf-8")).digest()
+    return base64.urlsafe_b64encode(digest)
+
+
+def encrypt_file(source: Path, target: Path) -> None:
+    data = source.read_bytes()
+    target.write_bytes(Fernet(encryption_key()).encrypt(data))
+
+
+def decrypt_file(source: Path, target: Path) -> None:
+    try:
+        target.write_bytes(Fernet(encryption_key()).decrypt(source.read_bytes()))
+    except InvalidToken as exc:
+        raise HTTPException(status_code=500, detail="تعذر فك تشفير النسخة الاحتياطية") from exc
 
 
 def sha256_file(path: Path) -> str:
@@ -100,17 +122,31 @@ def add_uploads_to_zip(archive: zipfile.ZipFile) -> int:
     uploads = Path(settings.upload_dir)
     if not uploads.is_absolute():
         uploads = PROJECT_ROOT / uploads
+    excluded_dirs = {"database_backups", "restore_temp", "local_updates"}
     count = 0
     if not uploads.exists():
         return 0
     for item in uploads.rglob("*"):
         if not item.is_file():
             continue
-        if "database_backups" in item.parts or "restore_temp" in item.parts:
+        if any(part in excluded_dirs for part in item.relative_to(uploads).parts):
             continue
         archive.write(item, f"uploads/{item.relative_to(uploads)}")
         count += 1
     return count
+
+
+def notify_backup_failure(db: Session, message: str) -> None:
+    admins = db.scalars(select(User).where(User.role == UserRole.SUPER_ADMIN, User.is_active == True)).all()
+    for admin in admins:
+        db.add(
+            Notification(
+                user_id=admin.id,
+                title="فشل النسخ الاحتياطي",
+                body=message,
+                channel="in_app",
+            )
+        )
 
 
 def purge_old_backups(db: Session) -> None:
@@ -124,26 +160,36 @@ def purge_old_backups(db: Session) -> None:
         row.status = "deleted_by_retention"
 
 
-def create_backup(db: Session, actor: User, backup_type: str = "full_backup") -> tuple[dict, int]:
+def create_backup(db: Session, actor: User | None, backup_type: str = "full_backup", *, auto_backup: bool = False) -> tuple[dict, int]:
     if backup_type not in BACKUP_TYPES:
         raise HTTPException(status_code=422, detail="نوع النسخة غير صحيح")
+    cfg = backup_settings(db)
     job = create_job(db, "backup", actor, "جاري إنشاء نسخة احتياطية")
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     archive_name = f"qib-{backup_type}-{timestamp}.zip"
-    archive_path = backups_root(db) / archive_name
-    metadata = {
-        "backup_type": backup_type,
-        "database_type": database_engine_name(),
-        "database_name": safe_database_name(),
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        "system": "QIB Service Portal",
-        "tables": database_tables(db),
-        "status": database_status(db),
-    }
+    if cfg.encrypt_backups:
+        archive_name = f"{archive_name}.enc"
+    compression = zipfile.ZIP_DEFLATED if cfg.compress_backups else zipfile.ZIP_STORED
+    archive_path: Path | None = None
     try:
+        archive_path = backups_root(db) / archive_name
+        metadata = {
+            "backup_type": backup_type,
+            "database_type": database_engine_name(),
+            "database_name": safe_database_name(),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "system": "QIB Service Portal",
+            "auto_backup": auto_backup,
+            "include_uploads": bool(cfg.include_uploads),
+            "compressed": bool(cfg.compress_backups),
+            "encrypted": bool(cfg.encrypt_backups),
+            "tables": database_tables(db),
+            "status": database_status(db),
+        }
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
-            with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            plain_archive_path = tmp_path / archive_name.removesuffix(".enc") if cfg.encrypt_backups else archive_path
+            with zipfile.ZipFile(plain_archive_path, "w", compression=compression) as archive:
                 if backup_type in {"database_only", "full_backup"}:
                     if database_engine_name() == "sqlite":
                         db_path = sqlite_database_path()
@@ -158,10 +204,15 @@ def create_backup(db: Session, actor: User, backup_type: str = "full_backup") ->
                         metadata["database_file"] = f"database/{dump_path.name}"
                     else:
                         raise HTTPException(status_code=409, detail="نوع قاعدة البيانات غير مدعوم للنسخ من الواجهة")
-                if backup_type in {"attachments_only", "full_backup"}:
+                if backup_type == "attachments_only" or (backup_type == "full_backup" and cfg.include_uploads):
                     metadata["uploads_count"] = add_uploads_to_zip(archive)
-                archive.writestr("metadata.json", json.dumps(metadata, ensure_ascii=False, indent=2))
+                else:
+                    metadata["uploads_count"] = 0
+                archive.writestr("metadata.json", json.dumps(jsonable_encoder(metadata), ensure_ascii=False, indent=2))
+            if cfg.encrypt_backups:
+                encrypt_file(plain_archive_path, archive_path)
         checksum = sha256_file(archive_path)
+        metadata_json = jsonable_encoder({**metadata, "checksum": checksum})
         row = DatabaseBackup(
             file_name=archive_name,
             file_path=str(archive_path),
@@ -170,7 +221,7 @@ def create_backup(db: Session, actor: User, backup_type: str = "full_backup") ->
             checksum=checksum,
             status="ready",
             created_by=actor.id,
-            metadata_json={**metadata, "checksum": checksum},
+            metadata_json=metadata_json,
         )
         db.add(row)
         db.flush()
@@ -181,9 +232,13 @@ def create_backup(db: Session, actor: User, backup_type: str = "full_backup") ->
         db.refresh(row)
         return backup_to_dict(row), job.id
     except Exception as exc:
-        archive_path.unlink(missing_ok=True)
+        if archive_path:
+            archive_path.unlink(missing_ok=True)
         finish_job(db, job, "failed", str(getattr(exc, "detail", exc))[:500])
-        write_audit(db, "backup_created", "database", actor=actor, metadata={"status": "failed", "error": str(getattr(exc, "detail", exc))[:300]})
+        error_message = str(getattr(exc, "detail", exc))[:300]
+        if cfg.notify_on_failure:
+            notify_backup_failure(db, error_message)
+        write_audit(db, "backup_created", "database", actor=actor, metadata={"status": "failed", "error": error_message, "notify_on_failure": bool(cfg.notify_on_failure)})
         db.commit()
         if isinstance(exc, HTTPException):
             raise
@@ -203,8 +258,15 @@ def verify_backup(db: Session, backup_id: int, actor: User) -> dict:
     ok = path.exists() and sha256_file(path) == row.checksum
     if ok:
         try:
-            with zipfile.ZipFile(path) as archive:
-                ok = "metadata.json" in archive.namelist()
+            if (row.metadata_json or {}).get("encrypted"):
+                with tempfile.TemporaryDirectory() as tmp:
+                    decrypted_path = Path(tmp) / row.file_name.removesuffix(".enc")
+                    decrypt_file(path, decrypted_path)
+                    with zipfile.ZipFile(decrypted_path) as archive:
+                        ok = "metadata.json" in archive.namelist()
+            else:
+                with zipfile.ZipFile(path) as archive:
+                    ok = "metadata.json" in archive.namelist()
         except zipfile.BadZipFile:
             ok = False
     row.status = "ready" if ok else "corrupted"

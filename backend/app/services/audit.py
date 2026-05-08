@@ -1,3 +1,4 @@
+from fastapi.encoders import jsonable_encoder
 from sqlalchemy.orm import Session
 
 from app.models.audit import AuditLog
@@ -22,6 +23,6 @@ def write_audit(
             entity_id=entity_id,
             ip_address=ip_address,
             user_agent=user_agent,
-            metadata_json=metadata or {},
+            metadata_json=jsonable_encoder(metadata or {}),
         )
     )

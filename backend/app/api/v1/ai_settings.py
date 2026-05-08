@@ -58,6 +58,8 @@ def usage_log_read(row) -> AIUsageLogRead:
         latency_ms=row.latency_ms or 0,
         status=row.status,
         error_message=row.error_message,
+        prompt_text=row.prompt_text,
+        output_text=row.output_text,
         created_at=row.created_at,
     )
 
@@ -196,13 +198,33 @@ def test_prompt_template(template_id: int, payload: AIPromptTemplateTestRequest,
     sample = payload.sample_data
     for placeholder in ["text", "instruction", "request_context", "request_type"]:
         prompt = prompt.replace("{" + placeholder + "}", sample)
+    masked_prompt = mask_ai_sensitive_text(prompt, settings)
     try:
-        output, latency_ms = generate_text(settings, mask_ai_sensitive_text(prompt, settings), max_tokens=500)
-        log_ai_usage(db, actor.id, f"template_test:{item.code}", len(prompt), len(output), latency_ms)
+        output, latency_ms = generate_text(settings, masked_prompt, max_tokens=500)
+        log_ai_usage(
+            db,
+            actor.id,
+            f"template_test:{item.code}",
+            len(masked_prompt),
+            len(output),
+            latency_ms,
+            prompt_text=masked_prompt if settings.store_full_prompt_logs else None,
+            output_text=mask_ai_sensitive_text(output, settings) if settings.store_full_prompt_logs else None,
+        )
         db.commit()
         return AIConnectionTestResponse(ok=True, message="تم اختبار القالب بنجاح.", sample=output[:1000])
     except HTTPException as exc:
-        log_ai_usage(db, actor.id, f"template_test:{item.code}", len(prompt), 0, 0, "failed", error_message=str(exc.detail))
+        log_ai_usage(
+            db,
+            actor.id,
+            f"template_test:{item.code}",
+            len(masked_prompt),
+            0,
+            0,
+            "failed",
+            error_message=str(exc.detail),
+            prompt_text=masked_prompt if settings.store_full_prompt_logs else None,
+        )
         db.commit()
         return AIConnectionTestResponse(ok=False, message=str(exc.detail), sample=None)
 
@@ -227,11 +249,30 @@ def test_ai_generation(payload: AITestGenerationRequest, db: Session = Depends(g
     prompt = mask_ai_sensitive_text(payload.prompt, settings)
     try:
         output, latency_ms = generate_text(settings, prompt, max_tokens=payload.max_tokens, temperature=payload.temperature)
-        log_ai_usage(db, actor.id, "test_generation", len(prompt), len(output), latency_ms)
+        log_ai_usage(
+            db,
+            actor.id,
+            "test_generation",
+            len(prompt),
+            len(output),
+            latency_ms,
+            prompt_text=prompt if settings.store_full_prompt_logs else None,
+            output_text=mask_ai_sensitive_text(output, settings) if settings.store_full_prompt_logs else None,
+        )
         db.commit()
         return AIConnectionTestResponse(ok=True, message="تم توليد النص بنجاح.", sample=output)
     except HTTPException as exc:
-        log_ai_usage(db, actor.id, "test_generation", len(prompt), 0, 0, "failed", error_message=str(exc.detail))
+        log_ai_usage(
+            db,
+            actor.id,
+            "test_generation",
+            len(prompt),
+            0,
+            0,
+            "failed",
+            error_message=str(exc.detail),
+            prompt_text=prompt if settings.store_full_prompt_logs else None,
+        )
         db.commit()
         return AIConnectionTestResponse(ok=False, message=str(exc.detail), sample=None)
 

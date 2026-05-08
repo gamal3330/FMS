@@ -271,6 +271,10 @@ def ensure_runtime_columns(db: Session) -> None:
             default_value = "0" if db.bind and db.bind.dialect.name == "sqlite" else "false"
             db.execute(text(f"ALTER TABLE internal_messages ADD COLUMN is_sender_archived BOOLEAN DEFAULT {default_value}"))
             db.commit()
+        if "is_sender_deleted" not in message_columns:
+            default_value = "0" if db.bind and db.bind.dialect.name == "sqlite" else "false"
+            db.execute(text(f"ALTER TABLE internal_messages ADD COLUMN is_sender_deleted BOOLEAN DEFAULT {default_value}"))
+            db.commit()
         if "is_draft" not in message_columns:
             default_value = "0" if db.bind and db.bind.dialect.name == "sqlite" else "false"
             db.execute(text(f"ALTER TABLE internal_messages ADD COLUMN is_draft BOOLEAN DEFAULT {default_value}"))
@@ -286,6 +290,12 @@ def ensure_runtime_columns(db: Session) -> None:
         ensure_message_tracking_ids(db)
         db.execute(text('CREATE UNIQUE INDEX IF NOT EXISTS "idx_internal_messages_message_uid" ON "internal_messages" (message_uid)'))
         db.commit()
+    if "internal_message_recipients" in table_names:
+        recipient_columns = {column["name"] for column in inspector.get_columns("internal_message_recipients")}
+        if "is_deleted" not in recipient_columns:
+            default_value = "0" if db.bind and db.bind.dialect.name == "sqlite" else "false"
+            db.execute(text(f"ALTER TABLE internal_message_recipients ADD COLUMN is_deleted BOOLEAN DEFAULT {default_value}"))
+            db.commit()
     if "ai_settings" in table_names:
         ai_columns = {column["name"] for column in inspector.get_columns("ai_settings")}
         ai_column_defs = {
@@ -338,6 +348,10 @@ def ensure_runtime_columns(db: Session) -> None:
             db.execute(text("UPDATE ai_usage_logs SET feature_code = feature WHERE feature_code IS NULL OR feature_code = ''"))
         if "latency_ms" not in usage_columns:
             db.execute(text("ALTER TABLE ai_usage_logs ADD COLUMN latency_ms INTEGER DEFAULT 0"))
+        if "prompt_text" not in usage_columns:
+            db.execute(text("ALTER TABLE ai_usage_logs ADD COLUMN prompt_text TEXT"))
+        if "output_text" not in usage_columns:
+            db.execute(text("ALTER TABLE ai_usage_logs ADD COLUMN output_text TEXT"))
         db.commit()
     if "ai_prompt_templates" in table_names:
         prompt_columns = {column["name"] for column in inspector.get_columns("ai_prompt_templates")}

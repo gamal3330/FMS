@@ -31,7 +31,7 @@ const tabs = [
   ["types", "أنواع الرسائل", Tags],
   ["classifications", "تصنيف السرية", Shield],
   ["request", "ربط المراسلات بالطلبات", FolderGit2],
-  ["recipients", "المستلمون والمجموعات", Users],
+  ["recipients", "المستلمون والإدارات", Users],
   ["notifications", "الإشعارات", Bell],
   ["attachments", "المرفقات", Paperclip],
   ["templates", "قوالب الرسائل", FileText],
@@ -81,6 +81,9 @@ const defaultTemplate = {
 };
 
 const variables = ["employee_name", "request_number", "request_type", "department", "created_at", "current_user", "message_subject", "request_status"];
+const hiddenFieldsBySection = {
+  recipients: ["allow_send_to_role", "role_recipient_behavior", "allow_send_to_specialized_section", "circular_allowed_user_ids"]
+};
 
 export default function MessagingSettingsPage() {
   const [active, setActive] = useState("general");
@@ -102,7 +105,8 @@ export default function MessagingSettingsPage() {
     security: null,
     ai: null,
     analytics: null,
-    auditLogs: []
+    auditLogs: [],
+    users: []
   });
   const [typeModal, setTypeModal] = useState(null);
   const [classificationModal, setClassificationModal] = useState(null);
@@ -135,7 +139,8 @@ export default function MessagingSettingsPage() {
         security,
         ai,
         analytics,
-        auditLogs
+        auditLogs,
+        users
       ] = await Promise.all([
         api.get("/auth/me"),
         api.get("/settings/messaging"),
@@ -151,7 +156,8 @@ export default function MessagingSettingsPage() {
         api.get("/settings/messaging/security"),
         api.get("/settings/messaging/ai"),
         api.get("/settings/messaging/analytics"),
-        api.get("/settings/messaging/audit-logs")
+        api.get("/settings/messaging/audit-logs"),
+        api.get("/users").catch(() => ({ data: [] }))
       ]);
       setCurrentUser(userRes.data);
       setData({
@@ -168,7 +174,8 @@ export default function MessagingSettingsPage() {
         security: security.data,
         ai: ai.data,
         analytics: analytics.data,
-        auditLogs: auditLogs.data || []
+        auditLogs: auditLogs.data || [],
+        users: users.data || []
       });
     } catch (error) {
       notify(getErrorMessage(error), "error");
@@ -188,7 +195,7 @@ export default function MessagingSettingsPage() {
   async function saveSection(section, endpoint, payload = data[section]) {
     setSaving(section);
     try {
-      const { data: response } = await api.put(endpoint, payload);
+      const { data: response } = await api.put(endpoint, normalizeSectionPayload(section, payload));
       setData((current) => ({ ...current, [section]: response }));
       notify("تم حفظ الإعدادات");
       await load();
@@ -466,7 +473,18 @@ export default function MessagingSettingsPage() {
           )}
 
           {active === "recipients" && data.recipients && (
-            <SettingsForm section="recipients" title="المستلمون والمجموعات" description="تحكم في إمكانية الإرسال للمستخدمين والإدارات والأدوار والتعاميم." data={data.recipients} canEdit={canEdit} saving={saving === "recipients"} update={update} save={() => saveSection("recipients", "/settings/messaging/recipients")} selectFields={{ department_recipient_behavior: [["department_manager_only", "مدير الإدارة فقط"], ["all_department_users", "كل مستخدمي الإدارة"], ["selected_department_users", "مستخدمون محددون"]], role_recipient_behavior: [["role_users_only", "مستخدمو الدور فقط"], ["role_managers_only", "مديرو الدور فقط"]] }} />
+            <div className="space-y-5">
+              <SettingsForm section="recipients" title="المستلمون والإدارات" description="تحكم في الإرسال للمستخدمين والإدارات فقط، مع ضبط عدد المستلمين والتعاميم." data={data.recipients} canEdit={canEdit} saving={saving === "recipients"} update={update} save={() => saveSection("recipients", "/settings/messaging/recipients")} selectFields={{ department_recipient_behavior: [["department_manager_only", "مدير الإدارة فقط"], ["all_department_users", "كل مستخدمي الإدارة"], ["selected_department_users", "مستخدمون محددون"]] }} />
+              <BroadcastUsersPanel
+                enabled={Boolean(data.general?.allow_broadcast_messages)}
+                users={data.users}
+                selected={data.recipients.circular_allowed_user_ids || []}
+                canEdit={canEdit}
+                saving={saving === "recipients"}
+                onChange={(ids) => update("recipients", "circular_allowed_user_ids", ids)}
+                onSave={() => saveSection("recipients", "/settings/messaging/recipients")}
+              />
+            </div>
           )}
 
           {active === "notifications" && data.notifications && (
@@ -565,11 +583,12 @@ function Header({ canEdit }) {
 }
 
 function SettingsForm({ section, title, description, data, canEdit, saving, update, save, warning, selectFields = {} }) {
+  const hiddenFields = hiddenFieldsBySection[section] || [];
   return (
     <Section title={title} description={description}>
       {warning && <WarningBox>{warning}</WarningBox>}
       <Grid>
-        {Object.entries(data).filter(([key]) => !["id", "updated_at", "created_at", "global_ai_enabled", "confirm_super_admin_message_audit"].includes(key)).map(([key, value]) => {
+        {Object.entries(data).filter(([key]) => !["id", "updated_at", "created_at", "global_ai_enabled", "confirm_super_admin_message_audit", ...hiddenFields].includes(key)).map(([key, value]) => {
           if (selectFields[key]) {
             return <SelectField key={key} label={fieldLabel(key)} value={value} disabled={!canEdit} options={selectFields[key]} onChange={(next) => update(section, key, next)} />;
           }
@@ -580,6 +599,68 @@ function SettingsForm({ section, title, description, data, canEdit, saving, upda
         })}
       </Grid>
       <SaveBar disabled={!canEdit || saving} saving={saving} onSave={save} />
+    </Section>
+  );
+}
+
+function BroadcastUsersPanel({ enabled, users, selected, canEdit, saving, onChange, onSave }) {
+  const [search, setSearch] = useState("");
+  const selectedSet = new Set((selected || []).map(Number));
+  const filteredUsers = (users || [])
+    .filter((user) => user.is_active !== false)
+    .filter((user) => {
+      const term = search.trim().toLowerCase();
+      if (!term) return true;
+      return [user.full_name_ar, user.full_name_en, user.email, user.employee_id, user.username]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(term));
+    })
+    .slice(0, 80);
+
+  function toggleUser(userId) {
+    const id = Number(userId);
+    const next = new Set(selectedSet);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    onChange(Array.from(next));
+  }
+
+  return (
+    <Section title="المصرح لهم بإرسال التعاميم" description="عند تفعيل التعاميم يجب تحديد المستخدمين الذين يمكنهم اختيار تصنيف “تعميم”. إذا لم يتم اختيار أي مستخدم فلن تظهر التعاميم لأي شخص.">
+      {!enabled && <WarningBox>السماح بالتعاميم غير مفعل من الإعدادات العامة، لذلك لن يستطيع أي مستخدم إرسال تعميم حتى لو كان محدداً هنا.</WarningBox>}
+      {enabled && selectedSet.size === 0 && <WarningBox>التعاميم مفعلة، لكن لم يتم اختيار أي مستخدم مصرح له. اختر مستخدماً واحداً على الأقل حتى تظهر له خاصية التعميم.</WarningBox>}
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <div className="relative max-w-lg flex-1">
+          <Search className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+          <Input value={search} onChange={(event) => setSearch(event.target.value)} className="pr-9" placeholder="ابحث عن مستخدم بالاسم أو البريد أو الرقم الوظيفي" disabled={!canEdit} />
+        </div>
+        <span className="rounded-full bg-slate-100 px-3 py-2 text-xs font-black text-slate-600">
+          المحددون: {selectedSet.size}
+        </span>
+      </div>
+      <div className="grid max-h-80 gap-2 overflow-y-auto rounded-lg border border-slate-200 bg-slate-50 p-3 md:grid-cols-2 xl:grid-cols-3">
+        {filteredUsers.map((user) => (
+          <label key={user.id} className={`flex min-h-16 cursor-pointer items-center justify-between gap-3 rounded-md border bg-white px-3 py-2 text-sm ${selectedSet.has(Number(user.id)) ? "border-bank-200 ring-2 ring-bank-100" : "border-slate-200"}`}>
+            <span className="min-w-0">
+              <span className="block truncate font-black text-slate-900">{user.full_name_ar}</span>
+              <span className="block truncate text-xs text-slate-500">{user.email || user.employee_id || "-"}</span>
+            </span>
+            <input
+              type="checkbox"
+              checked={selectedSet.has(Number(user.id))}
+              disabled={!canEdit}
+              onChange={() => toggleUser(user.id)}
+              className="h-5 w-5 shrink-0 rounded border-slate-300 text-bank-700 focus:ring-bank-600"
+            />
+          </label>
+        ))}
+        {!filteredUsers.length && (
+          <div className="rounded-md border border-dashed border-slate-200 bg-white p-4 text-sm font-semibold text-slate-500">
+            لا توجد نتائج مطابقة.
+          </div>
+        )}
+      </div>
+      <SaveBar disabled={!canEdit || saving} saving={saving} onSave={onSave} />
     </Section>
   );
 }
@@ -799,6 +880,16 @@ function normalizeEmptyStrings(value) {
   return next;
 }
 
+function normalizeSectionPayload(section, payload) {
+  if (section !== "recipients") return payload;
+  return {
+    ...payload,
+    allow_send_to_role: false,
+    allow_send_to_specialized_section: false,
+    role_recipient_behavior: "role_users_only"
+  };
+}
+
 function fieldLabel(key) {
   const labels = {
     allow_send_to_user: "السماح بالإرسال لمستخدم",
@@ -806,7 +897,7 @@ function fieldLabel(key) {
     allow_send_to_role: "السماح بالإرسال لدور",
     allow_send_to_specialized_section: "السماح بالإرسال لقسم مختص",
     allow_multiple_recipients: "السماح بأكثر من مستلم",
-    allow_broadcast: "السماح بالتعاميم",
+    allow_broadcast: "تفعيل تعميم حسب الإدارات",
     prevent_sending_to_inactive_users: "منع الإرسال لمستخدمين غير نشطين",
     max_recipients: "الحد الأقصى للمستلمين",
     department_recipient_behavior: "سلوك مستلمي الإدارة",

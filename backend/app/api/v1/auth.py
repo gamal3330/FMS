@@ -231,6 +231,7 @@ def change_password(payload: ChangePasswordRequest, request: Request, db: Sessio
     validate_password_policy(payload.new_password, get_singleton(db, SecurityPolicy))
     current_user.hashed_password = get_password_hash(payload.new_password)
     current_user.password_changed_at = datetime.now(timezone.utc)
+    current_user.force_password_change = False
     current_user.failed_login_attempts = 0
     current_user.locked_until = None
     write_audit(db, "password_changed", "user", actor=current_user, entity_id=str(current_user.id), ip_address=ip_address)

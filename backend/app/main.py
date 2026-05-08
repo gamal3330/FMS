@@ -9,6 +9,7 @@ from app.core.performance import RequestTimingMiddleware
 from app.db.init_db import seed_database
 from app.db.session import Base, SessionLocal, engine
 from app import models  # noqa: F401
+from app.services.database_backup_scheduler import start_backup_scheduler
 from app.services.update_manager import ensure_current_version, read_current_version_file
 
 settings = get_settings()
@@ -43,6 +44,7 @@ def startup() -> None:
         db.commit()
     finally:
         db.close()
+    start_backup_scheduler()
 
 
 @app.get("/", tags=["Health"])

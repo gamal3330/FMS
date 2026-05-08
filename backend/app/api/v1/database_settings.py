@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+import tempfile
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from fastapi.responses import FileResponse
+from starlette.background import BackgroundTask
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
@@ -31,7 +33,7 @@ from app.schemas.database import (
     RestoreValidateResponse,
 )
 from app.services.audit import write_audit
-from app.services.database_backup_service import backup_settings, backup_to_dict, create_backup, delete_backup, get_backup, list_backups, verify_backup
+from app.services.database_backup_service import backup_settings, backup_to_dict, create_backup, decrypt_file, delete_backup, get_backup, list_backups, verify_backup
 from app.services.database_jobs_service import job_to_dict, list_jobs
 from app.services.database_maintenance_service import (
     analyze_database,
@@ -56,6 +58,7 @@ DATABASE_AUDIT_ACTIONS = {
     "database_status_viewed",
     "backup_created",
     "backup_downloaded",
+    "backup_decrypted",
     "backup_verified",
     "backup_deleted",
     "restore_validated",
@@ -102,6 +105,31 @@ def download_database_backup(backup_id: int, db: Session = Depends(get_db), acto
     write_audit(db, "backup_downloaded", "database", actor=actor, entity_id=str(row.id), metadata={"file_name": row.file_name})
     db.commit()
     return FileResponse(path, media_type="application/zip", filename=row.file_name, headers={"Content-Disposition": f'attachment; filename="{row.file_name}"'})
+
+
+@router.post("/backups/{backup_id}/decrypt-download")
+def decrypt_download_database_backup(backup_id: int, payload: AdminPasswordConfirmRequest, db: Session = Depends(get_db), actor: User = DatabaseAdmin):
+    ensure_password(actor, payload.admin_password)
+    row = get_backup(db, backup_id)
+    if not (row.metadata_json or {}).get("encrypted") and not row.file_name.endswith(".enc"):
+        raise HTTPException(status_code=422, detail="هذه النسخة غير مشفرة")
+    path = Path(row.file_path)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="ملف النسخة غير موجود على الخادم")
+    temp_file = tempfile.NamedTemporaryFile(prefix="qib-decrypted-", suffix=".zip", delete=False)
+    temp_path = Path(temp_file.name)
+    temp_file.close()
+    decrypt_file(path, temp_path)
+    output_name = row.file_name.removesuffix(".enc")
+    write_audit(db, "backup_decrypted", "database", actor=actor, entity_id=str(row.id), metadata={"file_name": row.file_name, "download_name": output_name})
+    db.commit()
+    return FileResponse(
+        temp_path,
+        media_type="application/zip",
+        filename=output_name,
+        headers={"Content-Disposition": f'attachment; filename="{output_name}"'},
+        background=BackgroundTask(lambda: temp_path.unlink(missing_ok=True)),
+    )
 
 
 @router.post("/backups/{backup_id}/verify", response_model=DatabaseBackupResponse)

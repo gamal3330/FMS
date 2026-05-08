@@ -165,22 +165,46 @@ def sync_legacy_message_settings(db: Session) -> None:
     general = get_singleton(db, MessagingSettings)
     attachments = get_singleton(db, MessageAttachmentSettings)
     integration = get_singleton(db, MessageRequestIntegrationSettings)
+    notifications = get_singleton(db, MessageNotificationSettings)
     retention = get_singleton(db, MessageRetentionPolicy)
     ai = get_singleton(db, MessageAISettings)
+    recipient_setting = db.scalar(select(PortalSetting).where(PortalSetting.category == "messaging_recipient_settings", PortalSetting.setting_key == "defaults"))
+    recipient_value = recipient_setting.setting_value if recipient_setting and isinstance(recipient_setting.setting_value, dict) else {}
+    allow_broadcast = bool(general.allow_broadcast_messages)
+    allow_department_broadcast = bool(allow_broadcast and recipient_value.get("allow_send_to_department", True) and recipient_value.get("allow_broadcast", True))
     value = {
         "enabled": bool(general.enable_messaging),
         "enable_attachments": bool(attachments.allow_message_attachments),
         "enable_drafts": True,
         "enable_templates": True,
         "enable_signatures": True,
-        "enable_circulars": bool(general.allow_broadcast_messages),
-        "enable_department_broadcasts": bool(general.allow_broadcast_messages),
+        "allow_archiving": bool(general.allow_archiving and retention.allow_archiving),
+        "enable_circulars": allow_broadcast,
+        "enable_department_broadcasts": allow_department_broadcast,
         "enable_read_receipts": bool(general.enable_read_receipts),
+        "enable_unread_badge": bool(general.enable_unread_badge and notifications.show_unread_count),
         "enable_linked_requests": bool(integration.allow_link_to_request),
+        "allow_general_messages": bool(general.allow_general_messages),
+        "allow_replies": bool(general.allow_replies),
+        "allow_forwarding": bool(general.allow_forwarding),
+        "allow_multiple_recipients": bool(general.allow_multiple_recipients and recipient_value.get("allow_multiple_recipients", True)),
+        "allow_send_to_user": bool(recipient_value.get("allow_send_to_user", True)),
+        "allow_send_to_department": bool(recipient_value.get("allow_send_to_department", True)),
+        "allow_broadcast": allow_broadcast,
+        "circular_allowed_user_ids": recipient_value.get("circular_allowed_user_ids", []),
+        "enable_message_notifications": bool(notifications.enable_message_notifications),
+        "notify_on_new_message": bool(notifications.notify_on_new_message),
+        "notify_on_reply": bool(notifications.notify_on_reply),
         "auto_refresh_seconds": 20,
         "max_attachment_mb": int(attachments.max_file_size_mb or 25),
-        "max_recipients": int(general.max_recipients or 10),
+        "max_attachments_per_message": int(attachments.max_attachments_per_message or 10),
+        "max_recipients": min(int(general.max_recipients or 10), int(recipient_value.get("max_recipients") or general.max_recipients or 10)) if recipient_value else int(general.max_recipients or 10),
         "default_message_type": "internal_correspondence",
+        "allowed_extensions": attachments.allowed_extensions_json or ["pdf", "png", "jpg", "jpeg"],
+        "message_upload_path": attachments.message_upload_path or "uploads/messages",
+        "log_attachment_downloads": bool(attachments.log_attachment_downloads),
+        "block_executable_files": bool(attachments.block_executable_files),
+        "department_recipient_behavior": str(recipient_value.get("department_recipient_behavior") or "selected_department_users"),
         "allowed_user_ids": [],
         "blocked_user_ids": [],
         "allowed_department_ids": [],
@@ -197,9 +221,18 @@ def sync_legacy_message_settings(db: Session) -> None:
         setting = PortalSetting(category="message_settings", setting_key="defaults", setting_value={})
         db.add(setting)
     old_value = setting.setting_value if isinstance(setting.setting_value, dict) else {}
-    setting.setting_value = {**old_value, **value, "enable_linked_requests": bool(integration.allow_link_to_request), "enable_attachments": bool(attachments.allow_message_attachments), "max_attachment_mb": int(attachments.max_file_size_mb or 25), "max_recipients": int(general.max_recipients or 10)}
+    setting.setting_value = {
+        **old_value,
+        **value,
+        "allow_archiving": bool(general.allow_archiving and retention.allow_archiving),
+        "enable_linked_requests": bool(integration.allow_link_to_request),
+        "enable_attachments": bool(attachments.allow_message_attachments),
+        "max_attachment_mb": int(attachments.max_file_size_mb or 25),
+        "max_attachments_per_message": int(attachments.max_attachments_per_message or 10),
+        "max_recipients": int(general.max_recipients or 10),
+    }
     type_items = []
-    for item in db.scalars(select(MessageType).order_by(MessageType.sort_order, MessageType.id)).all():
+    for item in db.scalars(select(MessageType).where(MessageType.is_active == True).order_by(MessageType.sort_order, MessageType.id)).all():
         legacy_value = LEGACY_MESSAGE_TYPE_MAP.get(item.code, item.code)
         type_items.append({"value": legacy_value, "label": item.name_ar, "is_system": item.code in {row[0] for row in DEFAULT_MESSAGE_TYPES}})
     type_setting = db.scalar(select(PortalSetting).where(PortalSetting.category == "message_types", PortalSetting.setting_key == "defaults"))

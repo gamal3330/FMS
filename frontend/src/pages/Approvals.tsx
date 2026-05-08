@@ -147,11 +147,24 @@ function formatBytes(size?: number) {
   return `${(size / 1024 / 1024).toFixed(1)} MB`;
 }
 
-function isActionableForUser(step: ApprovalStep | null, user: CurrentUser | null) {
-  if (!step || !user || user.role === "employee") return false;
+type ActiveDelegation = {
+  id: number;
+  delegator_role?: string | null;
+  delegation_scope: string;
+};
+
+function isActionableForUser(step: ApprovalStep | null, user: CurrentUser | null, delegations: ActiveDelegation[] = []) {
+  if (!step || !user) return false;
   if (user.role === "super_admin") return true;
   if (step.role === user.role) return true;
-  return ["implementation", "execution", "implementation_engineer", "close_request"].includes(step.role) && ["it_staff", "it_manager"].includes(user.role);
+  if (["implementation", "execution", "implementation_engineer", "close_request"].includes(step.role) && ["it_staff", "it_manager"].includes(user.role)) {
+    return true;
+  }
+  return delegations.some(
+    (delegation) =>
+      ["approvals_only", "all_allowed_actions"].includes(delegation.delegation_scope) &&
+      delegation.delegator_role === step.role
+  );
 }
 
 export function Approvals() {
@@ -165,6 +178,7 @@ export function Approvals() {
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
+  const [activeDelegations, setActiveDelegations] = useState<ActiveDelegation[]>([]);
   const [search, setSearch] = useState("");
   const [statusView, setStatusView] = useState<"all" | "pending" | "done">("pending");
   const [approvalsPage, setApprovalsPage] = useState(1);
@@ -177,8 +191,8 @@ export function Approvals() {
   const currentStep = getCurrentStep(selectedRequest);
   const pendingCount = requests.filter((request) => request.status === "pending_approval").length;
   const completedCount = requests.filter((request) => ["closed", "completed"].includes(request.status)).length;
-  const actionableCount = requests.filter((request) => isActionableForUser(getCurrentStep(request), currentUser)).length;
-  const canShowDecisionForm = isActionableForUser(currentStep, currentUser);
+  const actionableCount = requests.filter((request) => isActionableForUser(getCurrentStep(request), currentUser, activeDelegations)).length;
+  const canShowDecisionForm = isActionableForUser(currentStep, currentUser, activeDelegations);
   const filteredRequests = useMemo(() => {
     const term = search.trim().toLowerCase();
     return requests.filter((request) => {
@@ -233,6 +247,7 @@ export function Approvals() {
   useEffect(() => {
     loadApprovals();
     apiFetch<CurrentUser>("/auth/me").then(setCurrentUser).catch(() => setCurrentUser(null));
+    apiFetch<ActiveDelegation[]>("/users/delegations/me").then(setActiveDelegations).catch(() => setActiveDelegations([]));
   }, []);
 
   async function submitDecision(event: FormEvent) {

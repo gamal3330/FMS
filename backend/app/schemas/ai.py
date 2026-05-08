@@ -65,7 +65,7 @@ class AISettingsUpdate(BaseModel):
     api_key: str | None = Field(default=None, max_length=5000)
     model_name: str = Field(default="qwen3:8b", max_length=160)
     default_language: str = Field(default="ar", pattern="^(ar|en)$")
-    max_input_chars: int = Field(default=6000, ge=500, le=50000)
+    max_input_chars: int = Field(default=6000, ge=100, le=50000)
     timeout_seconds: int = Field(default=60, ge=5, le=300)
     show_human_review_disclaimer: bool = True
     allow_message_drafting: bool = True
@@ -108,6 +108,8 @@ class AIUsageLogRead(BaseModel):
     latency_ms: int = 0
     status: str
     error_message: str | None = None
+    prompt_text: str | None = None
+    output_text: str | None = None
     created_at: datetime
 
 
@@ -119,6 +121,7 @@ class AIStatusRead(BaseModel):
     allow_reply_suggestion: bool = False
     allow_message_improvement: bool = False
     allow_missing_info_detection: bool = False
+    allow_translate_ar_en: bool = False
     show_in_compose_message: bool = False
     show_in_message_details: bool = False
     show_in_request_messages_tab: bool = False
@@ -152,6 +155,31 @@ class AIPromptTemplateRead(BaseModel):
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class AIPromptTemplateOption(BaseModel):
+    id: int
+    code: str
+    name_ar: str
+    description: str | None = None
+    output_kind: str = "text"
+
+
+class AIRunTemplateRequest(BaseModel):
+    template_id: int
+    instruction: str | None = Field(default=None, max_length=50000)
+    body: str | None = Field(default=None, max_length=50000)
+    related_request_id: int | str | None = None
+    request_type: str | None = Field(default=None, max_length=120)
+
+
+class AIRunTemplateResponse(BaseModel):
+    template_id: int
+    template_name: str
+    output_kind: str = "text"
+    subject: str = ""
+    body: str = ""
+    items: list[str] = Field(default_factory=list)
 
 
 class AIPromptTemplatePayload(BaseModel):

@@ -13,6 +13,15 @@ from app.api.deps import get_current_user
 from app.core.config import get_settings
 from app.db.session import get_db
 from app.models.message import InternalMessage, InternalMessageAttachment, InternalMessageRecipient
+from app.models.messaging_settings import (
+    MessageAttachmentSettings,
+    MessageNotificationSettings,
+    MessageRequestIntegrationSettings,
+    MessageRetentionPolicy,
+    MessageSecurityPolicy,
+    MessageType,
+    MessagingSettings,
+)
 from app.models.enums import UserRole
 from app.models.request import ServiceRequest
 from app.models.settings import PortalSetting
@@ -25,20 +34,51 @@ router = APIRouter(prefix="/messages", tags=["Internal Messages"])
 settings = get_settings()
 MAX_MESSAGE_ATTACHMENT_BYTES = 25 * 1024 * 1024
 DEFAULT_MESSAGE_TYPE = "internal_correspondence"
+BLOCKED_MESSAGE_ATTACHMENT_EXTENSIONS = {"exe", "bat", "cmd", "ps1", "sh", "js", "vbs", "msi"}
+STRUCTURED_TO_LEGACY_MESSAGE_TYPES = {
+    "internal_message": "internal_correspondence",
+    "official_message": "official_correspondence",
+    "clarification_response": "reply_to_clarification",
+    "rejection_note": "rejection_reason",
+    "execution_note": "implementation_note",
+    "announcement": "circular",
+}
+LEGACY_TO_STRUCTURED_MESSAGE_TYPES = {value: key for key, value in STRUCTURED_TO_LEGACY_MESSAGE_TYPES.items()}
 MESSAGE_SETTINGS_DEFAULTS = {
     "enabled": True,
     "enable_attachments": True,
     "enable_drafts": True,
     "enable_templates": True,
     "enable_signatures": True,
+    "allow_archiving": True,
+    "allow_general_messages": True,
+    "allow_replies": True,
+    "allow_forwarding": False,
+    "allow_multiple_recipients": True,
+    "allow_user_delete_own_messages": False,
+    "prevent_hard_delete": True,
+    "exclude_official_messages_from_delete": True,
+    "exclude_confidential_messages_from_delete": True,
+    "allow_send_to_user": True,
+    "allow_send_to_department": True,
+    "allow_broadcast": False,
     "enable_circulars": True,
     "enable_department_broadcasts": True,
     "enable_read_receipts": True,
+    "enable_unread_badge": True,
     "enable_linked_requests": True,
+    "enable_message_notifications": True,
+    "notify_on_new_message": True,
+    "notify_on_reply": True,
     "auto_refresh_seconds": 20,
     "max_attachment_mb": 25,
+    "max_attachments_per_message": 10,
     "max_recipients": 200,
     "default_message_type": DEFAULT_MESSAGE_TYPE,
+    "allowed_extensions": ["pdf", "png", "jpg", "jpeg"],
+    "block_executable_files": True,
+    "log_attachment_downloads": True,
+    "department_recipient_behavior": "selected_department_users",
     "allowed_user_ids": [],
     "blocked_user_ids": [],
     "allowed_department_ids": [],
@@ -130,10 +170,68 @@ def load_message_settings(db: Session) -> dict:
     setting = message_settings_setting(db)
     value = setting.setting_value if setting and isinstance(setting.setting_value, dict) else {}
     loaded = {**MESSAGE_SETTINGS_DEFAULTS, **value}
+    general = db.scalar(select(MessagingSettings).limit(1))
+    attachments = db.scalar(select(MessageAttachmentSettings).limit(1))
+    integration = db.scalar(select(MessageRequestIntegrationSettings).limit(1))
+    notifications = db.scalar(select(MessageNotificationSettings).limit(1))
+    retention = db.scalar(select(MessageRetentionPolicy).limit(1))
+    recipient_setting = db.scalar(select(PortalSetting).where(PortalSetting.category == "messaging_recipient_settings", PortalSetting.setting_key == "defaults"))
+    recipient_value = recipient_setting.setting_value if recipient_setting and isinstance(recipient_setting.setting_value, dict) else {}
+    if general is not None:
+        loaded["enabled"] = bool(general.enable_messaging)
+        loaded["allow_archiving"] = bool(general.allow_archiving)
+        loaded["allow_general_messages"] = bool(general.allow_general_messages)
+        loaded["allow_replies"] = bool(general.allow_replies)
+        loaded["allow_forwarding"] = bool(general.allow_forwarding)
+        loaded["allow_multiple_recipients"] = bool(general.allow_multiple_recipients)
+        loaded["enable_read_receipts"] = bool(general.enable_read_receipts)
+        loaded["enable_unread_badge"] = bool(general.enable_unread_badge)
+        loaded["enable_circulars"] = bool(general.allow_broadcast_messages)
+        loaded["enable_department_broadcasts"] = bool(general.allow_broadcast_messages)
+        loaded["max_recipients"] = int(general.max_recipients or loaded.get("max_recipients") or 10)
+    if attachments is not None:
+        loaded["enable_attachments"] = bool(attachments.allow_message_attachments)
+        loaded["max_attachment_mb"] = int(attachments.max_file_size_mb or loaded.get("max_attachment_mb") or 25)
+        loaded["max_attachments_per_message"] = int(attachments.max_attachments_per_message or 10)
+        loaded["allowed_extensions"] = attachments.allowed_extensions_json or ["pdf", "png", "jpg", "jpeg"]
+        loaded["message_upload_path"] = attachments.message_upload_path or "uploads/messages"
+        loaded["log_attachment_downloads"] = bool(attachments.log_attachment_downloads)
+        loaded["block_executable_files"] = bool(attachments.block_executable_files)
+    if integration is not None:
+        loaded["enable_linked_requests"] = bool(integration.allow_link_to_request)
+        loaded["allow_send_message_from_request"] = bool(integration.allow_send_message_from_request)
+    if notifications is not None:
+        loaded["enable_message_notifications"] = bool(notifications.enable_message_notifications)
+        loaded["notify_on_new_message"] = bool(notifications.notify_on_new_message)
+        loaded["notify_on_reply"] = bool(notifications.notify_on_reply)
+        loaded["enable_unread_badge"] = bool(loaded.get("enable_unread_badge", True) and notifications.show_unread_count)
+    if recipient_value:
+        loaded["allow_send_to_user"] = bool(recipient_value.get("allow_send_to_user", True))
+        loaded["allow_send_to_department"] = bool(recipient_value.get("allow_send_to_department", True))
+        loaded["allow_broadcast"] = bool(recipient_value.get("allow_broadcast", False))
+        loaded["allow_multiple_recipients"] = bool(loaded.get("allow_multiple_recipients", True) and recipient_value.get("allow_multiple_recipients", True))
+        loaded["circular_allowed_user_ids"] = recipient_value.get("circular_allowed_user_ids", loaded.get("circular_allowed_user_ids", []))
+        loaded["enable_department_broadcasts"] = bool(loaded.get("enable_department_broadcasts", True) and recipient_value.get("allow_send_to_department", True) and recipient_value.get("allow_broadcast", False))
+        loaded["department_recipient_behavior"] = str(recipient_value.get("department_recipient_behavior") or "selected_department_users")
+        if recipient_value.get("max_recipients"):
+            loaded["max_recipients"] = min(int(loaded.get("max_recipients") or 200), int(recipient_value.get("max_recipients") or 200))
+    if retention is not None:
+        loaded["allow_archiving"] = bool(loaded.get("allow_archiving", True) and retention.allow_archiving)
+        loaded["allow_user_delete_own_messages"] = bool(retention.allow_user_delete_own_messages)
+        loaded["prevent_hard_delete"] = bool(retention.prevent_hard_delete)
+        loaded["exclude_official_messages_from_delete"] = bool(retention.exclude_official_messages_from_delete)
+        loaded["exclude_confidential_messages_from_delete"] = bool(retention.exclude_confidential_messages_from_delete)
+        loaded["retention_days"] = int(retention.retention_days or 0)
+        loaded["attachment_retention_days"] = int(retention.attachment_retention_days or 0)
+        loaded["auto_archive_after_days"] = int(retention.auto_archive_after_days or 0)
+        loaded["allow_admin_purge_messages"] = bool(retention.allow_admin_purge_messages)
     loaded["auto_refresh_seconds"] = min(max(int(loaded.get("auto_refresh_seconds") or 20), 5), 300)
-    loaded["max_attachment_mb"] = min(max(int(loaded.get("max_attachment_mb") or 25), 1), 100)
+    loaded["max_attachment_mb"] = min(max(int(loaded.get("max_attachment_mb") or 25), 1), 1024)
+    loaded["max_attachments_per_message"] = min(max(int(loaded.get("max_attachments_per_message") or 10), 1), 100)
     loaded["max_recipients"] = min(max(int(loaded.get("max_recipients") or 200), 1), 1000)
     loaded["default_message_type"] = str(loaded.get("default_message_type") or DEFAULT_MESSAGE_TYPE)
+    allowed_extensions = loaded.get("allowed_extensions") or ["pdf", "png", "jpg", "jpeg"]
+    loaded["allowed_extensions"] = sorted({str(item).strip().lower().lstrip(".") for item in allowed_extensions if str(item).strip()})
     for key in ["allowed_user_ids", "blocked_user_ids", "allowed_department_ids", "blocked_department_ids", "circular_allowed_user_ids", "department_broadcast_allowed_user_ids", "template_allowed_user_ids"]:
         value = loaded.get(key, [])
         loaded[key] = [int(item) for item in value if str(item).isdigit()] if isinstance(value, list) else []
@@ -146,6 +244,24 @@ def load_message_settings(db: Session) -> dict:
 def require_message_feature(db: Session, key: str, detail: str) -> None:
     if not load_message_settings(db).get(key, True):
         raise HTTPException(status_code=403, detail=detail)
+
+
+def require_message_archiving_enabled(db: Session) -> None:
+    require_message_feature(db, "allow_archiving", "الأرشفة معطلة من إعدادات المراسلات")
+
+
+def require_message_deletion_allowed(db: Session, message: InternalMessage) -> None:
+    retention = db.scalar(select(MessageRetentionPolicy).limit(1))
+    if not retention or not retention.allow_user_delete_own_messages:
+        raise HTTPException(status_code=403, detail="حذف الرسائل غير مفعل من إعدادات الأرشفة والاحتفاظ")
+    if retention.exclude_official_messages_from_delete and structured_message_type_code(message.message_type) == "official_message":
+        raise HTTPException(status_code=403, detail="لا يمكن حذف الرسائل الرسمية حسب إعدادات الاحتفاظ")
+
+
+def log_message_deleted_if_enabled(db: Session, current_user: User, message_id: int) -> None:
+    security_policy = db.scalar(select(MessageSecurityPolicy).limit(1))
+    if security_policy is None or security_policy.log_message_deleted:
+        write_audit(db, "internal_message_deleted", "internal_message", actor=current_user, entity_id=str(message_id))
 
 
 def user_allowed_by_message_scope(db: Session, user: User) -> bool:
@@ -176,7 +292,13 @@ def user_allowed_for_message_permission(message_settings: dict, user: User, role
 
 
 def can_send_circular(message_settings: dict, user: User) -> bool:
-    return bool(message_settings.get("enable_circulars", True)) and user_allowed_for_message_permission(message_settings, user, "circular_allowed_roles", "circular_allowed_user_ids")
+    if not message_settings.get("enable_circulars", True):
+        return False
+    allowed_roles = message_settings.get("circular_allowed_roles") or []
+    allowed_user_ids = message_settings.get("circular_allowed_user_ids") or []
+    if not allowed_roles and not allowed_user_ids:
+        return False
+    return user_allowed_for_message_permission(message_settings, user, "circular_allowed_roles", "circular_allowed_user_ids")
 
 
 def can_send_department_broadcast(message_settings: dict, user: User) -> bool:
@@ -206,7 +328,32 @@ def message_type_setting(db: Session) -> PortalSetting | None:
     return db.scalar(select(PortalSetting).where(PortalSetting.category == "message_types", PortalSetting.setting_key == "defaults"))
 
 
+def structured_message_type_code(value: str | None) -> str:
+    message_type = (value or DEFAULT_MESSAGE_TYPE).strip()
+    return LEGACY_TO_STRUCTURED_MESSAGE_TYPES.get(message_type, message_type)
+
+
+def legacy_message_type_code(value: str | None) -> str:
+    message_type = (value or "internal_message").strip()
+    return STRUCTURED_TO_LEGACY_MESSAGE_TYPES.get(message_type, message_type)
+
+
+def get_structured_message_type(db: Session, value: str | None) -> MessageType | None:
+    return db.scalar(select(MessageType).where(MessageType.code == structured_message_type_code(value)))
+
+
 def load_message_types(db: Session) -> list[dict]:
+    rows = db.scalars(select(MessageType).order_by(MessageType.sort_order, MessageType.id)).all()
+    if rows:
+        return [
+            {
+                "value": legacy_message_type_code(item.code),
+                "label": item.name_ar,
+                "is_system": item.code in {"internal_message", "official_message", "clarification_request", "clarification_response", "approval_note", "rejection_note", "execution_note", "notification", "announcement"},
+            }
+            for item in rows
+            if item.is_active
+        ]
     types = {item["value"]: dict(item) for item in MESSAGE_TYPE_DEFAULTS}
     setting = message_type_setting(db)
     value = setting.setting_value if setting and isinstance(setting.setting_value, dict) else {}
@@ -319,7 +466,9 @@ def message_read(message: InternalMessage, current_user: User, recipient_state: 
 def can_access_message(message: InternalMessage, user: User) -> bool:
     if message.is_draft:
         return message.sender_id == user.id
-    return message.sender_id == user.id or any(recipient.recipient_id == user.id for recipient in message.recipients)
+    if message.sender_id == user.id:
+        return not bool(message.is_sender_deleted)
+    return any(recipient.recipient_id == user.id and not recipient.is_deleted for recipient in message.recipients)
 
 
 def load_message_with_access(db: Session, message_id: int, current_user: User) -> InternalMessage:
@@ -354,24 +503,39 @@ def thread_messages(db: Session, message: InternalMessage, current_user: User) -
     return [message_read(item, current_user) for item in messages if item.id != message.id and can_access_message(item, current_user)]
 
 
-def message_upload_dir() -> Path:
-    upload_dir = Path(settings.upload_dir)
-    if not upload_dir.is_absolute():
-        upload_dir = Path.cwd() / upload_dir
-    target = upload_dir / "messages"
+def message_upload_dir(db: Session | None = None) -> Path:
+    configured_path = None
+    if db is not None:
+        attachment_settings = db.scalar(select(MessageAttachmentSettings).limit(1))
+        configured_path = attachment_settings.message_upload_path if attachment_settings else None
+    target = Path(configured_path or settings.upload_dir)
+    target.mkdir(parents=True, exist_ok=True)
+    if not target.is_absolute():
+        target = Path.cwd() / target
+    if configured_path is None:
+        target = target / "messages"
     target.mkdir(parents=True, exist_ok=True)
     return target
 
 
 async def save_message_attachments(db: Session, message: InternalMessage, files: list[UploadFile], current_user: User) -> None:
     message_settings = load_message_settings(db)
+    files = [file for file in files if file.filename]
     if files and not message_settings.get("enable_attachments", True):
         raise HTTPException(status_code=403, detail="المرفقات غير مفعلة في إعدادات المراسلات")
     max_attachment_bytes = int(message_settings.get("max_attachment_mb") or 25) * 1024 * 1024
-    target_dir = message_upload_dir()
+    max_attachments = int(message_settings.get("max_attachments_per_message") or 10)
+    if len(files) > max_attachments:
+        raise HTTPException(status_code=422, detail=f"عدد المرفقات أكبر من الحد المسموح {max_attachments}")
+    allowed_extensions = set(message_settings.get("allowed_extensions") or ["pdf", "png", "jpg", "jpeg"])
+    blocked_extensions = BLOCKED_MESSAGE_ATTACHMENT_EXTENSIONS if message_settings.get("block_executable_files", True) else set()
+    target_dir = message_upload_dir(db)
     for file in files:
-        if not file.filename:
-            continue
+        extension = Path(file.filename).suffix.lower().lstrip(".")
+        if not extension or extension not in allowed_extensions:
+            raise HTTPException(status_code=422, detail=f"نوع الملف غير مسموح: {Path(file.filename).name}")
+        if extension in blocked_extensions:
+            raise HTTPException(status_code=422, detail="لا يمكن إرفاق ملفات تنفيذية")
         content = await file.read()
         if len(content) > max_attachment_bytes:
             raise HTTPException(status_code=413, detail=f"حجم المرفق أكبر من الحد المسموح {message_settings.get('max_attachment_mb')}MB")
@@ -429,6 +593,27 @@ def authorize_message_type(db: Session, user: User, value: str | None, message_s
     return message_type
 
 
+def validate_message_type_rules(db: Session, message_type: str, related_request_id: int | None, attachment_count: int = 0) -> None:
+    configured_type = get_structured_message_type(db, message_type)
+    if not configured_type:
+        return
+    if not configured_type.is_active:
+        raise HTTPException(status_code=403, detail="تصنيف الرسالة غير مفعل")
+    if configured_type.requires_request and not related_request_id:
+        raise HTTPException(status_code=422, detail=f"تصنيف {configured_type.name_ar} يتطلب ربط الرسالة بطلب")
+    if configured_type.requires_attachment and attachment_count <= 0:
+        raise HTTPException(status_code=422, detail=f"تصنيف {configured_type.name_ar} يتطلب إضافة مرفق")
+
+
+def ensure_reply_allowed(db: Session, original: InternalMessage) -> None:
+    message_settings = load_message_settings(db)
+    if not message_settings.get("allow_replies", True):
+        raise HTTPException(status_code=403, detail="الرد على الرسائل غير مفعل من إعدادات المراسلات")
+    configured_type = get_structured_message_type(db, original.message_type)
+    if configured_type and not configured_type.allow_reply:
+        raise HTTPException(status_code=403, detail="هذا التصنيف لا يسمح بالرد")
+
+
 def resolve_message_recipients(db: Session, current_user: User, recipient_ids: list[int], require_any: bool = True) -> list[User]:
     if not user_allowed_by_message_scope(db, current_user):
         raise HTTPException(status_code=403, detail="لا يمكنك إرسال مراسلات حسب إعدادات الموظف أو الإدارة")
@@ -437,7 +622,10 @@ def resolve_message_recipients(db: Session, current_user: User, recipient_ids: l
         raise HTTPException(status_code=422, detail="اختر مستلماً واحداً على الأقل")
     if not clean_recipient_ids:
         return []
-    max_recipients = int(load_message_settings(db).get("max_recipients") or 200)
+    message_settings = load_message_settings(db)
+    if len(clean_recipient_ids) > 1 and not message_settings.get("allow_multiple_recipients", True):
+        raise HTTPException(status_code=403, detail="إرسال الرسالة لأكثر من مستلم غير مفعل")
+    max_recipients = int(message_settings.get("max_recipients") or 200)
     if len(clean_recipient_ids) > max_recipients:
         raise HTTPException(status_code=422, detail=f"عدد المستلمين أكبر من الحد المسموح {max_recipients}")
     recipients = db.scalars(select(User).where(User.id.in_(clean_recipient_ids), User.is_active == True)).all()
@@ -452,7 +640,7 @@ def resolve_message_recipients(db: Session, current_user: User, recipient_ids: l
     return recipients
 
 
-def create_message_record(db: Session, current_user: User, recipient_ids: list[int], subject: str, body: str, related_request_id: int | str | None = None, message_type: str | None = None) -> InternalMessage:
+def create_message_record(db: Session, current_user: User, recipient_ids: list[int], subject: str, body: str, related_request_id: int | str | None = None, message_type: str | None = None, attachment_count: int = 0) -> InternalMessage:
     message_settings = load_message_settings(db)
     if not message_settings.get("enabled", True):
         raise HTTPException(status_code=403, detail="المراسلات غير مفعلة حالياً")
@@ -461,6 +649,9 @@ def create_message_record(db: Session, current_user: User, recipient_ids: list[i
         raise HTTPException(status_code=403, detail="ربط الرسائل بالطلبات غير مفعل")
     recipients = resolve_message_recipients(db, current_user, recipient_ids)
     resolved_related_request_id = resolve_related_request_id(db, related_request_id)
+    if not resolved_related_request_id and not message_settings.get("allow_general_messages", True):
+        raise HTTPException(status_code=403, detail="المراسلات العامة غير مفعلة. يجب ربط الرسالة بطلب")
+    validate_message_type_rules(db, authorized_message_type, resolved_related_request_id, attachment_count)
 
     message = InternalMessage(
         message_uid=generate_message_uid(db),
@@ -485,7 +676,14 @@ def replace_message_recipients(db: Session, message: InternalMessage, recipients
         db.add(InternalMessageRecipient(message_id=message.id, recipient_id=recipient.id))
 
 
-def notify_message_recipients(message: InternalMessage, sender: User) -> None:
+def notify_message_recipients(db: Session, message: InternalMessage, sender: User, event: str = "new") -> None:
+    message_settings = load_message_settings(db)
+    if not message_settings.get("enable_message_notifications", True):
+        return
+    if event == "new" and not message_settings.get("notify_on_new_message", True):
+        return
+    if event == "reply" and not message_settings.get("notify_on_reply", True):
+        return
     recipient_ids = [recipient.recipient_id for recipient in message.recipients if recipient.recipient_id != sender.id]
     if not recipient_ids:
         return
@@ -513,6 +711,7 @@ def list_message_users(db: Session = Depends(get_db), current_user: User = Depen
             "role": getattr(user.role, "value", str(user.role)),
             "department_id": user.department_id,
             "department_name": user.department.name_ar if user.department else None,
+            "department_manager_id": user.department.manager_id if user.department else None,
         }
         for user in users
         if user_has_messages_screen(db, user) and user_allowed_by_message_scope(db, user)
@@ -521,6 +720,8 @@ def list_message_users(db: Session = Depends(get_db), current_user: User = Depen
 
 @router.get("/counters", response_model=MessageCounters)
 def message_counters(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    if not load_message_settings(db).get("enable_unread_badge", True):
+        return MessageCounters(unread=0)
     unread = db.scalar(
         select(func.count())
         .select_from(InternalMessageRecipient)
@@ -653,7 +854,12 @@ def inbox(
             selectinload(InternalMessageRecipient.message).selectinload(InternalMessage.attachments),
             selectinload(InternalMessageRecipient.message).selectinload(InternalMessage.related_request),
         )
-        .where(InternalMessageRecipient.recipient_id == current_user.id, InternalMessageRecipient.is_archived == archived, InternalMessage.is_draft == False)
+        .where(
+            InternalMessageRecipient.recipient_id == current_user.id,
+            InternalMessageRecipient.is_archived == archived,
+            InternalMessageRecipient.is_deleted == False,
+            InternalMessage.is_draft == False,
+        )
         .join(InternalMessage, InternalMessageRecipient.message_id == InternalMessage.id)
         .order_by(InternalMessage.created_at.desc())
     )
@@ -697,7 +903,12 @@ def sent(
             selectinload(InternalMessage.attachments),
             selectinload(InternalMessage.related_request),
         )
-        .where(InternalMessage.sender_id == current_user.id, InternalMessage.is_sender_archived == archived, InternalMessage.is_draft == False)
+        .where(
+            InternalMessage.sender_id == current_user.id,
+            InternalMessage.is_sender_archived == archived,
+            InternalMessage.is_sender_deleted == False,
+            InternalMessage.is_draft == False,
+        )
         .order_by(InternalMessage.created_at.desc())
     )
     if search:
@@ -752,8 +963,11 @@ def drafts(
 @router.post("/drafts", response_model=InternalMessageRead, status_code=status.HTTP_201_CREATED)
 def create_draft(payload: InternalMessageDraftUpsert, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     require_message_feature(db, "enable_drafts", "المسودات غير مفعلة في إعدادات المراسلات")
+    message_settings = load_message_settings(db)
     recipients = resolve_message_recipients(db, current_user, payload.recipient_ids, require_any=False)
     resolved_related_request_id = resolve_related_request_id(db, payload.related_request_id)
+    if not resolved_related_request_id and not message_settings.get("allow_general_messages", True):
+        raise HTTPException(status_code=403, detail="المراسلات العامة غير مفعلة. يجب ربط المسودة بطلب")
     draft = InternalMessage(
         message_uid=generate_message_uid(db),
         sender_id=current_user.id,
@@ -785,15 +999,20 @@ async def create_draft_with_attachments(
     current_user: User = Depends(get_current_user),
 ):
     require_message_feature(db, "enable_drafts", "المسودات غير مفعلة في إعدادات المراسلات")
+    message_settings = load_message_settings(db)
     ids = [int(value) for value in recipient_ids.split(",") if value.strip().isdigit()]
     recipients = resolve_message_recipients(db, current_user, ids, require_any=False)
+    resolved_related_request_id = resolve_related_request_id(db, related_request_id)
+    if not resolved_related_request_id and not message_settings.get("allow_general_messages", True):
+        raise HTTPException(status_code=403, detail="المراسلات العامة غير مفعلة. يجب ربط المسودة بطلب")
+    validate_message_type_rules(db, authorize_message_type(db, current_user, message_type, message_settings), resolved_related_request_id, len([file for file in attachments if file.filename]))
     draft = InternalMessage(
         message_uid=generate_message_uid(db),
         sender_id=current_user.id,
         message_type=authorize_message_type(db, current_user, message_type),
         subject=subject.strip(),
         body=body.strip(),
-        related_request_id=resolve_related_request_id(db, related_request_id),
+        related_request_id=resolved_related_request_id,
         is_draft=True,
     )
     db.add(draft)
@@ -810,14 +1029,18 @@ async def create_draft_with_attachments(
 @router.put("/drafts/{draft_id}", response_model=InternalMessageRead)
 def update_draft(draft_id: int, payload: InternalMessageDraftUpsert, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     require_message_feature(db, "enable_drafts", "المسودات غير مفعلة في إعدادات المراسلات")
+    message_settings = load_message_settings(db)
     draft = load_message_with_access(db, draft_id, current_user)
     if not draft.is_draft or draft.sender_id != current_user.id:
         raise HTTPException(status_code=404, detail="Draft not found")
     recipients = resolve_message_recipients(db, current_user, payload.recipient_ids, require_any=False)
+    resolved_related_request_id = resolve_related_request_id(db, payload.related_request_id)
+    if not resolved_related_request_id and not message_settings.get("allow_general_messages", True):
+        raise HTTPException(status_code=403, detail="المراسلات العامة غير مفعلة. يجب ربط المسودة بطلب")
     draft.subject = payload.subject.strip()
-    draft.message_type = authorize_message_type(db, current_user, payload.message_type)
+    draft.message_type = authorize_message_type(db, current_user, payload.message_type, message_settings)
     draft.body = payload.body.strip()
-    draft.related_request_id = resolve_related_request_id(db, payload.related_request_id)
+    draft.related_request_id = resolved_related_request_id
     draft.updated_at = datetime.now(timezone.utc)
     replace_message_recipients(db, draft, recipients)
     write_audit(db, "internal_message_draft_updated", "internal_message", actor=current_user, entity_id=str(draft.id))
@@ -828,6 +1051,7 @@ def update_draft(draft_id: int, payload: InternalMessageDraftUpsert, db: Session
 @router.post("/drafts/{draft_id}/send", response_model=InternalMessageRead)
 def send_draft(draft_id: int, payload: InternalMessageDraftUpsert, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     require_message_feature(db, "enable_drafts", "المسودات غير مفعلة في إعدادات المراسلات")
+    message_settings = load_message_settings(db)
     draft = load_message_with_access(db, draft_id, current_user)
     if not draft.is_draft or draft.sender_id != current_user.id:
         raise HTTPException(status_code=404, detail="Draft not found")
@@ -838,17 +1062,22 @@ def send_draft(draft_id: int, payload: InternalMessageDraftUpsert, db: Session =
     if not body:
         raise HTTPException(status_code=422, detail="اكتب محتوى الرسالة")
     recipients = resolve_message_recipients(db, current_user, payload.recipient_ids, require_any=True)
+    resolved_related_request_id = resolve_related_request_id(db, payload.related_request_id)
+    if not resolved_related_request_id and not message_settings.get("allow_general_messages", True):
+        raise HTTPException(status_code=403, detail="المراسلات العامة غير مفعلة. يجب ربط الرسالة بطلب")
+    authorized_message_type = authorize_message_type(db, current_user, payload.message_type, message_settings)
+    validate_message_type_rules(db, authorized_message_type, resolved_related_request_id, len(draft.attachments))
     draft.subject = subject
-    draft.message_type = authorize_message_type(db, current_user, payload.message_type)
+    draft.message_type = authorized_message_type
     draft.body = body
-    draft.related_request_id = resolve_related_request_id(db, payload.related_request_id)
+    draft.related_request_id = resolved_related_request_id
     draft.is_draft = False
     draft.updated_at = datetime.now(timezone.utc)
     replace_message_recipients(db, draft, recipients)
     write_audit(db, "internal_message_draft_sent", "internal_message", actor=current_user, entity_id=str(draft.id))
     db.commit()
     sent_message = load_message_with_access(db, draft.id, current_user)
-    notify_message_recipients(sent_message, current_user)
+    notify_message_recipients(db, sent_message, current_user, event="new")
     return message_read(sent_message, current_user)
 
 
@@ -894,7 +1123,7 @@ def send_message(payload: InternalMessageCreate, db: Session = Depends(get_db), 
         )
         .where(InternalMessage.id == message.id)
     )
-    notify_message_recipients(message, current_user)
+    notify_message_recipients(db, message, current_user, event="new")
     return message_read(message, current_user)
 
 
@@ -910,7 +1139,7 @@ async def send_message_with_attachments(
     current_user: User = Depends(get_current_user),
 ):
     ids = [int(value) for value in recipient_ids.split(",") if value.strip().isdigit()]
-    message = create_message_record(db, current_user, ids, subject, body, related_request_id, message_type)
+    message = create_message_record(db, current_user, ids, subject, body, related_request_id, message_type, attachment_count=len([file for file in attachments if file.filename]))
     await save_message_attachments(db, message, attachments, current_user)
     write_audit(
         db,
@@ -922,12 +1151,13 @@ async def send_message_with_attachments(
     )
     db.commit()
     sent_message = load_message_with_access(db, message.id, current_user)
-    notify_message_recipients(sent_message, current_user)
+    notify_message_recipients(db, sent_message, current_user, event="new")
     return message_read(sent_message, current_user)
 
 
 @router.post("/bulk/archive", status_code=status.HTTP_204_NO_CONTENT)
 def bulk_archive_messages(payload: MessageBulkAction, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    require_message_archiving_enabled(db)
     messages = db.scalars(
         select(InternalMessage)
         .options(selectinload(InternalMessage.recipients))
@@ -946,6 +1176,38 @@ def bulk_archive_messages(payload: MessageBulkAction, db: Session = Depends(get_
             row.is_archived = True
             changed += 1
     write_audit(db, "internal_messages_bulk_archived", "internal_message", actor=current_user, metadata={"count": changed})
+    db.commit()
+
+
+@router.post("/bulk/delete", status_code=status.HTTP_204_NO_CONTENT)
+def bulk_delete_messages(payload: MessageBulkAction, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    messages = db.scalars(
+        select(InternalMessage)
+        .options(selectinload(InternalMessage.recipients))
+        .where(InternalMessage.id.in_(payload.message_ids), InternalMessage.is_draft == False)
+    ).all()
+    changed = 0
+    blocked = 0
+    for message in messages:
+        if not can_access_message(message, current_user):
+            continue
+        try:
+            require_message_deletion_allowed(db, message)
+        except HTTPException:
+            blocked += 1
+            continue
+        if message.sender_id == current_user.id:
+            message.is_sender_deleted = True
+            changed += 1
+            log_message_deleted_if_enabled(db, current_user, message.id)
+            continue
+        row = next((recipient for recipient in message.recipients if recipient.recipient_id == current_user.id and not recipient.is_deleted), None)
+        if row:
+            row.is_deleted = True
+            changed += 1
+            log_message_deleted_if_enabled(db, current_user, message.id)
+    if blocked and not changed:
+        raise HTTPException(status_code=403, detail="لا يمكن حذف الرسائل المحددة حسب إعدادات الاحتفاظ")
     db.commit()
 
 
@@ -1008,15 +1270,18 @@ def get_message(message_id: int, db: Session = Depends(get_db), current_user: Us
 @router.post("/{message_id}/reply", response_model=InternalMessageRead, status_code=status.HTTP_201_CREATED)
 def reply_message(message_id: int, payload: InternalMessageReply, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     original = load_message_with_access(db, message_id, current_user)
+    ensure_reply_allowed(db, original)
     participant_ids = {original.sender_id, *(recipient.recipient_id for recipient in original.recipients)}
     participant_ids.discard(current_user.id)
     if not participant_ids:
         raise HTTPException(status_code=422, detail="لا يوجد مستلم للرد")
+    authorized_message_type = authorize_message_type(db, current_user, payload.message_type)
+    validate_message_type_rules(db, authorized_message_type, original.related_request_id, 0)
     reply = InternalMessage(
         message_uid=generate_message_uid(db),
         thread_id=original.thread_id or original.id,
         sender_id=current_user.id,
-        message_type=authorize_message_type(db, current_user, payload.message_type),
+        message_type=authorized_message_type,
         subject=original.subject if original.subject.startswith("رد:") else f"رد: {original.subject}",
         body=payload.body.strip(),
         related_request_id=original.related_request_id,
@@ -1028,7 +1293,7 @@ def reply_message(message_id: int, payload: InternalMessageReply, db: Session = 
     write_audit(db, "internal_message_replied", "internal_message", actor=current_user, entity_id=str(reply.id))
     db.commit()
     reply = load_message_with_access(db, reply.id, current_user)
-    notify_message_recipients(reply, current_user)
+    notify_message_recipients(db, reply, current_user, event="reply")
     return message_read(reply, current_user)
 
 
@@ -1042,15 +1307,18 @@ async def reply_message_with_attachments(
     current_user: User = Depends(get_current_user),
 ):
     original = load_message_with_access(db, message_id, current_user)
+    ensure_reply_allowed(db, original)
     participant_ids = {original.sender_id, *(recipient.recipient_id for recipient in original.recipients)}
     participant_ids.discard(current_user.id)
     if not participant_ids:
         raise HTTPException(status_code=422, detail="لا يوجد مستلم للرد")
+    authorized_message_type = authorize_message_type(db, current_user, message_type)
+    validate_message_type_rules(db, authorized_message_type, original.related_request_id, len([file for file in attachments if file.filename]))
     reply = InternalMessage(
         message_uid=generate_message_uid(db),
         thread_id=original.thread_id or original.id,
         sender_id=current_user.id,
-        message_type=authorize_message_type(db, current_user, message_type),
+        message_type=authorized_message_type,
         subject=original.subject if original.subject.startswith("رد:") else f"رد: {original.subject}",
         body=body.strip(),
         related_request_id=original.related_request_id,
@@ -1063,12 +1331,14 @@ async def reply_message_with_attachments(
     write_audit(db, "internal_message_replied", "internal_message", actor=current_user, entity_id=str(reply.id), metadata={"attachments": len(attachments)})
     db.commit()
     sent_reply = load_message_with_access(db, reply.id, current_user)
-    notify_message_recipients(sent_reply, current_user)
+    notify_message_recipients(db, sent_reply, current_user, event="reply")
     return message_read(sent_reply, current_user)
 
 
 @router.post("/{message_id}/forward", response_model=InternalMessageRead, status_code=status.HTTP_201_CREATED)
 def forward_message(message_id: int, payload: InternalMessageForward, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    if not load_message_settings(db).get("allow_forwarding", False):
+        raise HTTPException(status_code=403, detail="تحويل الرسائل غير مفعل من إعدادات المراسلات")
     original = load_message_with_access(db, message_id, current_user)
     note = payload.note.strip() if payload.note else ""
     original_created = original.created_at.strftime("%Y-%m-%d %H:%M") if original.created_at else "-"
@@ -1104,7 +1374,7 @@ def forward_message(message_id: int, payload: InternalMessageForward, db: Sessio
     )
     db.commit()
     sent_forward = load_message_with_access(db, forward.id, current_user)
-    notify_message_recipients(sent_forward, current_user)
+    notify_message_recipients(db, sent_forward, current_user, event="new")
     return message_read(sent_forward, current_user)
 
 
@@ -1123,6 +1393,9 @@ def mark_read(message_id: int, db: Session = Depends(get_db), current_user: User
     if not row.is_read:
         row.is_read = True
         row.read_at = datetime.now(timezone.utc)
+        security_policy = db.scalar(select(MessageSecurityPolicy).limit(1))
+        if security_policy and security_policy.log_message_read:
+            write_audit(db, "internal_message_read", "internal_message", actor=current_user, entity_id=str(message_id))
         db.commit()
         db.refresh(row)
     return message_read(row.message, current_user, row)
@@ -1130,6 +1403,7 @@ def mark_read(message_id: int, db: Session = Depends(get_db), current_user: User
 
 @router.delete("/{message_id}", status_code=status.HTTP_204_NO_CONTENT)
 def archive_message(message_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    require_message_archiving_enabled(db)
     row = db.scalar(select(InternalMessageRecipient).where(InternalMessageRecipient.message_id == message_id, InternalMessageRecipient.recipient_id == current_user.id))
     if not row:
         raise HTTPException(status_code=404, detail="Message not found")
@@ -1140,6 +1414,7 @@ def archive_message(message_id: int, db: Session = Depends(get_db), current_user
 
 @router.post("/{message_id}/archive", status_code=status.HTTP_204_NO_CONTENT)
 def archive_any_message(message_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    require_message_archiving_enabled(db)
     message = load_message_with_access(db, message_id, current_user)
     if message.sender_id == current_user.id:
         message.is_sender_archived = True
@@ -1149,6 +1424,23 @@ def archive_any_message(message_id: int, db: Session = Depends(get_db), current_
             raise HTTPException(status_code=404, detail="Message not found")
         row.is_archived = True
     write_audit(db, "internal_message_archived", "internal_message", actor=current_user, entity_id=str(message_id))
+    db.commit()
+
+
+@router.post("/{message_id}/delete", status_code=status.HTTP_204_NO_CONTENT)
+def delete_message_for_current_user(message_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    message = load_message_with_access(db, message_id, current_user)
+    if message.is_draft:
+        raise HTTPException(status_code=400, detail="استخدم حذف المسودة لحذف الرسائل غير المرسلة")
+    require_message_deletion_allowed(db, message)
+    if message.sender_id == current_user.id:
+        message.is_sender_deleted = True
+    else:
+        row = next((recipient for recipient in message.recipients if recipient.recipient_id == current_user.id and not recipient.is_deleted), None)
+        if not row:
+            raise HTTPException(status_code=404, detail="Message not found")
+        row.is_deleted = True
+    log_message_deleted_if_enabled(db, current_user, message_id)
     db.commit()
 
 
@@ -1172,9 +1464,15 @@ def download_attachment(message_id: int, attachment_id: int, db: Session = Depen
     attachment = next((item for item in message.attachments if item.id == attachment_id), None)
     if not attachment:
         raise HTTPException(status_code=404, detail="Attachment not found")
-    path = message_upload_dir() / attachment.stored_name
+    path = message_upload_dir(db) / attachment.stored_name
+    if not path.exists():
+        legacy_path = message_upload_dir(None) / attachment.stored_name
+        path = legacy_path if legacy_path.exists() else path
     if not path.exists():
         raise HTTPException(status_code=404, detail="Attachment file not found")
-    write_audit(db, "internal_message_attachment_downloaded", "internal_message", actor=current_user, entity_id=str(message_id), metadata={"attachment_id": attachment_id})
-    db.commit()
+    message_settings = load_message_settings(db)
+    security_policy = db.scalar(select(MessageSecurityPolicy).limit(1))
+    if message_settings.get("log_attachment_downloads", True) or (security_policy and security_policy.log_attachment_downloaded):
+        write_audit(db, "internal_message_attachment_downloaded", "internal_message", actor=current_user, entity_id=str(message_id), metadata={"attachment_id": attachment_id})
+        db.commit()
     return FileResponse(path, media_type=attachment.content_type, filename=attachment.original_name)

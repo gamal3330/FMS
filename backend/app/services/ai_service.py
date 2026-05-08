@@ -22,6 +22,7 @@ from app.models.enums import UserRole
 from app.models.message import InternalMessage
 from app.models.request import ApprovalStep, ServiceRequest
 from app.models.user import Department, Role, User
+from app.services.ai_privacy_service import mask_ai_sensitive_text
 from app.services.workflow import IMPLEMENTATION_STEP_ROLES
 
 settings = get_settings()
@@ -208,6 +209,8 @@ FEATURE_PERMISSION_MAP = {
     "suggest_reply": "suggest_reply",
     "summarize": "summarize_message",
     "missing_info": "detect_missing_info",
+    "translate_ar_en": "translate_ar_en",
+    "template": "draft_message",
 }
 
 
@@ -324,15 +327,8 @@ def strip_html(value: str | None) -> str:
     return re.sub(r"[ \t]+", " ", text).strip()
 
 
-def mask_sensitive_text(value: str, mask_optional_identifiers: bool = True) -> str:
-    text = value or ""
-    text = re.sub(r"(?i)(password|pass|كلمة\s*المرور|secret|token|api[_ -]?key)\s*[:=]\s*\S+", r"\1: ***MASKED_SECRET***", text)
-    text = re.sub(r"(?i)bearer\s+[A-Za-z0-9._\-]+", "Bearer ***MASKED_TOKEN***", text)
-    if mask_optional_identifiers:
-        text = re.sub(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b", "***MASKED_EMAIL***", text)
-        text = re.sub(r"(?<!\d)(?:\+?\d[\d\s-]{7,}\d)(?!\d)", "***MASKED_PHONE***", text)
-        text = re.sub(r"(?i)\b(?:employee\s*id|emp\s*id|الرقم\s*الوظيفي)\s*[:=]?\s*[A-Za-z0-9_-]{2,}\b", "***MASKED_EMPLOYEE_ID***", text)
-    return text
+def mask_sensitive_text(value: str, ai_settings: AISettings | None = None) -> str:
+    return mask_ai_sensitive_text(value, ai_settings)
 
 
 def ai_user_context(user: User) -> str:
@@ -375,6 +371,13 @@ def ai_feature_instructions(feature: str) -> str:
         return "لخص المحتوى بوضوح وحياد. لا تكتب كأنك أحد أطراف المراسلة."
     if feature == "missing_info":
         return "أعد JSON صالحاً فقط بهذا الشكل: {\"items\":[\"...\"]}."
+    if feature == "translate_ar_en":
+        return "ترجم النص ترجمة مهنية مناسبة للمراسلات الداخلية، وأعد الترجمة فقط بدون شرح."
+    if feature == "template":
+        return (
+            "نفّذ قالب الأمر المحدد فقط، واستخدم تعليمات المستخدم أو نص الرسالة كسياق. "
+            "أعد ناتجاً نهائياً قابلاً للاستخدام داخل الرسالة، بدون شرح جانبي وبدون Markdown."
+        )
     return "أعد ناتجاً مهنياً مختصراً باللغة العربية فقط."
 
 
@@ -483,25 +486,32 @@ def resolve_request(db: Session, ref: int | str | None, current_user: User) -> S
     return request_item
 
 
-def request_context_text(service_request: ServiceRequest | None) -> str:
+def request_context_text(service_request: ServiceRequest | None, ai_settings: AISettings | None = None) -> str:
     if not service_request:
         return "لا يوجد سياق طلب مرتبط."
+    if ai_settings and (not ai_settings.allow_request_context or (ai_settings.request_context_level or "basic_only") == "none"):
+        return "تم منع إرسال سياق الطلب حسب إعدادات الخصوصية."
+    level = (ai_settings.request_context_level if ai_settings else "basic_only") or "basic_only"
     form_data = service_request.form_data or {}
-    fields = "\n".join(f"- {key}: {value}" for key, value in list(form_data.items())[:20] if value not in (None, ""))
-    return "\n".join(
-        [
-            f"رقم الطلب: {service_request.request_number}",
-            f"عنوان الطلب: {service_request.title}",
-            f"نوع الطلب: {service_request.request_type}",
-            f"الحالة: {service_request.status}",
-            f"الأولوية: {service_request.priority}",
-            f"مقدم الطلب: {service_request.requester.full_name_ar if service_request.requester else '-'}",
-            f"الإدارة: {service_request.department.name_ar if service_request.department else '-'}",
-            f"مبرر العمل: {service_request.business_justification or '-'}",
-            "بيانات النموذج:",
-            fields or "-",
-        ]
-    )
+    lines = [
+        f"رقم الطلب: {service_request.request_number}",
+        f"عنوان الطلب: {service_request.title}",
+        f"نوع الطلب: {service_request.request_type}",
+        f"الحالة: {service_request.status}",
+        f"الأولوية: {service_request.priority}",
+        f"الإدارة: {service_request.department.name_ar if service_request.department else '-'}",
+    ]
+    if level == "basic_and_allowed_messages":
+        fields = "\n".join(f"- {key}: {value}" for key, value in list(form_data.items())[:20] if value not in (None, ""))
+        lines.extend(
+            [
+                f"مقدم الطلب: {service_request.requester.full_name_ar if service_request.requester else '-'}",
+                f"مبرر العمل: {service_request.business_justification or '-'}",
+                "بيانات النموذج:",
+                fields or "-",
+            ]
+        )
+    return "\n".join(lines)
 
 
 def can_access_message(message: InternalMessage, user: User) -> bool:
@@ -695,6 +705,10 @@ def validate_ai_feature(item: AISettings, feature: str) -> None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="تلخيص المراسلات غير مفعل في إعدادات المساعد الذكي")
     if feature == "suggest_reply" and not item.allow_reply_suggestion:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="اقتراح الردود غير مفعل في إعدادات المساعد الذكي")
+    if feature == "translate_ar_en" and not item.allow_translate_ar_en:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="الترجمة غير مفعلة في إعدادات المساعد الذكي")
+    if feature == "template" and not item.allow_message_drafting:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="تشغيل قوالب الذكاء الاصطناعي غير مفعل في إعدادات المساعد الذكي")
 
 
 def validate_ai_role_permission(db: Session, user: User, feature: str) -> None:
@@ -713,6 +727,15 @@ def render_prompt(template: str, **kwargs: str) -> str:
     return template.format(**{key: value or "" for key, value in kwargs.items()})
 
 
+def render_ai_prompt_template(template: str, **kwargs: str) -> str:
+    rendered = template or ""
+    for key, value in kwargs.items():
+        replacement = value or ""
+        rendered = rendered.replace("{" + key + "}", replacement)
+        rendered = rendered.replace("{{" + key + "}}", replacement)
+    return rendered
+
+
 def generate_ai_text(
     db: Session,
     current_user: User,
@@ -721,14 +744,22 @@ def generate_ai_text(
     entity_type: str | None = None,
     entity_id: str | None = None,
     max_tokens: int = 800,
+    source_text: str | None = None,
 ) -> AIResult:
     item = get_or_create_ai_settings(db)
     validate_ai_feature(item, feature)
     validate_ai_role_permission(db, current_user, feature)
     enforce_ai_rate_limit(current_user)
-    clean_prompt = mask_sensitive_text(build_ai_prompt(current_user, feature, prompt), bool(item.mask_sensitive_data))
-    if len(clean_prompt) > item.max_input_chars:
-        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=f"النص أطول من الحد المسموح {item.max_input_chars} حرفاً")
+    clean_prompt = mask_sensitive_text(build_ai_prompt(current_user, feature, prompt), item)
+    measured_input = source_text if source_text is not None else clean_prompt
+    if len(measured_input) > item.max_input_chars:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=(
+                "النص المدخل يتجاوز الحد الأقصى للمساعد الذكي "
+                f"({item.max_input_chars} حرف). اختصر النص أو ارفع الحد من إعدادات الذكاء الاصطناعي."
+            ),
+        )
     usage = AIUsageLog(
         user_id=current_user.id,
         feature=feature,
@@ -738,12 +769,16 @@ def generate_ai_text(
         input_length=len(clean_prompt),
         status="success",
     )
+    if item.store_full_prompt_logs:
+        usage.prompt_text = clean_prompt
     db.add(usage)
     started = time.perf_counter()
     try:
         output = clean_ai_text_output(provider_for_settings(item).generate_text(clean_prompt, max_tokens=max_tokens))
         usage.latency_ms = int((time.perf_counter() - started) * 1000)
         usage.output_length = len(output)
+        if item.store_full_prompt_logs:
+            usage.output_text = mask_sensitive_text(output, item)
         db.commit()
         return AIResult(text=output, input_length=len(clean_prompt), output_length=len(output))
     except HTTPException as exc:

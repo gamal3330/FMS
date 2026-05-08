@@ -131,6 +131,7 @@ class MessageRecipientsPayload(BaseModel):
     allow_send_to_specialized_section: bool = False
     allow_multiple_recipients: bool = True
     allow_broadcast: bool = False
+    circular_allowed_user_ids: list[int] = Field(default_factory=list)
     prevent_sending_to_inactive_users: bool = True
     max_recipients: int = Field(default=10, ge=1, le=1000)
     department_recipient_behavior: str = Field(default="selected_department_users", pattern="^(department_manager_only|all_department_users|selected_department_users)$")

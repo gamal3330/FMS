@@ -1,15 +1,15 @@
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user, require_roles
+from app.api.deps import get_current_user
 from app.db.session import get_db
 from app.models.enums import ApprovalAction, RequestStatus, RequestType, UserRole
 from app.models.request import ApprovalStep, RequestApprovalStep, ServiceRequest
-from app.models.settings import RequestTypeField, RequestTypeSetting, SpecializedSection, WorkflowTemplate, WorkflowTemplateStep
-from app.models.user import Department, User
+from app.models.settings import PortalSetting, RequestTypeField, RequestTypeSetting, SpecializedSection, WorkflowTemplate, WorkflowTemplateStep
+from app.models.user import Department, Role, ScreenPermission, User
 from app.schemas.request_type_management import (
     ReorderPayload,
     RequestSubmitPayload,
@@ -27,7 +27,66 @@ from app.services.request_notifications import create_request_created_message
 from app.services.workflow import next_request_number
 
 router = APIRouter(prefix="/request-types", tags=["Request Type Management"])
-admin_actor = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.IT_MANAGER))
+
+SCREEN_PERMISSION_ORDER = {
+    "no_access": 0,
+    "view": 1,
+    "create": 2,
+    "edit": 3,
+    "delete": 4,
+    "export": 5,
+    "manage": 6,
+}
+
+
+def request_types_screen_level(db: Session, user: User) -> str:
+    if user.role in {UserRole.SUPER_ADMIN, UserRole.IT_MANAGER}:
+        return "manage"
+
+    user_permission = db.scalar(
+        select(ScreenPermission).where(
+            ScreenPermission.user_id == user.id,
+            ScreenPermission.role_id.is_(None),
+            ScreenPermission.screen_code == "request_types",
+        )
+    )
+    if user_permission:
+        return user_permission.permission_level or "no_access"
+
+    role = db.get(Role, user.role_id) if user.role_id else None
+    if not role:
+        role = db.scalar(select(Role).where(or_(Role.code == str(user.role), Role.name == str(user.role))))
+    if role:
+        role_permission = db.scalar(
+            select(ScreenPermission).where(
+                ScreenPermission.role_id == role.id,
+                ScreenPermission.user_id.is_(None),
+                ScreenPermission.screen_code == "request_types",
+            )
+        )
+        if role_permission:
+            return role_permission.permission_level or "no_access"
+
+    setting = db.scalar(select(PortalSetting).where(PortalSetting.category == "screen_permissions", PortalSetting.setting_key == str(user.id)))
+    if setting and isinstance(setting.setting_value, dict) and "request_types" in setting.setting_value.get("screens", []):
+        return "view"
+    return "no_access"
+
+
+def require_request_types_view(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)) -> User:
+    if SCREEN_PERMISSION_ORDER.get(request_types_screen_level(db, current_user), 0) < SCREEN_PERMISSION_ORDER["view"]:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="لا تملك صلاحية عرض إدارة أنواع الطلبات")
+    return current_user
+
+
+def require_request_types_manage(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)) -> User:
+    if SCREEN_PERMISSION_ORDER.get(request_types_screen_level(db, current_user), 0) < SCREEN_PERMISSION_ORDER["manage"]:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="لا تملك صلاحية إدارة أنواع الطلبات")
+    return current_user
+
+
+view_actor = Depends(require_request_types_view)
+manage_actor = Depends(require_request_types_manage)
 
 
 def workflow_summary(db: Session, request_type_id: int) -> str:
@@ -110,7 +169,7 @@ def read_request_types_bulk(db: Session, items: list[RequestTypeSetting]) -> lis
 @router.get("", response_model=list[RequestTypeRead])
 def list_request_types(
     db: Session = Depends(get_db),
-    _: User = admin_actor,
+    _: User = view_actor,
     search: str | None = None,
     status_filter: str | None = Query(default=None, alias="status"),
     category: str | None = None,
@@ -134,7 +193,7 @@ def list_request_types(
 @router.get("/bootstrap")
 def request_types_bootstrap(
     db: Session = Depends(get_db),
-    _: User = admin_actor,
+    _: User = view_actor,
     search: str | None = None,
     status_filter: str | None = Query(default=None, alias="status"),
 ):
@@ -163,7 +222,7 @@ def list_active_request_types(db: Session = Depends(get_db), _: User = Depends(g
 
 
 @router.get("/{request_type_id}", response_model=RequestTypeRead)
-def get_request_type(request_type_id: int, db: Session = Depends(get_db), _: User = admin_actor):
+def get_request_type(request_type_id: int, db: Session = Depends(get_db), _: User = view_actor):
     item = db.get(RequestTypeSetting, request_type_id)
     if not item:
         raise HTTPException(status_code=404, detail="Request type not found")
@@ -171,7 +230,7 @@ def get_request_type(request_type_id: int, db: Session = Depends(get_db), _: Use
 
 
 @router.post("", response_model=RequestTypeRead, status_code=status.HTTP_201_CREATED)
-def create_request_type(payload: RequestTypePayload, db: Session = Depends(get_db), actor: User = admin_actor):
+def create_request_type(payload: RequestTypePayload, db: Session = Depends(get_db), actor: User = manage_actor):
     if db.scalar(select(RequestTypeSetting).where(RequestTypeSetting.code == payload.code)):
         raise HTTPException(status_code=409, detail="رمز نوع الطلب مستخدم من قبل")
     if payload.assigned_department_id and not db.get(Department, payload.assigned_department_id):
@@ -186,7 +245,7 @@ def create_request_type(payload: RequestTypePayload, db: Session = Depends(get_d
 
 
 @router.put("/{request_type_id}", response_model=RequestTypeRead)
-def update_request_type(request_type_id: int, payload: RequestTypePayload, db: Session = Depends(get_db), actor: User = admin_actor):
+def update_request_type(request_type_id: int, payload: RequestTypePayload, db: Session = Depends(get_db), actor: User = manage_actor):
     item = db.get(RequestTypeSetting, request_type_id)
     if not item:
         raise HTTPException(status_code=404, detail="Request type not found")
@@ -208,7 +267,7 @@ def update_request_type(request_type_id: int, payload: RequestTypePayload, db: S
 
 
 @router.delete("/{request_type_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_request_type(request_type_id: int, db: Session = Depends(get_db), actor: User = admin_actor):
+def delete_request_type(request_type_id: int, db: Session = Depends(get_db), actor: User = manage_actor):
     item = db.get(RequestTypeSetting, request_type_id)
     if not item:
         raise HTTPException(status_code=404, detail="Request type not found")
@@ -221,7 +280,7 @@ def delete_request_type(request_type_id: int, db: Session = Depends(get_db), act
 
 
 @router.patch("/{request_type_id}/status", response_model=RequestTypeRead)
-def update_request_type_status(request_type_id: int, payload: dict, db: Session = Depends(get_db), actor: User = admin_actor):
+def update_request_type_status(request_type_id: int, payload: dict, db: Session = Depends(get_db), actor: User = manage_actor):
     item = db.get(RequestTypeSetting, request_type_id)
     if not item:
         raise HTTPException(status_code=404, detail="Request type not found")
@@ -243,12 +302,12 @@ def update_request_type_status(request_type_id: int, payload: dict, db: Session 
 
 
 @router.get("/{request_type_id}/fields", response_model=list[RequestTypeFieldRead])
-def list_fields(request_type_id: int, db: Session = Depends(get_db), _: User = admin_actor):
+def list_fields(request_type_id: int, db: Session = Depends(get_db), _: User = view_actor):
     return db.scalars(select(RequestTypeField).where(RequestTypeField.request_type_id == request_type_id).order_by(RequestTypeField.sort_order)).all()
 
 
 @router.post("/{request_type_id}/fields", response_model=RequestTypeFieldRead, status_code=status.HTTP_201_CREATED)
-def create_field(request_type_id: int, payload: RequestTypeFieldPayload, db: Session = Depends(get_db), actor: User = admin_actor):
+def create_field(request_type_id: int, payload: RequestTypeFieldPayload, db: Session = Depends(get_db), actor: User = manage_actor):
     if not db.get(RequestTypeSetting, request_type_id):
         raise HTTPException(status_code=404, detail="Request type not found")
     if db.scalar(select(RequestTypeField).where(RequestTypeField.request_type_id == request_type_id, RequestTypeField.field_name == payload.field_name)):
@@ -263,7 +322,7 @@ def create_field(request_type_id: int, payload: RequestTypeFieldPayload, db: Ses
 
 
 @router.put("/fields/{field_id}", response_model=RequestTypeFieldRead)
-def update_field(field_id: int, payload: RequestTypeFieldPayload, db: Session = Depends(get_db), actor: User = admin_actor):
+def update_field(field_id: int, payload: RequestTypeFieldPayload, db: Session = Depends(get_db), actor: User = manage_actor):
     item = db.get(RequestTypeField, field_id)
     if not item:
         raise HTTPException(status_code=404, detail="Field not found")
@@ -279,7 +338,7 @@ def update_field(field_id: int, payload: RequestTypeFieldPayload, db: Session = 
 
 
 @router.delete("/fields/{field_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_field(field_id: int, db: Session = Depends(get_db), actor: User = admin_actor):
+def delete_field(field_id: int, db: Session = Depends(get_db), actor: User = manage_actor):
     item = db.get(RequestTypeField, field_id)
     if not item:
         raise HTTPException(status_code=404, detail="Field not found")
@@ -289,7 +348,7 @@ def delete_field(field_id: int, db: Session = Depends(get_db), actor: User = adm
 
 
 @router.post("/{request_type_id}/fields/reorder", response_model=list[RequestTypeFieldRead])
-def reorder_fields(request_type_id: int, payload: ReorderPayload, db: Session = Depends(get_db), actor: User = admin_actor):
+def reorder_fields(request_type_id: int, payload: ReorderPayload, db: Session = Depends(get_db), actor: User = manage_actor):
     for index, field_id in enumerate(payload.ids, start=1):
         item = db.get(RequestTypeField, field_id)
         if item and item.request_type_id == request_type_id:
@@ -331,7 +390,7 @@ def validate_return_target(db: Session, template: WorkflowTemplate, payload: Wor
 
 
 @router.get("/{request_type_id}/workflow", response_model=WorkflowRead)
-def get_workflow(request_type_id: int, db: Session = Depends(get_db), _: User = admin_actor):
+def get_workflow(request_type_id: int, db: Session = Depends(get_db), _: User = view_actor):
     template = get_or_create_template(db, request_type_id)
     steps = db.scalars(select(WorkflowTemplateStep).where(WorkflowTemplateStep.workflow_template_id == template.id).order_by(WorkflowTemplateStep.sort_order)).all()
     db.commit()
@@ -339,7 +398,7 @@ def get_workflow(request_type_id: int, db: Session = Depends(get_db), _: User = 
 
 
 @router.post("/{request_type_id}/workflow/steps", response_model=WorkflowStepRead, status_code=status.HTTP_201_CREATED)
-def create_workflow_step(request_type_id: int, payload: WorkflowStepPayload, db: Session = Depends(get_db), actor: User = admin_actor):
+def create_workflow_step(request_type_id: int, payload: WorkflowStepPayload, db: Session = Depends(get_db), actor: User = manage_actor):
     template = get_or_create_template(db, request_type_id)
     validate_return_target(db, template, payload)
     item = WorkflowTemplateStep(workflow_template_id=template.id, **payload.model_dump())
@@ -352,7 +411,7 @@ def create_workflow_step(request_type_id: int, payload: WorkflowStepPayload, db:
 
 
 @router.put("/workflow-steps/{step_id}", response_model=WorkflowStepRead)
-def update_workflow_step(step_id: int, payload: WorkflowStepPayload, db: Session = Depends(get_db), actor: User = admin_actor):
+def update_workflow_step(step_id: int, payload: WorkflowStepPayload, db: Session = Depends(get_db), actor: User = manage_actor):
     item = db.get(WorkflowTemplateStep, step_id)
     if not item:
         raise HTTPException(status_code=404, detail="Workflow step not found")
@@ -367,7 +426,7 @@ def update_workflow_step(step_id: int, payload: WorkflowStepPayload, db: Session
 
 
 @router.delete("/workflow-steps/{step_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_workflow_step(step_id: int, db: Session = Depends(get_db), actor: User = admin_actor):
+def delete_workflow_step(step_id: int, db: Session = Depends(get_db), actor: User = manage_actor):
     item = db.get(WorkflowTemplateStep, step_id)
     if not item:
         raise HTTPException(status_code=404, detail="Workflow step not found")
@@ -380,7 +439,7 @@ def delete_workflow_step(step_id: int, db: Session = Depends(get_db), actor: Use
 
 
 @router.post("/{request_type_id}/workflow/reorder", response_model=WorkflowRead)
-def reorder_workflow(request_type_id: int, payload: ReorderPayload, db: Session = Depends(get_db), actor: User = admin_actor):
+def reorder_workflow(request_type_id: int, payload: ReorderPayload, db: Session = Depends(get_db), actor: User = manage_actor):
     template = get_or_create_template(db, request_type_id)
     for index, step_id in enumerate(payload.ids, start=1):
         step = db.get(WorkflowTemplateStep, step_id)
@@ -397,7 +456,7 @@ def reorder_workflow(request_type_id: int, payload: ReorderPayload, db: Session 
 
 
 @router.get("/{request_type_id}/workflow/preview")
-def preview_workflow(request_type_id: int, db: Session = Depends(get_db), _: User = admin_actor):
+def preview_workflow(request_type_id: int, db: Session = Depends(get_db), _: User = view_actor):
     template = get_or_create_template(db, request_type_id)
     steps = db.scalars(select(WorkflowTemplateStep).where(WorkflowTemplateStep.workflow_template_id == template.id, WorkflowTemplateStep.is_active == True).order_by(WorkflowTemplateStep.sort_order)).all()
     return {"steps": [{"order": step.sort_order, "name_ar": step.step_name_ar, "name_en": step.step_name_en, "type": step.step_type, "sla_hours": step.sla_hours} for step in steps]}

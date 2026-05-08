@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Activity,
   AlertTriangle,
@@ -8,7 +8,6 @@ import {
   ClipboardCheck,
   Copy,
   Eye,
-  FileText,
   KeyRound,
   Lock,
   PlayCircle,
@@ -28,7 +27,6 @@ const aiTabs = [
   ["provider", "مزود النموذج", KeyRound],
   ["permissions", "صلاحيات الاستخدام", ShieldCheck],
   ["privacy", "الخصوصية وحماية البيانات", Lock],
-  ["templates", "قوالب الأوامر", FileText],
   ["messaging", "إعدادات المراسلات", Sparkles],
   ["usage", "المراقبة والاستخدام", BarChart3],
   ["audit", "السجلات", ClipboardCheck],
@@ -86,9 +84,8 @@ export default function AIControlCenter({ notify }) {
   const [currentUser, setCurrentUser] = useState(null);
   const [settings, setSettings] = useState(defaultSettings);
   const [features, setFeatures] = useState({ features: [], items: [] });
-  const [templates, setTemplates] = useState([]);
-  const [selectedTemplateId, setSelectedTemplateId] = useState(null);
   const [usage, setUsage] = useState({ logs: [], top_users: [] });
+  const [usageLogPreview, setUsageLogPreview] = useState(null);
   const [health, setHealth] = useState(null);
   const [auditLogs, setAuditLogs] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -102,20 +99,15 @@ export default function AIControlCenter({ notify }) {
   });
 
   const isSuperAdmin = currentUser?.role === "super_admin";
-  const selectedTemplate = useMemo(
-    () => templates.find((item) => item.id === selectedTemplateId) || templates[0] || null,
-    [templates, selectedTemplateId]
-  );
 
   async function load() {
     setLoading(true);
     setError("");
     try {
-      const [userRes, settingsRes, featuresRes, templatesRes, usageRes, healthRes, auditRes] = await Promise.all([
+      const [userRes, settingsRes, featuresRes, usageRes, healthRes, auditRes] = await Promise.all([
         api.get("/auth/me"),
         api.get("/settings/ai"),
         api.get("/settings/ai/features"),
-        api.get("/settings/ai/prompt-templates"),
         api.get("/settings/ai/usage-logs"),
         api.get("/settings/ai/health"),
         api.get("/settings/ai/audit-logs")
@@ -123,8 +115,6 @@ export default function AIControlCenter({ notify }) {
       setCurrentUser(userRes.data);
       setSettings(mergeSettings(settingsRes.data));
       setFeatures(featuresRes.data || { features: [], items: [] });
-      setTemplates(templatesRes.data || []);
-      setSelectedTemplateId((templatesRes.data || [])[0]?.id || null);
       setUsage(usageRes.data || { logs: [], top_users: [] });
       setHealth(healthRes.data || null);
       setAuditLogs(auditRes.data || []);
@@ -202,63 +192,6 @@ export default function AIControlCenter({ notify }) {
     }
   }
 
-  function updateTemplate(field, value) {
-    if (!selectedTemplate) return;
-    setTemplates((current) => current.map((item) => (item.id === selectedTemplate.id ? { ...item, [field]: value } : item)));
-  }
-
-  function addTemplate() {
-    const tempId = `new-${Date.now()}`;
-    const next = {
-      id: tempId,
-      code: `custom_${Date.now()}`,
-      name_ar: "قالب جديد",
-      description: "",
-      prompt_text: "اكتب النص المطلوب بناءً على البيانات التالية:\n{text}",
-      version_number: 1,
-      is_active: true,
-      isNew: true
-    };
-    setTemplates((current) => [next, ...current]);
-    setSelectedTemplateId(tempId);
-  }
-
-  async function saveTemplate() {
-    if (!selectedTemplate) return;
-    setSaving(true);
-    try {
-      const payload = {
-        code: selectedTemplate.code,
-        name_ar: selectedTemplate.name_ar,
-        description: selectedTemplate.description || null,
-        prompt_text: selectedTemplate.prompt_text,
-        version_number: Number(selectedTemplate.version_number || 1),
-        is_active: Boolean(selectedTemplate.is_active)
-      };
-      const { data } = selectedTemplate.isNew
-        ? await api.post("/settings/ai/prompt-templates", payload)
-        : await api.put(`/settings/ai/prompt-templates/${selectedTemplate.id}`, payload);
-      setTemplates((current) => current.map((item) => (item.id === selectedTemplate.id ? data : item)));
-      setSelectedTemplateId(data.id);
-      notify?.("تم حفظ قالب الأمر");
-    } catch (err) {
-      notify?.(getErrorMessage(err), "error");
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function activateTemplate() {
-    if (!selectedTemplate || selectedTemplate.isNew) return;
-    try {
-      const { data } = await api.post(`/settings/ai/prompt-templates/${selectedTemplate.id}/activate`);
-      setTemplates((current) => current.map((item) => (item.id === selectedTemplate.id ? data : item)));
-      notify?.("تم تفعيل القالب");
-    } catch (err) {
-      notify?.(getErrorMessage(err), "error");
-    }
-  }
-
   async function testConnection() {
     await runTest(() => api.post("/settings/ai/test-connection"));
     await load();
@@ -270,11 +203,6 @@ export default function AIControlCenter({ notify }) {
 
   async function testMasking() {
     await runTest(() => api.post("/settings/ai/test-masking", { text: test.maskingText }), (data) => data.output_text);
-  }
-
-  async function testTemplate() {
-    if (!selectedTemplate || selectedTemplate.isNew) return;
-    await runTest(() => api.post(`/settings/ai/prompt-templates/${selectedTemplate.id}/test`, { sample_data: test.prompt }));
   }
 
   async function runTest(requestFactory, getOutput = (data) => data.sample || data.message || "") {
@@ -344,7 +272,7 @@ export default function AIControlCenter({ notify }) {
             <SelectField label="وضع التشغيل" value={settings.mode} disabled={!isSuperAdmin} onChange={(value) => updateSettings("mode", value)} options={[["disabled", "معطل"], ["pilot", "تجريبي"], ["enabled", "مفعل"]]} />
             <SelectField label="اللغة الافتراضية" value={settings.default_language} disabled={!isSuperAdmin} onChange={(value) => updateSettings("default_language", value)} options={[["ar", "العربية"], ["en", "الإنجليزية"]]} />
             <TextField label="اسم المساعد" value={settings.assistant_name} disabled={!isSuperAdmin} onChange={(value) => updateSettings("assistant_name", value)} />
-            <TextField label="الحد الأقصى لطول النص" type="number" value={settings.max_input_chars} disabled={!isSuperAdmin} onChange={(value) => updateSettings("max_input_chars", value)} />
+            <TextField label="الحد الأقصى لطول النص" type="number" min="100" max="50000" value={settings.max_input_chars} disabled={!isSuperAdmin} onChange={(value) => updateSettings("max_input_chars", value)} />
             <TextField label="مهلة الاستجابة بالثواني" type="number" value={settings.timeout_seconds} disabled={!isSuperAdmin} onChange={(value) => updateSettings("timeout_seconds", value)} />
             <label className="space-y-2 text-sm font-bold text-slate-700 md:col-span-2 xl:col-span-4">
               وصف المساعد
@@ -407,43 +335,6 @@ export default function AIControlCenter({ notify }) {
         </SettingsCard>
       )}
 
-      {active === "templates" && (
-        <SettingsCard title="قوالب الأوامر" description="إدارة أوامر النظام التي يستخدمها المساعد عند توليد المسودات والتلخيص.">
-          <div className="grid gap-4 xl:grid-cols-[300px_minmax(0,1fr)]">
-            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-              <button type="button" onClick={addTemplate} disabled={!isSuperAdmin} className="mb-3 h-10 w-full rounded-md border border-bank-200 bg-white text-sm font-bold text-bank-800 hover:bg-bank-50 disabled:opacity-60">إضافة قالب</button>
-              <div className="max-h-[520px] space-y-2 overflow-y-auto">
-                {templates.map((template) => (
-                  <button key={template.id} type="button" onClick={() => setSelectedTemplateId(template.id)} className={`w-full rounded-md border p-3 text-right text-sm ${selectedTemplate?.id === template.id ? "border-bank-300 bg-bank-50" : "border-slate-200 bg-white hover:bg-slate-50"}`}>
-                    <p className="font-black text-slate-950">{template.name_ar}</p>
-                    <p className="mt-1 font-mono text-xs text-slate-500">{template.code}</p>
-                    <p className="mt-2 text-xs text-slate-500">الإصدار {template.version_number} - {template.is_active ? "مفعل" : "غير مفعل"}</p>
-                  </button>
-                ))}
-              </div>
-            </div>
-            {selectedTemplate && (
-              <div className="space-y-3">
-                <div className="grid gap-3 md:grid-cols-2">
-                  <TextField label="Code" value={selectedTemplate.code} disabled={!isSuperAdmin || !selectedTemplate.isNew} onChange={(value) => updateTemplate("code", value)} />
-                  <TextField label="الاسم العربي" value={selectedTemplate.name_ar} disabled={!isSuperAdmin} onChange={(value) => updateTemplate("name_ar", value)} />
-                  <TextField label="رقم الإصدار" type="number" value={selectedTemplate.version_number} disabled={!isSuperAdmin} onChange={(value) => updateTemplate("version_number", value)} />
-                  <Toggle label="القالب مفعل" checked={Boolean(selectedTemplate.is_active)} disabled={!isSuperAdmin} onChange={(value) => updateTemplate("is_active", value)} />
-                </div>
-                <TextArea label="الوصف" value={selectedTemplate.description || ""} disabled={!isSuperAdmin} onChange={(value) => updateTemplate("description", value)} rows={3} />
-                <TextArea label="Prompt Text" value={selectedTemplate.prompt_text} disabled={!isSuperAdmin} onChange={(value) => updateTemplate("prompt_text", value)} rows={12} monospace />
-                <div className="flex flex-wrap gap-3">
-                  <Button type="button" onClick={saveTemplate} disabled={!isSuperAdmin || saving}>حفظ القالب</Button>
-                  <button type="button" onClick={activateTemplate} disabled={!isSuperAdmin || selectedTemplate.isNew} className="h-10 rounded-md border border-slate-300 bg-white px-4 text-sm font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-60">تفعيل القالب</button>
-                  <button type="button" onClick={testTemplate} disabled={!isSuperAdmin || selectedTemplate.isNew || test.loading} className="h-10 rounded-md border border-bank-200 bg-bank-50 px-4 text-sm font-bold text-bank-800 hover:bg-bank-100 disabled:opacity-60">اختبار القالب</button>
-                </div>
-                <TestOutput output={test.output} loading={test.loading} />
-              </div>
-            )}
-          </div>
-        </SettingsCard>
-      )}
-
       {active === "messaging" && (
         <SettingsCard title="إعدادات المراسلات" description="حدد أماكن ظهور أدوات الذكاء الاصطناعي داخل نظام المراسلات.">
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
@@ -462,7 +353,7 @@ export default function AIControlCenter({ notify }) {
       )}
 
       {active === "usage" && (
-        <SettingsCard title="المراقبة والاستخدام" description="مؤشرات استخدام المساعد الذكي دون عرض النصوص الكاملة للمطالبات.">
+        <SettingsCard title="المراقبة والاستخدام" description="مؤشرات استخدام المساعد الذكي. يظهر النص الكامل فقط للسجلات التي أُنشئت بعد تفعيل خيار حفظ النص الكامل.">
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
             <Metric label="استخدام اليوم" value={usage.usage_today || 0} />
             <Metric label="آخر 7 أيام" value={usage.usage_last_7_days || 0} />
@@ -472,7 +363,7 @@ export default function AIControlCenter({ notify }) {
             <Metric label="حالة النموذج" value={healthLabel(usage.model_status)} />
           </div>
           <SimpleTable
-            headers={["المستخدم", "الخاصية", "التاريخ", "زمن الاستجابة", "الحالة", "الإدخال", "الإخراج"]}
+            headers={["المستخدم", "الخاصية", "التاريخ", "زمن الاستجابة", "الحالة", "الإدخال", "الإخراج", "النص الكامل"]}
             rows={(usage.logs || []).map((log) => [
               log.user_name || log.user_id || "-",
               featureLabel(log.feature_code || log.feature),
@@ -480,9 +371,22 @@ export default function AIControlCenter({ notify }) {
               `${log.latency_ms || 0} ms`,
               log.status === "success" ? "ناجح" : `فشل${log.error_message ? ` - ${log.error_message}` : ""}`,
               log.input_length,
-              log.output_length
+              log.output_length,
+              log.prompt_text || log.output_text ? (
+                <button
+                  type="button"
+                  onClick={() => setUsageLogPreview(log)}
+                  className="inline-flex h-8 items-center gap-2 rounded-md border border-bank-200 bg-bank-50 px-3 text-xs font-black text-bank-800 hover:bg-bank-100"
+                >
+                  <Eye className="h-3.5 w-3.5" />
+                  عرض
+                </button>
+              ) : (
+                <span className="text-xs text-slate-400">غير محفوظ</span>
+              )
             ])}
           />
+          {usageLogPreview && <UsageLogPreviewModal log={usageLogPreview} onClose={() => setUsageLogPreview(null)} />}
         </SettingsCard>
       )}
 
@@ -545,11 +449,11 @@ function Toggle({ label, checked, onChange, disabled = false }) {
   );
 }
 
-function TextField({ label, value, onChange, disabled = false, type = "text", placeholder = "" }) {
+function TextField({ label, value, onChange, disabled = false, type = "text", placeholder = "", min, max }) {
   return (
     <label className="space-y-2 text-sm font-bold text-slate-700">
       {label}
-      <Input type={type} disabled={disabled} value={value ?? ""} placeholder={placeholder} onChange={(event) => onChange?.(event.target.value)} />
+      <Input type={type} min={min} max={max} disabled={disabled} value={value ?? ""} placeholder={placeholder} onChange={(event) => onChange?.(event.target.value)} />
     </label>
   );
 }
@@ -689,6 +593,66 @@ function TestOutput({ output, loading }) {
         </button>
       </div>
       <pre className="whitespace-pre-wrap rounded-md bg-white p-3 text-right text-sm leading-7 text-slate-700" dir="rtl">{output}</pre>
+    </div>
+  );
+}
+
+function UsageLogPreviewModal({ log, onClose }) {
+  const promptText = log?.prompt_text || "";
+  const outputText = log?.output_text || "";
+  const combinedText = [
+    promptText ? `النص المرسل للنموذج:\n${promptText}` : "",
+    outputText ? `\nالنص الناتج من النموذج:\n${outputText}` : ""
+  ].filter(Boolean).join("\n\n");
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4" dir="rtl">
+      <div className="max-h-[88vh] w-full max-w-5xl overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 p-4">
+          <div>
+            <p className="text-lg font-black text-slate-950">النص الكامل لسجل الذكاء الاصطناعي</p>
+            <p className="mt-1 text-xs text-slate-500">
+              {featureLabel(log.feature_code || log.feature)} - {formatSystemDateTime(log.created_at)}
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => navigator.clipboard?.writeText(combinedText)}
+              className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-xs font-bold text-slate-700 hover:bg-slate-50"
+            >
+              <Copy className="h-4 w-4" />
+              نسخ
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              className="h-9 rounded-md border border-slate-200 bg-slate-50 px-4 text-xs font-bold text-slate-700 hover:bg-slate-100"
+            >
+              إغلاق
+            </button>
+          </div>
+        </div>
+        <div className="max-h-[70vh] space-y-4 overflow-y-auto p-4">
+          {promptText && (
+            <div>
+              <p className="mb-2 text-sm font-black text-slate-950">النص المرسل للنموذج</p>
+              <pre className="whitespace-pre-wrap rounded-lg border border-slate-200 bg-slate-50 p-4 text-right text-sm leading-7 text-slate-700">{promptText}</pre>
+            </div>
+          )}
+          {outputText && (
+            <div>
+              <p className="mb-2 text-sm font-black text-slate-950">النص الناتج من النموذج</p>
+              <pre className="whitespace-pre-wrap rounded-lg border border-bank-100 bg-bank-50/60 p-4 text-right text-sm leading-7 text-slate-700">{outputText}</pre>
+            </div>
+          )}
+          {!promptText && !outputText && (
+            <div className="rounded-md border border-dashed border-slate-200 bg-slate-50 p-5 text-center text-sm text-slate-500">
+              لا يوجد نص كامل محفوظ لهذا السجل.
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

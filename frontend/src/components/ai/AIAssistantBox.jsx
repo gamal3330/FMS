@@ -8,6 +8,7 @@ export default function AIAssistantBox({ body = "", relatedRequestId = "", reque
   const [instruction, setInstruction] = useState("");
   const [loadingAction, setLoadingAction] = useState("");
   const [error, setError] = useState("");
+  const [errorAction, setErrorAction] = useState("");
   const [suggestion, setSuggestion] = useState(null);
   const [lastAction, setLastAction] = useState(null);
 
@@ -17,11 +18,35 @@ export default function AIAssistantBox({ body = "", relatedRequestId = "", reque
       .catch(() => setStatus({ is_enabled: false, allow_message_drafting: false }));
   }, []);
 
+  useEffect(() => {
+    setError("");
+    setErrorAction("");
+  }, [instruction, body]);
+
   const isEnabled = Boolean(status?.is_enabled && status?.allow_message_drafting && status?.show_in_compose_message !== false);
   if (!isEnabled) return null;
 
+  const maxInputChars = Number(status?.max_input_chars || 6000);
+  const instructionLength = plainTextLength(instruction);
+  const bodyLength = plainTextLength(body);
+  const isInstructionTooLong = instructionLength > maxInputChars;
+  const isBodyTooLong = bodyLength > maxInputChars;
+  const hasBodyText = bodyLength > 0;
+
+  function lengthError(action) {
+    const usedLength = action === "draft" ? instructionLength : bodyLength;
+    if (usedLength <= maxInputChars) return "";
+    return `النص يتجاوز الحد الأقصى للمساعد الذكي (${maxInputChars.toLocaleString("ar")} حرف). اختصر النص أو ارفع الحد من إعدادات الذكاء الاصطناعي.`;
+  }
+
   async function run(action) {
     setError("");
+    setErrorAction(action);
+    const tooLongMessage = lengthError(action);
+    if (tooLongMessage) {
+      setError(tooLongMessage);
+      return;
+    }
     setLoadingAction(action);
     setLastAction(action);
     try {
@@ -48,6 +73,7 @@ export default function AIAssistantBox({ body = "", relatedRequestId = "", reque
       }
     } catch (err) {
       setError(readError(err));
+      setErrorAction(action);
     } finally {
       setLoadingAction("");
     }
@@ -61,6 +87,13 @@ export default function AIAssistantBox({ body = "", relatedRequestId = "", reque
     }
     if (suggestion.body) onUseBody?.(suggestion.body);
   }
+
+  const visibleError = shouldShowError(error, errorAction, {
+    isInstructionTooLong,
+    isBodyTooLong,
+    instructionLength,
+    maxInputChars,
+  }) ? error : "";
 
   return (
     <div className="rounded-lg border border-bank-100 bg-white p-4 shadow-sm" dir="rtl">
@@ -82,30 +115,50 @@ export default function AIAssistantBox({ body = "", relatedRequestId = "", reque
           onChange={(event) => setInstruction(event.target.value)}
           disabled={!isEnabled}
           placeholder="اكتب ما تريد من المساعد الذكي، مثل: اكتب رسالة طلب استيضاح بخصوص هذا الطلب"
-          className="h-11 w-full rounded-md border border-slate-200 bg-white px-3 text-sm outline-none focus:border-bank-600 focus:ring-2 focus:ring-bank-100 disabled:bg-slate-50 disabled:text-slate-400"
+          className={`h-11 w-full rounded-md border bg-white px-3 text-sm outline-none focus:ring-2 disabled:bg-slate-50 disabled:text-slate-400 ${isInstructionTooLong ? "border-red-300 focus:border-red-500 focus:ring-red-100" : "border-slate-200 focus:border-bank-600 focus:ring-bank-100"}`}
         />
         <button
           type="button"
           onClick={() => run("draft")}
-          disabled={!isEnabled || !instruction.trim() || Boolean(loadingAction)}
+          disabled={!isEnabled || !instruction.trim() || isInstructionTooLong || Boolean(loadingAction)}
           className="inline-flex h-11 items-center justify-center gap-2 rounded-md bg-bank-700 px-4 text-sm font-bold text-white hover:bg-bank-800 disabled:cursor-not-allowed disabled:opacity-60"
         >
           <Sparkles className="h-4 w-4" />
           {loadingAction === "draft" ? "جاري التوليد..." : "توليد مسودة"}
         </button>
       </div>
+      <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-[11px]">
+        <span className={isInstructionTooLong ? "font-bold text-red-600" : "text-slate-400"}>
+          تعليمات المساعد: {formatCount(instructionLength)} من {formatCount(maxInputChars)} حرف
+        </span>
+        {hasBodyText && (
+          <span className={isBodyTooLong ? "font-bold text-red-600" : "text-slate-400"}>
+            نص الرسالة: {formatCount(bodyLength)} من {formatCount(maxInputChars)} حرف
+          </span>
+        )}
+      </div>
+      {isInstructionTooLong && (
+        <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-xs font-bold leading-6 text-amber-800">
+          تعليمات التوليد أطول من الحد المسموح. اختصر التعليمات أو ارفع الحد من إعدادات الذكاء الاصطناعي.
+        </div>
+      )}
+      {!isInstructionTooLong && isBodyTooLong && (
+        <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-xs font-bold leading-6 text-amber-800">
+          نص الرسالة أطول من الحد المسموح، لذلك تم تعطيل أدوات تحسين النص فقط. ما زال بإمكانك توليد مسودة من التعليمات أعلاه.
+        </div>
+      )}
 
       <div className="mt-3 flex flex-wrap gap-2">
-        <AIActionButton label="تحسين الصياغة" action="improve" current={loadingAction} disabled={!isEnabled || !body} onClick={run} />
-        <AIActionButton label="جعلها رسمية" action="formalize" current={loadingAction} disabled={!isEnabled || !body} onClick={run} />
-        <AIActionButton label="اختصار النص" action="shorten" current={loadingAction} disabled={!isEnabled || !body} onClick={run} />
-        <AIActionButton label="فحص المعلومات الناقصة" action="missing" current={loadingAction} disabled={!isEnabled || !body} onClick={run} icon={FileSearch} />
+        <AIActionButton label="تحسين الصياغة" action="improve" current={loadingAction} disabled={!isEnabled || !hasBodyText || isBodyTooLong} onClick={run} />
+        <AIActionButton label="جعلها رسمية" action="formalize" current={loadingAction} disabled={!isEnabled || !hasBodyText || isBodyTooLong} onClick={run} />
+        <AIActionButton label="اختصار النص" action="shorten" current={loadingAction} disabled={!isEnabled || !hasBodyText || isBodyTooLong} onClick={run} />
+        <AIActionButton label="فحص المعلومات الناقصة" action="missing" current={loadingAction} disabled={!isEnabled || !hasBodyText || isBodyTooLong} onClick={run} icon={FileSearch} />
       </div>
 
-      {error && <div className="mt-3 rounded-md border border-red-100 bg-red-50 p-3 text-sm text-red-700">{error}</div>}
+      {visibleError && <div className="mt-3 rounded-md border border-red-100 bg-red-50 p-3 text-sm text-red-700">{visibleError}</div>}
       <div className="mt-3">
         <AISuggestionPanel
-          title={suggestion?.type === "missing" ? "معلومات قد تكون ناقصة" : "اقتراح المساعد الذكي"}
+          title={suggestion?.type === "missing" ? "معلومات قد تكون ناقصة" : suggestion?.title || "اقتراح المساعد الذكي"}
           subject={suggestion?.subject || ""}
           body={suggestion?.body || ""}
           items={suggestion?.items || []}
@@ -116,6 +169,31 @@ export default function AIAssistantBox({ body = "", relatedRequestId = "", reque
       </div>
     </div>
   );
+}
+
+function plainTextLength(value) {
+  return String(value || "")
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/\s+/g, " ")
+    .trim().length;
+}
+
+function formatCount(value) {
+  return Number(value || 0).toLocaleString("ar");
+}
+
+function shouldShowError(error, action, context) {
+  if (!error) return false;
+  const isLengthError = error.includes("الحد الأقصى للمساعد الذكي") || error.includes("أطول من الحد");
+  if (!isLengthError) return true;
+  if (action === "draft") {
+    return context.isInstructionTooLong || context.instructionLength > context.maxInputChars;
+  }
+  if (["improve", "formalize", "shorten", "missing"].includes(action)) {
+    return context.isBodyTooLong;
+  }
+  return false;
 }
 
 function AIActionButton({ label, action, current, disabled, onClick, icon: Icon = Sparkles }) {
