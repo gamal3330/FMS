@@ -1,7 +1,21 @@
 from app.models.audit import AuditLog
-from app.models.ai import AISettings, AIPromptTemplate, AIUsageLog
+from app.models.ai import AIFeaturePermission, AIFeedback, AIHealthCheck, AISettings, AIPromptTemplate, AIUsageLog
+from app.models.database import DatabaseBackup, DatabaseBackupSettings, DatabaseJob, DatabaseMaintenanceLog, DatabaseRestoreJob
 from app.models.health import SystemAlert, SystemHealthCheck
 from app.models.message import InternalMessage, InternalMessageAttachment, InternalMessageRecipient
+from app.models.messaging_settings import (
+    MessageAISettings,
+    MessageAttachmentSettings,
+    MessageAutoRule,
+    MessageClassification,
+    MessageNotificationSettings,
+    MessageRequestIntegrationSettings,
+    MessageRetentionPolicy,
+    MessageSecurityPolicy,
+    MessageTemplate,
+    MessageType,
+    MessagingSettings,
+)
 from app.models.notification import Notification
 from app.models.request import ApprovalStep, Attachment, RequestApprovalStep, RequestComment, ServiceRequest
 from app.models.settings import (
@@ -22,14 +36,38 @@ from app.models.settings import (
     WorkflowTemplate,
     WorkflowTemplateStep,
 )
-from app.models.update import AppliedMigration, SystemVersion, UpdateHistory
-from app.models.user import Department, Role, User
+from app.models.update import AppliedMigration, RollbackPoint, SystemVersion, UpdateHistory, UpdateJob, UpdateLog, UpdatePackage, UpdateSettings
+from app.models.user import (
+    AccessReview,
+    AccessReviewItem,
+    ActionPermission,
+    Department,
+    Role,
+    ScreenPermission,
+    User,
+    UserDelegation,
+    UserImportBatch,
+    UserImportError,
+    UserLoginAttempt,
+    UserSession,
+)
 
 __all__ = [
     "AuditLog",
+    "AccessReview",
+    "AccessReviewItem",
+    "ActionPermission",
     "AISettings",
+    "AIFeaturePermission",
+    "AIFeedback",
+    "AIHealthCheck",
     "AIPromptTemplate",
     "AIUsageLog",
+    "DatabaseBackup",
+    "DatabaseBackupSettings",
+    "DatabaseJob",
+    "DatabaseMaintenanceLog",
+    "DatabaseRestoreJob",
     "ApprovalStep",
     "AppliedMigration",
     "Attachment",
@@ -38,6 +76,17 @@ __all__ = [
     "InternalMessage",
     "InternalMessageAttachment",
     "InternalMessageRecipient",
+    "MessageAISettings",
+    "MessageAttachmentSettings",
+    "MessageAutoRule",
+    "MessageClassification",
+    "MessageNotificationSettings",
+    "MessageRequestIntegrationSettings",
+    "MessageRetentionPolicy",
+    "MessageSecurityPolicy",
+    "MessageTemplate",
+    "MessageType",
+    "MessagingSettings",
     "Notification",
     "PortalSetting",
     "SettingsGeneral",
@@ -47,7 +96,9 @@ __all__ = [
     "RequestTypeConfig",
     "RequestTypeField",
     "RequestTypeSetting",
+    "RollbackPoint",
     "Role",
+    "ScreenPermission",
     "SecurityPolicy",
     "SettingsDepartment",
     "SpecializedSection",
@@ -58,7 +109,16 @@ __all__ = [
     "SlaConfig",
     "SlaRule",
     "UpdateHistory",
+    "UpdateJob",
+    "UpdateLog",
+    "UpdatePackage",
+    "UpdateSettings",
     "User",
+    "UserDelegation",
+    "UserImportBatch",
+    "UserImportError",
+    "UserLoginAttempt",
+    "UserSession",
     "WorkflowApprovalConfig",
     "WorkflowStep",
     "WorkflowTemplate",

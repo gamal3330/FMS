@@ -31,6 +31,7 @@ from app.services.pdf_template import (
     pdf_theme,
 )
 from app.services.request_notifications import create_request_workflow_message
+from app.services.messaging_settings_service import should_send_request_created_notification
 from app.services.workflow import (
     IMPLEMENTATION_STEP_ROLES,
     advance_workflow,
@@ -711,7 +712,7 @@ def create_request(payload: ServiceRequestCreate, db: Session = Depends(get_db),
         service_request.status = RequestStatus.PENDING_APPROVAL
     else:
         create_approval_steps(db, service_request)
-    if payload.send_notification:
+    if should_send_request_created_notification(db, payload.send_notification):
         create_request_created_message(db, service_request, current_user)
     write_audit(db, "request_created", "service_request", actor=current_user, entity_id=str(service_request.id))
     db.commit()

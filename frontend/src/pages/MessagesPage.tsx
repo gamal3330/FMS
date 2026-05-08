@@ -138,6 +138,11 @@ type AIStatus = {
   allow_message_drafting: boolean;
   allow_summarization: boolean;
   allow_reply_suggestion: boolean;
+  allow_message_improvement?: boolean;
+  allow_missing_info_detection?: boolean;
+  show_in_compose_message?: boolean;
+  show_in_message_details?: boolean;
+  show_in_request_messages_tab?: boolean;
 };
 
 type Mailbox = "inbox" | "sent" | "drafts" | "archived" | "compose";
@@ -222,7 +227,7 @@ export default function MessagesPage() {
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const queryComposeInitialized = useRef(false);
 
-  const selected = useMemo(() => messages.find((message) => message.id === selectedId) || messages[0] || null, [messages, selectedId]);
+  const selected = useMemo(() => messages.find((message) => message.id === selectedId) || null, [messages, selectedId]);
   const unreadCount = messages.filter((message) => !message.is_read).length;
   const inboxStyleGroups = useMemo(() => {
     if (mailbox !== "inbox") return null;
@@ -249,9 +254,9 @@ export default function MessagesPage() {
     () => messageTypeOptions.filter((option) => option.value !== "circular" || messageCapabilities.can_send_circular),
     [messageTypeOptions, messageCapabilities.can_send_circular]
   );
-  const canUseAiDrafting = Boolean(aiStatus.is_enabled && aiStatus.allow_message_drafting);
-  const canUseAiSummaries = Boolean(aiStatus.is_enabled && aiStatus.allow_summarization);
-  const canUseAiReplies = Boolean(aiStatus.is_enabled && aiStatus.allow_reply_suggestion);
+  const canUseAiDrafting = Boolean(aiStatus.is_enabled && aiStatus.allow_message_drafting && aiStatus.show_in_compose_message !== false);
+  const canUseAiSummaries = Boolean(aiStatus.is_enabled && aiStatus.allow_summarization && aiStatus.show_in_message_details !== false);
+  const canUseAiReplies = Boolean(aiStatus.is_enabled && aiStatus.allow_reply_suggestion && aiStatus.show_in_message_details !== false);
 
   async function loadUsers() {
     setIsUsersLoading(true);
@@ -288,8 +293,12 @@ export default function MessagesPage() {
       if (mode === "append") {
         setMessages((current) => [...current, ...data]);
       } else {
+        const shouldAutoSelect = nextMailbox !== "inbox" && !(nextMailbox === "archived" && archiveView === "inbox");
         setMessages(data);
-        setSelectedId(data[0]?.id ?? null);
+        setSelectedId((current) => {
+          if (current && data.some((message) => message.id === current)) return current;
+          return shouldAutoSelect ? data[0]?.id ?? null : null;
+        });
         setSelectedIds([]);
       }
     } catch {

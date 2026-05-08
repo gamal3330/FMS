@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Request, status
 from fastapi.exceptions import HTTPException
@@ -10,7 +11,7 @@ from app.api.deps import get_current_user
 from app.core.security import create_access_token, get_password_hash, verify_password
 from app.db.session import get_db
 from app.models.settings import SecurityPolicy, SettingsGeneral
-from app.models.user import User
+from app.models.user import User, UserLoginAttempt, UserSession
 from app.schemas.auth import ChangePasswordRequest, LoginRequest, TokenResponse
 from app.schemas.user import UserRead
 from app.services.audit import write_audit
@@ -85,6 +86,28 @@ def request_user_agent(request: Request) -> str | None:
     return value[:255] if value else None
 
 
+def record_login_attempt(
+    db: Session,
+    *,
+    identifier: str,
+    user: User | None,
+    ip_address: str | None,
+    user_agent: str | None,
+    success: bool,
+    failure_reason: str | None = None,
+) -> None:
+    db.add(
+        UserLoginAttempt(
+            email_or_username=identifier,
+            user_id=user.id if user else None,
+            ip_address=ip_address,
+            user_agent=user_agent,
+            success=success,
+            failure_reason=failure_reason,
+        )
+    )
+
+
 @router.post("/login", response_model=TokenResponse)
 def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)) -> TokenResponse:
     policy = get_singleton(db, SecurityPolicy)
@@ -96,16 +119,19 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
     invalid_login_message = login_identifier_error(policy)
 
     if user and not user.is_active:
+        record_login_attempt(db, identifier=identifier, user=user, ip_address=ip_address, user_agent=user_agent, success=False, failure_reason="inactive_account")
         write_audit(db, "login_blocked", "user", actor=user, entity_id=str(user.id), metadata={"identifier": identifier}, ip_address=ip_address, user_agent=user_agent)
         db.commit()
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="الحساب غير نشط. يرجى التواصل مع مدير النظام")
 
-    if user and is_locked(user):
+    if user and (user.is_locked or is_locked(user)):
+        record_login_attempt(db, identifier=identifier, user=user, ip_address=ip_address, user_agent=user_agent, success=False, failure_reason="locked_account")
         write_audit(db, "login_blocked_locked", "user", actor=user, entity_id=str(user.id), metadata={"identifier": identifier}, ip_address=ip_address, user_agent=user_agent)
         db.commit()
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="تم قفل الحساب مؤقتاً بسبب تجاوز عدد محاولات الدخول الفاشلة")
 
     if not user:
+        record_login_attempt(db, identifier=identifier, user=None, ip_address=ip_address, user_agent=user_agent, success=False, failure_reason="user_not_found")
         write_audit(db, "login_failed", "user", metadata={"identifier": identifier}, ip_address=ip_address, user_agent=user_agent)
         db.commit()
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=invalid_login_message)
@@ -114,6 +140,8 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
         user.failed_login_attempts = (user.failed_login_attempts or 0) + 1
         if user.failed_login_attempts >= policy.lock_after_failed_attempts:
             user.locked_until = datetime.now(timezone.utc) + timedelta(minutes=30)
+            user.is_locked = True
+            record_login_attempt(db, identifier=identifier, user=user, ip_address=ip_address, user_agent=user_agent, success=False, failure_reason="locked_after_failures")
             write_audit(
                 db,
                 "login_locked_after_failures",
@@ -128,6 +156,7 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="تم قفل الحساب مؤقتاً بسبب تجاوز عدد محاولات الدخول الفاشلة")
 
         remaining = max(policy.lock_after_failed_attempts - user.failed_login_attempts, 0)
+        record_login_attempt(db, identifier=identifier, user=user, ip_address=ip_address, user_agent=user_agent, success=False, failure_reason="invalid_password")
         write_audit(
             db,
             "login_failed",
@@ -142,13 +171,19 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=f"{invalid_login_message}. المحاولات المتبقية: {remaining}")
 
     if password_expired(user, policy):
+        record_login_attempt(db, identifier=identifier, user=user, ip_address=ip_address, user_agent=user_agent, success=False, failure_reason="password_expired")
         write_audit(db, "login_password_expired", "user", actor=user, entity_id=str(user.id), metadata={"identifier": identifier}, ip_address=ip_address, user_agent=user_agent)
         db.commit()
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="انتهت صلاحية كلمة المرور. يرجى تغيير كلمة المرور")
 
     user.failed_login_attempts = 0
     user.locked_until = None
-    token = create_access_token(str(user.id), {"role": user.role, "email": user.email}, expires_minutes=general.session_timeout_minutes)
+    user.is_locked = False
+    user.last_login_at = datetime.now(timezone.utc)
+    token_id = uuid4().hex
+    token = create_access_token(str(user.id), {"role": user.role, "email": user.email, "jti": token_id}, expires_minutes=general.session_timeout_minutes)
+    db.add(UserSession(user_id=user.id, token_id=token_id, ip_address=ip_address, user_agent=user_agent, last_activity_at=datetime.now(timezone.utc), is_active=True))
+    record_login_attempt(db, identifier=identifier, user=user, ip_address=ip_address, user_agent=user_agent, success=True)
     write_audit(db, "login_success", "user", actor=user, entity_id=str(user.id), metadata={"identifier": identifier}, ip_address=ip_address, user_agent=user_agent)
     db.commit()
     return TokenResponse(access_token=token)
@@ -162,6 +197,22 @@ def me(current_user: User = Depends(get_current_user)) -> User:
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
 def logout(request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     ip_address = request.client.host if request.client else None
+    user_agent = request_user_agent(request)
+    session = db.scalar(
+        select(UserSession)
+        .where(
+            UserSession.user_id == current_user.id,
+            UserSession.ip_address == ip_address,
+            UserSession.user_agent == user_agent,
+            UserSession.is_active == True,
+            UserSession.revoked_at.is_(None),
+        )
+        .order_by(UserSession.login_at.desc())
+        .limit(1)
+    )
+    if session:
+        session.is_active = False
+        session.revoked_at = datetime.now(timezone.utc)
     write_audit(db, "logout", "user", actor=current_user, entity_id=str(current_user.id), ip_address=ip_address, user_agent=request_user_agent(request))
     db.commit()
 

@@ -23,15 +23,26 @@ class UserRead(BaseModel):
     full_name_en: str
     email: EmailStr
     mobile: str | None = None
+    job_title: str | None = None
     role: UserRole
+    role_id: int | None = None
     administrative_section: str | None = None
+    specialized_section_id: int | None = None
+    relationship_type: str | None = None
     department_id: int | None = None
     manager_id: int | None = None
     department: DepartmentRead | None = None
     failed_login_attempts: int = 0
     locked_until: datetime | None = None
+    password_expires_at: datetime | None = None
+    last_login_at: datetime | None = None
+    is_locked: bool = False
+    force_password_change: bool = False
+    allowed_login_from_ip: str | None = None
+    notes: str | None = None
     is_active: bool
     created_at: datetime
+    updated_at: datetime | None = None
 
     model_config = {"from_attributes": True}
 
@@ -48,6 +59,14 @@ class UserCreate(BaseModel):
     department_id: int | None = None
     manager_id: int | None = None
     mobile: str | None = None
+    job_title: str | None = None
+    relationship_type: str | None = "employee"
+    role_id: int | None = None
+    specialized_section_id: int | None = None
+    force_password_change: bool = True
+    password_expires_at: datetime | None = None
+    allowed_login_from_ip: str | None = None
+    notes: str | None = None
 
 
 class UserUpdate(BaseModel):
@@ -61,8 +80,17 @@ class UserUpdate(BaseModel):
     department_id: int | None = None
     manager_id: int | None = None
     mobile: str | None = None
+    job_title: str | None = None
+    relationship_type: str | None = "employee"
+    role_id: int | None = None
+    specialized_section_id: int | None = None
+    force_password_change: bool = False
+    password_expires_at: datetime | None = None
+    allowed_login_from_ip: str | None = None
+    notes: str | None = None
     is_active: bool = True
 
 
 class PasswordReset(BaseModel):
     password: str
+    admin_password: str | None = None

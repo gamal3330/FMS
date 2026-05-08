@@ -1,4 +1,4 @@
-import { Activity, BarChart3, Bell, BellRing, Building2, FileText, KeyRound, LayoutDashboard, LogOut, Mail, Moon, Network, PanelRightClose, PanelRightOpen, ScrollText, Settings, ShieldCheck, Sun, UserCircle, Users, X } from "lucide-react";
+import { Activity, BarChart3, Bell, BellRing, Building2, Database, FileText, KeyRound, LayoutDashboard, LogOut, Mail, Moon, Network, PackageCheck, PanelRightClose, PanelRightOpen, ScrollText, Settings, ShieldCheck, Sparkles, Sun, UploadCloud, UserCircle, Users, X } from "lucide-react";
 import { ReactNode, useEffect, useRef, useState } from "react";
 import { NavLink } from "react-router-dom";
 import { API_BASE, apiFetch, CurrentUser, ServiceRequest } from "../lib/api";
@@ -67,10 +67,15 @@ export function Layout({
     ? [
         ...visibleBaseNav,
         { label: "إدارة أنواع الطلبات", href: "/request-types", icon: ScrollText, screenKey: "request_types" },
-        { label: "المستخدمون والصلاحيات", href: "/users", icon: Users, screenKey: "users" },
+        { label: "المستخدمون والصلاحيات", href: "/settings/users-permissions", icon: Users, screenKey: "users" },
         { label: "الإدارات", href: "/departments", icon: Building2, screenKey: "departments" },
         { label: "الأقسام المختصة", href: "/specialized-sections", icon: Network, screenKey: "specialized_sections" },
         { label: "مراقبة صحة النظام", href: "/settings/health-monitoring", icon: Activity, screenKey: "health_monitoring" },
+        { label: "إعدادات المراسلات", href: "/settings/messaging", icon: Mail, screenKey: "settings" },
+        { label: "الذكاء الاصطناعي", href: "/settings/ai", icon: Sparkles, screenKey: "settings" },
+        { label: "قاعدة البيانات", href: "/settings/database", icon: Database, screenKey: "settings" },
+        { label: "إدارة التحديثات", href: "/settings/updates", icon: PackageCheck, screenKey: "settings" },
+        { label: "التحديث المحلي", href: "/settings/updates/local", icon: UploadCloud, screenKey: "settings" },
         { label: "الإعدادات", href: "/settings", icon: Settings, screenKey: "settings" }
       ].filter((item) => canSeeScreen(item.screenKey))
     : visibleBaseNav;

@@ -15,7 +15,8 @@ export default function AISummaryBox({ relatedRequestId = "", messageId = 0, tex
       .catch(() => setStatus({ is_enabled: false, allow_summarization: false }));
   }, []);
 
-  const isEnabled = Boolean(status?.is_enabled && status?.allow_summarization);
+  const locationEnabled = relatedRequestId ? status?.show_in_request_messages_tab !== false : status?.show_in_message_details !== false;
+  const isEnabled = Boolean(status?.is_enabled && status?.allow_summarization && locationEnabled);
   if (!isEnabled) return null;
 
   async function summarize() {

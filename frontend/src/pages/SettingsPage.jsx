@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { AlertTriangle, CheckCircle2, Database, Download, FileText, History, LockKeyhole, Mail, PackageCheck, RefreshCw, Settings2, Sparkles, Upload } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Download, FileText, History, LockKeyhole, Mail, PackageCheck, RefreshCw, Settings2, Sparkles, Upload } from "lucide-react";
 import { api, getErrorMessage } from "../lib/axios";
 import { Card } from "../components/ui/card";
 import { Button } from "../components/ui/button";
@@ -11,20 +11,15 @@ import { formatSystemDateTime } from "../lib/datetime";
 const tabs = [
   ["general", "الإعدادات العامة", Settings2],
   ["email", "البريد SMTP", Mail],
-  ["messageTemplates", "إعدادات المراسلات", FileText],
-  ["ai", "الذكاء الاصطناعي", Sparkles],
-  ["security", "إعدادات الأمان", LockKeyhole],
-  ["database", "قاعدة البيانات", Database],
-  ["updates", "إدارة التحديثات", PackageCheck],
-  ["localUpdates", "التحديث المحلي", Upload]
+  ["security", "إعدادات الأمان", LockKeyhole]
 ];
 
 export default function SettingsPage({ initialTab = "general" }) {
-  const [active, setActive] = useState(initialTab);
+  const [active, setActive] = useState(isVisibleSettingsTab(initialTab) ? initialTab : "general");
   const [dialog, setDialog] = useState({ type: "success", message: "" });
 
   useEffect(() => {
-    setActive(initialTab);
+    setActive(isVisibleSettingsTab(initialTab) ? initialTab : "general");
   }, [initialTab]);
 
   function notify(message, type = "success") {
@@ -54,17 +49,16 @@ export default function SettingsPage({ initialTab = "general" }) {
         <Card className="min-w-0 overflow-hidden p-5">
           {active === "general" && <Panel title="الإعدادات العامة"><GeneralSettings notify={notify} /></Panel>}
           {active === "email" && <Panel title="إعدادات البريد SMTP"><EmailSettings notify={notify} /></Panel>}
-          {active === "messageTemplates" && <Panel title="إعدادات المراسلات"><MessageTemplatesSettings notify={notify} /></Panel>}
-          {active === "ai" && <Panel title="الذكاء الاصطناعي"><AISettingsPanel notify={notify} /></Panel>}
           {active === "requestTypes" && <Panel title="أنواع الطلبات"><RequestTypesSettings notify={notify} /></Panel>}
           {active === "security" && <Panel title="إعدادات الأمان"><SecuritySettings notify={notify} /></Panel>}
-          {active === "database" && <Panel title="قاعدة البيانات والنسخ الاحتياطي"><DatabaseSettings notify={notify} /></Panel>}
-          {active === "updates" && <Panel title="إدارة التحديثات"><UpdateManagementSettings notify={notify} /></Panel>}
-          {active === "localUpdates" && <Panel title="التحديث المحلي للنظام"><LocalUpdateSettings notify={notify} /></Panel>}
         </Card>
       </div>
     </section>
   );
+}
+
+function isVisibleSettingsTab(tab) {
+  return tabs.some(([key]) => key === tab);
 }
 
 function Panel({ title, children }) {
@@ -950,202 +944,471 @@ function SecuritySettings({ notify }) {
   </form>;
 }
 
-function DatabaseSettings({ notify }) {
+export function DatabaseSettings({ notify }) {
+  const dbTabs = [
+    ["overview", "نظرة عامة"],
+    ["backups", "النسخ الاحتياطية"],
+    ["restore", "الاستعادة"],
+    ["reset", "إعادة الضبط"],
+    ["maintenance", "الصيانة"],
+    ["tables", "الجداول"],
+    ["activity", "سجل العمليات"],
+    ["settings", "الإعدادات"]
+  ];
+  const backupTypeLabels = { database_only: "قاعدة البيانات فقط", attachments_only: "المرفقات فقط", full_backup: "نسخة كاملة" };
+  const resetScopeLabels = {
+    clear_requests_only: "حذف الطلبات فقط",
+    clear_messages_only: "حذف المراسلات فقط",
+    clear_attachments_only: "حذف المرفقات فقط",
+    clear_users_except_admin: "حذف المستخدمين مع إبقاء مدير النظام",
+    clear_audit_logs: "حذف سجلات التدقيق",
+    reset_demo_data_only: "حذف بيانات التجربة فقط",
+    full_system_reset: "إعادة ضبط كاملة للنظام"
+  };
+  const [activeTab, setActiveTab] = useState("overview");
   const [status, setStatus] = useState(null);
-  const [backupSettings, setBackupSettings] = useState({
-    auto_backup_enabled: false,
-    backup_time: "02:00",
-    retention_count: 7,
-    backup_path: "backups",
-    notify_on_failure: true
-  });
-  const [file, setFile] = useState(null);
-  const [restoreConfirmation, setRestoreConfirmation] = useState("");
+  const [backups, setBackups] = useState([]);
+  const [jobs, setJobs] = useState([]);
+  const [tables, setTables] = useState([]);
+  const [activity, setActivity] = useState([]);
+  const [backupSettings, setBackupSettings] = useState(null);
+  const [backupType, setBackupType] = useState("full_backup");
+  const [restoreFile, setRestoreFile] = useState(null);
+  const [restorePreview, setRestorePreview] = useState(null);
+  const [restoreForm, setRestoreForm] = useState({ admin_password: "", confirmation_text: "", restore_uploads: true });
+  const [resetScope, setResetScope] = useState("clear_requests_only");
+  const [resetPreviewData, setResetPreviewData] = useState(null);
+  const [resetForm, setResetForm] = useState({ admin_password: "", confirmation_text: "", delete_upload_files: false, understand_risk: false });
+  const [maintenanceResult, setMaintenanceResult] = useState(null);
+  const [migrationStatus, setMigrationStatus] = useState(null);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
 
-  async function loadStatus() {
+  async function loadAll() {
     setError("");
     try {
-      setStatus((await api.get("/settings/database/status")).data);
+      const [statusRes, backupsRes, jobsRes, tablesRes, activityRes, settingsRes, migrationRes] = await Promise.all([
+        api.get("/settings/database/status"),
+        api.get("/settings/database/backups"),
+        api.get("/settings/database/jobs"),
+        api.get("/settings/database/tables"),
+        api.get("/settings/database/activity-log"),
+        api.get("/settings/database/backup-settings"),
+        api.get("/settings/database/migrations/status")
+      ]);
+      setStatus(statusRes.data);
+      setBackups(backupsRes.data || []);
+      setJobs(jobsRes.data || []);
+      setTables(tablesRes.data || []);
+      setActivity(activityRes.data || []);
+      setBackupSettings(settingsRes.data);
+      setMigrationStatus(migrationRes.data);
     } catch (error) {
-      notify(getErrorMessage(error), "error");
+      const message = getErrorMessage(error);
+      setError(message);
+      notify(message, "error");
     }
   }
 
-  async function loadBackupSettings() {
-    try {
-      setBackupSettings((await api.get("/settings/database/backup-settings")).data);
-    } catch (error) {
-      notify(getErrorMessage(error), "error");
-    }
-  }
+  useEffect(() => { loadAll(); }, []);
 
-  useEffect(() => {
-    loadStatus();
-    loadBackupSettings();
-  }, []);
-
-  async function saveBackupSettings(event) {
-    event.preventDefault();
-    setBusy("backup-settings");
+  async function runAction(label, action) {
+    setBusy(label);
+    setError("");
     try {
-      const payload = {
-        ...backupSettings,
-        retention_count: Number(backupSettings.retention_count)
-      };
-      setBackupSettings((await api.put("/settings/database/backup-settings", payload)).data);
-      notify("تم حفظ إعدادات النسخ الاحتياطي");
+      await action();
+      await loadAll();
     } catch (error) {
-      notify(getErrorMessage(error), "error");
+      const message = getErrorMessage(error);
+      setError(message);
+      notify(message, "error");
     } finally {
       setBusy("");
     }
   }
 
-  async function downloadBackup() {
-    if (status && status.backup_supported === false) {
-      notify("النسخ الاحتياطي غير مدعوم لنوع قاعدة البيانات الحالي.", "error");
-      return;
-    }
-    setBusy("backup");
-    setError("");
-    try {
-      const response = await api.get("/settings/database/backup", { responseType: "blob" });
-      const disposition = response.headers["content-disposition"] || "";
-      const filename = disposition.match(/filename="?([^"]+)"?/)?.[1] || "qib-database-backup.dump";
+  async function createManualBackup() {
+    await runAction("backup", async () => {
+      await api.post("/settings/database/backup", { backup_type: backupType });
+      notify("تم إنشاء النسخة الاحتياطية");
+    });
+  }
+
+  async function downloadBackup(backup) {
+    await runAction(`download-${backup.id}`, async () => {
+      const response = await api.get(`/settings/database/backups/${backup.id}/download`, { responseType: "blob" });
       const url = URL.createObjectURL(response.data);
       const link = document.createElement("a");
       link.href = url;
-      link.download = filename;
+      link.download = backup.file_name;
       link.click();
       URL.revokeObjectURL(url);
-      notify("تم تجهيز النسخة الاحتياطية للتنزيل");
-      await loadStatus();
-    } catch (error) {
-      notify(getErrorMessage(error), "error");
-    } finally {
-      setBusy("");
-    }
+      notify("تم تنزيل النسخة الاحتياطية");
+    });
   }
 
-  async function restoreBackup(event) {
-    event.preventDefault();
-    if (status && status.restore_supported === false) {
-      notify("الاسترداد المباشر متاح فقط لـ SQLite. لاسترداد PostgreSQL استخدم pg_restore من السيرفر.", "error");
-      return;
-    }
-    if (!file) {
-      notify("اختر ملف النسخة الاحتياطية أولًا.", "error");
-      return;
-    }
-    setBusy("restore");
-    setError("");
-    try {
-      const body = new FormData();
-      body.append("file", file);
-      body.append("confirmation", restoreConfirmation);
-      await api.post("/settings/database/restore", body, { headers: { "Content-Type": "multipart/form-data" } });
-      setFile(null);
-      setRestoreConfirmation("");
-      notify("تم استرداد النسخة الاحتياطية بنجاح");
-      await loadStatus();
-    } catch (error) {
-      notify(getErrorMessage(error), "error");
-    } finally {
-      setBusy("");
-    }
+  async function verifyBackup(backup) {
+    await runAction(`verify-${backup.id}`, async () => {
+      await api.post(`/settings/database/backups/${backup.id}/verify`);
+      notify("تم التحقق من سلامة النسخة");
+    });
   }
+
+  async function deleteBackup(backup) {
+    const admin_password = window.prompt("أدخل كلمة مرور مدير النظام لحذف النسخة الاحتياطية");
+    if (!admin_password) return;
+    const confirmation_text = window.prompt("اكتب DELETE BACKUP للتأكيد");
+    if (confirmation_text !== "DELETE BACKUP") return notify("عبارة التأكيد غير صحيحة", "error");
+    await runAction(`delete-${backup.id}`, async () => {
+      await api.delete(`/settings/database/backups/${backup.id}`, { data: { admin_password, confirmation_text } });
+      notify("تم حذف النسخة الاحتياطية");
+    });
+  }
+
+  async function validateRestore(event) {
+    event.preventDefault();
+    if (!restoreFile) return notify("اختر ملف النسخة أولاً", "error");
+    await runAction("restore-validate", async () => {
+      const body = new FormData();
+      body.append("file", restoreFile);
+      const { data } = await api.post("/settings/database/restore/validate", body, { headers: { "Content-Type": "multipart/form-data" } });
+      setRestorePreview(data);
+      notify("تم التحقق من النسخة. راجع المعاينة قبل التنفيذ.");
+    });
+  }
+
+  async function confirmRestore(event) {
+    event.preventDefault();
+    if (!restorePreview?.restore_token) return notify("يجب التحقق من النسخة قبل الاستعادة", "error");
+    await runAction("restore-confirm", async () => {
+      await api.post("/settings/database/restore/confirm", { restore_token: restorePreview.restore_token, ...restoreForm });
+      notify("تم تنفيذ الاستعادة");
+      setRestoreFile(null);
+      setRestorePreview(null);
+      setRestoreForm({ admin_password: "", confirmation_text: "", restore_uploads: true });
+    });
+  }
+
+  async function loadResetPreview() {
+    await runAction("reset-preview", async () => {
+      const { data } = await api.get(`/settings/database/reset-preview?scope=${encodeURIComponent(resetScope)}`);
+      setResetPreviewData(data);
+    });
+  }
+
+  async function executeReset(event) {
+    event.preventDefault();
+    await runAction("reset", async () => {
+      await api.post("/settings/database/reset", { scope: resetScope, ...resetForm });
+      notify("تم تنفيذ إعادة الضبط");
+      setResetForm({ admin_password: "", confirmation_text: "", delete_upload_files: false, understand_risk: false });
+      setResetPreviewData(null);
+    });
+  }
+
+  async function runMaintenance(path, label) {
+    await runAction(path, async () => {
+      const { data } = await api.post(`/settings/database/${path}`);
+      setMaintenanceResult(data);
+      notify(label);
+    });
+  }
+
+  async function runMigrations() {
+    const admin_password = window.prompt("أدخل كلمة مرور مدير النظام لتشغيل الترحيلات");
+    if (!admin_password) return;
+    const confirmation_text = window.prompt("اكتب RUN MIGRATIONS للتأكيد");
+    if (confirmation_text !== "RUN MIGRATIONS") return notify("عبارة التأكيد غير صحيحة", "error");
+    await runAction("migrations-run", async () => {
+      await api.post("/settings/database/migrations/run", { admin_password, confirmation_text });
+      notify("تم فحص وتشغيل الترحيلات المعلقة");
+    });
+  }
+
+  async function saveBackupSettings(event) {
+    event.preventDefault();
+    await runAction("backup-settings", async () => {
+      const payload = { ...backupSettings, retention_count: Number(backupSettings.retention_count || 7) };
+      const { data } = await api.put("/settings/database/backup-settings", payload);
+      setBackupSettings(data);
+      notify("تم حفظ إعدادات النسخ الاحتياطي");
+    });
+  }
+
+  const latestJob = jobs[0];
 
   return (
-    <div className="space-y-5">
-      <div className="grid gap-3 md:grid-cols-3">
-        <MetricBox label="نوع القاعدة" value={status?.engine || "-"} />
-        <MetricBox label="اسم القاعدة" value={status?.database_name || "-"} />
-        <MetricBox label="الحجم التقريبي" value={formatBytes(status?.size_bytes || 0)} />
-      </div>
-      <div className="grid gap-3 md:grid-cols-2">
-        <MetricBox label="الخادم / المسار" value={status?.database_path || "-"} />
-        <MetricBox label="آخر تحديث" value={formatDateTime(status?.updated_at)} />
+    <div className="space-y-5" dir="rtl">
+      <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <h4 className="text-lg font-black text-slate-950">إدارة قاعدة البيانات</h4>
+            <p className="mt-1 text-sm leading-6 text-slate-500">مركز تحكم آمن للنسخ الاحتياطية، الاستعادة، الصيانة، الجداول، وسجل العمليات.</p>
+          </div>
+          <Button type="button" onClick={loadAll} disabled={Boolean(busy)} className="gap-2 border border-slate-300 bg-white text-slate-700 hover:bg-slate-50">
+            <RefreshCw className="h-4 w-4" /> تحديث
+          </Button>
+        </div>
+        {latestJob && (
+          <div className="mt-4 rounded-md border border-bank-100 bg-bank-50/60 p-3">
+            <div className="mb-2 flex items-center justify-between text-sm font-bold text-slate-700">
+              <span>آخر مهمة: {databaseJobLabel(latestJob.job_type)} - {databaseStatusLabel(latestJob.status)}</span>
+              <span>{latestJob.progress}%</span>
+            </div>
+            <div className="h-2 rounded-full bg-white"><div className="h-2 rounded-full bg-bank-600" style={{ width: `${Math.min(latestJob.progress || 0, 100)}%` }} /></div>
+            {latestJob.message && <p className="mt-2 text-xs text-slate-500">{latestJob.message}</p>}
+          </div>
+        )}
       </div>
 
-      {status?.maintenance_message && (
-        <div className="rounded-lg border border-amber-200 bg-amber-50/70 p-4">
-          <div className="flex items-start gap-3">
-            <AlertTriangle className="mt-1 h-5 w-5 shrink-0 text-amber-700" />
-            <div>
-              <h4 className="font-bold text-slate-950">تنبيه قاعدة البيانات</h4>
-              <p className="mt-1 text-sm leading-6 text-slate-600">{status.maintenance_message}</p>
-            </div>
+      <div className="flex gap-2 overflow-x-auto rounded-lg border border-slate-200 bg-white p-2">
+        {dbTabs.map(([key, label]) => (
+          <button key={key} type="button" onClick={() => setActiveTab(key)} className={`h-10 shrink-0 rounded-md px-4 text-sm font-bold ${activeTab === key ? "bg-bank-700 text-white" : "bg-slate-50 text-slate-700 hover:bg-bank-50"}`}>
+            {label}
+          </button>
+        ))}
+      </div>
+
+      <SimpleError error={error} />
+
+      {activeTab === "overview" && (
+        <div className="space-y-4">
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <MetricBox label="حالة الاتصال" value={databaseStatusLabel(status?.status)} />
+            <MetricBox label="نوع قاعدة البيانات" value={status?.database_type || "-"} />
+            <MetricBox label="اسم قاعدة البيانات" value={status?.database_name || "-"} />
+            <MetricBox label="زمن الاستجابة" value={`${status?.latency_ms ?? "-"} ms`} />
+            <MetricBox label="حجم قاعدة البيانات" value={`${status?.size_mb ?? 0} MB`} />
+            <MetricBox label="عدد الجداول" value={status?.tables_count ?? "-"} />
+            <MetricBox label="عدد السجلات" value={status?.records_count ?? "-"} />
+            <MetricBox label="آخر نسخة احتياطية" value={formatDateTime(status?.last_backup_at)} />
+            <MetricBox label="آخر استعادة" value={formatDateTime(status?.last_restore_at)} />
+            <MetricBox label="آخر صيانة" value={formatDateTime(status?.last_maintenance_at)} />
           </div>
+          <WarningBox title="بيانات آمنة فقط" text="لا يتم عرض اسم المستخدم أو كلمة المرور أو رابط الاتصال الكامل بقاعدة البيانات في هذه الشاشة." />
         </div>
       )}
 
-      <form onSubmit={saveBackupSettings} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-        <div className="mb-4 flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
-          <div>
-            <h4 className="font-bold text-slate-950">إعدادات النسخ الاحتياطي</h4>
-            <p className="mt-1 text-sm leading-6 text-slate-500">اضبط النسخ الاحتياطي التلقائي ووقت التنفيذ ومكان الاحتفاظ بالنسخ.</p>
+      {activeTab === "backups" && (
+        <div className="space-y-4">
+          <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+              <label className="block space-y-2 text-sm font-bold text-slate-700">
+                نوع النسخة
+                <select value={backupType} onChange={(event) => setBackupType(event.target.value)} className="h-10 rounded-md border border-slate-300 bg-white px-3">
+                  {Object.entries(backupTypeLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                </select>
+              </label>
+              <Button type="button" onClick={createManualBackup} disabled={busy === "backup"} className="gap-2">
+                <Download className="h-4 w-4" /> {busy === "backup" ? "جاري النسخ..." : "إنشاء نسخة احتياطية"}
+              </Button>
+            </div>
           </div>
-          <label className="flex items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700">
-            <input type="checkbox" checked={Boolean(backupSettings.auto_backup_enabled)} onChange={(event) => setBackupSettings({ ...backupSettings, auto_backup_enabled: event.target.checked })} />
-            تفعيل النسخ الاحتياطي التلقائي
-          </label>
+          <SimpleTable
+            headers={["اسم النسخة", "نوع النسخة", "الحجم", "تاريخ الإنشاء", "أنشأها", "الحالة", "تم التحقق؟", "الإجراءات"]}
+            rows={backups.map((backup) => [
+              backup.file_name,
+              backupTypeLabels[backup.backup_type] || backup.backup_type,
+              formatBytes(backup.file_size),
+              formatDateTime(backup.created_at),
+              backup.created_by_name || "-",
+              databaseStatusLabel(backup.status),
+              backup.verified_at ? formatDateTime(backup.verified_at) : "لا",
+              <div key={backup.id} className="flex flex-wrap gap-2">
+                <button type="button" onClick={() => downloadBackup(backup)} className="rounded-md border px-2 py-1 text-xs font-bold">تحميل</button>
+                <button type="button" onClick={() => verifyBackup(backup)} className="rounded-md border px-2 py-1 text-xs font-bold">تحقق</button>
+                <button type="button" onClick={() => deleteBackup(backup)} className="rounded-md border border-red-200 px-2 py-1 text-xs font-bold text-red-700">حذف</button>
+              </div>
+            ])}
+          />
         </div>
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-          <LabeledInput label="وقت النسخ الاحتياطي" type="time" value={backupSettings.backup_time || "02:00"} onChange={(event) => setBackupSettings({ ...backupSettings, backup_time: event.target.value })} />
-          <LabeledInput label="عدد النسخ المحتفظ بها" type="number" min="1" max="365" value={backupSettings.retention_count || 7} onChange={(event) => setBackupSettings({ ...backupSettings, retention_count: event.target.value })} />
-          <LabeledInput label="مسار حفظ النسخ" value={backupSettings.backup_path || ""} onChange={(event) => setBackupSettings({ ...backupSettings, backup_path: event.target.value })} placeholder="مثال: backups أو D:\\QIB\\backups" />
-          <label className="flex h-10 items-center gap-2 self-end rounded-md border border-slate-200 bg-slate-50 px-3 text-sm font-semibold text-slate-700">
-            <input type="checkbox" checked={Boolean(backupSettings.notify_on_failure)} onChange={(event) => setBackupSettings({ ...backupSettings, notify_on_failure: event.target.checked })} />
-            إشعار عند فشل النسخ الاحتياطي
-          </label>
-        </div>
-        <div className="mt-4 flex justify-end">
-          <Button type="submit" disabled={busy === "backup-settings"}>
-            {busy === "backup-settings" ? "جاري الحفظ..." : "حفظ إعدادات النسخ الاحتياطي"}
-          </Button>
-        </div>
-      </form>
+      )}
 
-      <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-          <div>
-            <h4 className="font-bold text-slate-950">تصدير نسخة احتياطية</h4>
-            <p className="mt-1 text-sm leading-6 text-slate-500">يدعم SQLite عبر نسخ الملف وPostgreSQL عبر pg_dump بصيغة dump قابلة للاسترداد من السيرفر.</p>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Button type="button" onClick={loadStatus} disabled={Boolean(busy)} className="gap-2 border border-slate-300 bg-white text-slate-700 hover:bg-slate-50">
-              <RefreshCw className="h-4 w-4" /> تحديث
-            </Button>
-            <Button type="button" onClick={downloadBackup} disabled={Boolean(busy) || status?.backup_supported === false} className="gap-2">
-              <Download className="h-4 w-4" /> تنزيل نسخة
-            </Button>
-          </div>
+      {activeTab === "restore" && (
+        <div className="space-y-4">
+          <WarningBox title="استعادة آمنة متعددة المراحل" text="لن يتم الاسترداد بمجرد رفع الملف. يجب التحقق من النسخة، مراجعة المعاينة، إدخال كلمة مرور مدير النظام، وكتابة RESTORE DATABASE." />
+          <form onSubmit={validateRestore} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+            <h4 className="mb-3 font-bold text-slate-950">1. رفع النسخة والتحقق منها</h4>
+            <div className="grid gap-3 lg:grid-cols-[1fr_auto]">
+              <input type="file" accept=".zip,.db,.sqlite,.sqlite3" onChange={(event) => setRestoreFile(event.target.files?.[0] || null)} className="h-10 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm" />
+              <Button type="submit" disabled={busy === "restore-validate"}>{busy === "restore-validate" ? "جاري التحقق..." : "تحقق من النسخة"}</Button>
+            </div>
+          </form>
+          {restorePreview && (
+            <form onSubmit={confirmRestore} className="rounded-lg border border-amber-200 bg-amber-50/70 p-4">
+              <h4 className="font-bold text-slate-950">2. معاينة الاستعادة والتأكيد الأمني</h4>
+              <div className="mt-3 grid gap-3 md:grid-cols-2">
+                {Object.entries(restorePreview.preview || {}).map(([key, value]) => <MetricBox key={key} label={key} value={typeof value === "boolean" ? (value ? "نعم" : "لا") : String(value ?? "-")} />)}
+              </div>
+              <div className="mt-4 grid gap-3 md:grid-cols-2">
+                <LabeledInput label="كلمة مرور مدير النظام" type="password" value={restoreForm.admin_password} onChange={(event) => setRestoreForm({ ...restoreForm, admin_password: event.target.value })} />
+                <LabeledInput label="عبارة التأكيد" value={restoreForm.confirmation_text} onChange={(event) => setRestoreForm({ ...restoreForm, confirmation_text: event.target.value })} placeholder="RESTORE DATABASE" />
+                <Toggle label="استعادة المرفقات إن وجدت" checked={Boolean(restoreForm.restore_uploads)} onChange={(value) => setRestoreForm({ ...restoreForm, restore_uploads: value })} />
+              </div>
+              <Button type="submit" disabled={busy === "restore-confirm"} className="mt-4 bg-amber-700 hover:bg-amber-800">
+                {busy === "restore-confirm" ? "جاري الاستعادة..." : "تنفيذ الاستعادة"}
+              </Button>
+            </form>
+          )}
         </div>
-      </div>
+      )}
 
-      <form onSubmit={restoreBackup} className="rounded-lg border border-amber-200 bg-amber-50/60 p-4">
-        <div className="mb-4 flex items-start gap-3">
-          <AlertTriangle className="mt-1 h-5 w-5 shrink-0 text-amber-700" />
-          <div>
-            <h4 className="font-bold text-slate-950">استرداد نسخة احتياطية</h4>
-            <p className="mt-1 text-sm leading-6 text-slate-600">
-              الاسترداد من الواجهة متاح فقط لـ SQLite. قواعد PostgreSQL يجب استردادها من السيرفر باستخدام pg_restore بعد أخذ نسخة احتياطية.
-            </p>
+      {activeTab === "reset" && (
+        <div className="space-y-4">
+          <DangerBox title="إجراء عالي الخطورة" text="سيتم إنشاء نسخة احتياطية كاملة تلقائياً قبل إعادة الضبط. لا يتم حذف ملفات النسخ الاحتياطية أو Docker volumes." />
+          <div className="rounded-lg border border-slate-200 bg-white p-4">
+            <div className="grid gap-3 md:grid-cols-[1fr_auto]">
+              <label className="block space-y-2 text-sm font-bold text-slate-700">
+                نطاق إعادة الضبط
+                <select value={resetScope} onChange={(event) => setResetScope(event.target.value)} className="h-10 w-full rounded-md border border-slate-300 bg-white px-3">
+                  {Object.entries(resetScopeLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                </select>
+              </label>
+              <Button type="button" onClick={loadResetPreview} disabled={busy === "reset-preview"} className="self-end">عرض المعاينة</Button>
+            </div>
           </div>
+          {resetPreviewData && (
+            <form onSubmit={executeReset} className="rounded-lg border border-red-200 bg-red-50/60 p-4">
+              <h4 className="font-bold text-slate-950">معاينة التأثير</h4>
+              <SimpleTable headers={["الجدول", "عدد السجلات"]} rows={(resetPreviewData.tables || []).map((row) => [row.table_name, row.records_count])} />
+              {(resetPreviewData.warnings || []).map((item) => <p key={item} className="mt-2 text-sm font-semibold text-red-700">- {item}</p>)}
+              <div className="mt-4 grid gap-3 md:grid-cols-2">
+                <LabeledInput label="كلمة مرور مدير النظام" type="password" value={resetForm.admin_password} onChange={(event) => setResetForm({ ...resetForm, admin_password: event.target.value })} />
+                <LabeledInput label="عبارة التأكيد" value={resetForm.confirmation_text} onChange={(event) => setResetForm({ ...resetForm, confirmation_text: event.target.value })} placeholder="RESET DATABASE" />
+                <Toggle label="أفهم أن هذا الإجراء قد يؤثر على بيانات النظام" checked={Boolean(resetForm.understand_risk)} onChange={(value) => setResetForm({ ...resetForm, understand_risk: value })} />
+                <Toggle label="حذف ملفات المرفقات أيضاً" checked={Boolean(resetForm.delete_upload_files)} onChange={(value) => setResetForm({ ...resetForm, delete_upload_files: value })} />
+              </div>
+              <Button type="submit" disabled={busy === "reset"} className="mt-4 bg-red-700 hover:bg-red-800">{busy === "reset" ? "جاري التنفيذ..." : "تنفيذ إعادة الضبط"}</Button>
+            </form>
+          )}
         </div>
-        <div className="grid gap-3 lg:grid-cols-[1fr_220px_auto]">
-          <input type="file" accept=".db,.sqlite,.sqlite3" disabled={status?.restore_supported === false} onChange={(event) => setFile(event.target.files?.[0] || null)} className="h-10 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm disabled:opacity-60" />
-          <Input placeholder="اكتب: استرداد النسخة" value={restoreConfirmation} disabled={status?.restore_supported === false} onChange={(event) => setRestoreConfirmation(event.target.value)} />
-          <Button type="submit" disabled={busy === "restore" || status?.restore_supported === false} className="gap-2 bg-amber-700 hover:bg-amber-800">
-            <Upload className="h-4 w-4" /> استرداد
-          </Button>
-        </div>
-      </form>
+      )}
 
+      {activeTab === "maintenance" && (
+        <div className="space-y-4">
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {[
+              ["maintenance/test-connection", "اختبار الاتصال"],
+              ["maintenance/check-integrity", "فحص سلامة قاعدة البيانات"],
+              ["maintenance/optimize", "تحسين قاعدة البيانات"],
+              ["maintenance/reindex", "إعادة بناء الفهارس"],
+              ["maintenance/analyze", "تحديث إحصائيات قاعدة البيانات"],
+              ["maintenance/clean-temp", "تنظيف الملفات المؤقتة"],
+              ["maintenance/check-orphan-attachments", "فحص المرفقات اليتيمة"]
+            ].map(([path, label]) => <button key={path} type="button" onClick={() => runMaintenance(path, label)} className="rounded-lg border border-slate-200 bg-white p-4 text-right text-sm font-bold shadow-sm hover:bg-bank-50">{label}</button>)}
+          </div>
+          <div className="rounded-lg border border-slate-200 bg-white p-4">
+            <h4 className="font-bold text-slate-950">الترحيلات</h4>
+            <p className="mt-2 text-sm text-slate-600">{migrationStatus?.message || "لم يتم تحميل حالة الترحيلات."}</p>
+            <Button type="button" onClick={runMigrations} disabled={busy === "migrations-run"} className="mt-3">تشغيل الترحيلات المعلقة</Button>
+          </div>
+          {maintenanceResult && <pre className="overflow-auto rounded-lg border bg-slate-950 p-4 text-xs leading-6 text-white">{JSON.stringify(maintenanceResult, null, 2)}</pre>}
+        </div>
+      )}
+
+      {activeTab === "tables" && (
+        <SimpleTable headers={["اسم الجدول", "التصنيف", "عدد السجلات", "الحجم", "الوصف"]} rows={tables.map((table) => [table.table_name, table.category, table.records_count, `${table.size_mb || 0} MB`, table.description])} />
+      )}
+
+      {activeTab === "activity" && (
+        <SimpleTable headers={["الإجراء", "المستخدم", "التاريخ", "عنوان IP", "النتيجة", "التفاصيل"]} rows={activity.map((item) => [databaseActionLabel(item.action), item.user || "-", formatDateTime(item.created_at), item.ip_address || "-", item.result, JSON.stringify(item.details || {})])} />
+      )}
+
+      {activeTab === "settings" && backupSettings && (
+        <form onSubmit={saveBackupSettings} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            <Toggle label="تفعيل النسخ الاحتياطي التلقائي" checked={Boolean(backupSettings.auto_backup_enabled)} onChange={(value) => setBackupSettings({ ...backupSettings, auto_backup_enabled: value })} />
+            <Toggle label="تضمين المرفقات" checked={Boolean(backupSettings.include_uploads)} onChange={(value) => setBackupSettings({ ...backupSettings, include_uploads: value })} />
+            <Toggle label="ضغط النسخ" checked={Boolean(backupSettings.compress_backups)} onChange={(value) => setBackupSettings({ ...backupSettings, compress_backups: value })} />
+            <Toggle label="تشفير النسخ" checked={Boolean(backupSettings.encrypt_backups)} onChange={(value) => setBackupSettings({ ...backupSettings, encrypt_backups: value })} />
+            <Toggle label="إشعار عند فشل النسخ" checked={Boolean(backupSettings.notify_on_failure)} onChange={(value) => setBackupSettings({ ...backupSettings, notify_on_failure: value })} />
+            <LabeledInput label="وقت النسخ الاحتياطي" type="time" value={backupSettings.backup_time || "02:00"} onChange={(event) => setBackupSettings({ ...backupSettings, backup_time: event.target.value })} />
+            <label className="block space-y-2 text-sm font-medium text-slate-700">
+              التكرار
+              <select value={backupSettings.frequency || "daily"} onChange={(event) => setBackupSettings({ ...backupSettings, frequency: event.target.value })} className="h-10 w-full rounded-md border border-slate-300 bg-white px-3">
+                <option value="daily">يومي</option>
+                <option value="weekly">أسبوعي</option>
+                <option value="monthly">شهري</option>
+              </select>
+            </label>
+            <LabeledInput label="عدد النسخ المحتفظ بها" type="number" min="1" max="365" value={backupSettings.retention_count || 7} onChange={(event) => setBackupSettings({ ...backupSettings, retention_count: event.target.value })} />
+            <LabeledInput label="مسار حفظ النسخ" value={backupSettings.backup_location || "backups"} onChange={(event) => setBackupSettings({ ...backupSettings, backup_location: event.target.value })} />
+          </div>
+          <Button type="submit" disabled={busy === "backup-settings"} className="mt-4">{busy === "backup-settings" ? "جاري الحفظ..." : "حفظ الإعدادات"}</Button>
+        </form>
+      )}
     </div>
   );
+}
+
+function WarningBox({ title, text }) {
+  return (
+    <div className="rounded-lg border border-amber-200 bg-amber-50/70 p-4">
+      <div className="flex items-start gap-3">
+        <AlertTriangle className="mt-1 h-5 w-5 shrink-0 text-amber-700" />
+        <div>
+          <h4 className="font-bold text-slate-950">{title}</h4>
+          <p className="mt-1 text-sm leading-6 text-slate-600">{text}</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DangerBox({ title, text }) {
+  return (
+    <div className="rounded-lg border border-red-200 bg-red-50/70 p-4">
+      <div className="flex items-start gap-3">
+        <AlertTriangle className="mt-1 h-5 w-5 shrink-0 text-red-700" />
+        <div>
+          <h4 className="font-bold text-red-950">{title}</h4>
+          <p className="mt-1 text-sm leading-6 text-red-700">{text}</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function databaseStatusLabel(value) {
+  const labels = {
+    healthy: "سليمة",
+    warning: "تحذير",
+    critical: "حرجة",
+    ready: "جاهزة",
+    corrupted: "تالفة",
+    deleted: "محذوفة",
+    deleted_by_retention: "محذوفة بسياسة الاحتفاظ",
+    success: "ناجحة",
+    failed: "فاشلة",
+    running: "قيد التنفيذ",
+    pending: "بانتظار التنفيذ",
+    validated: "تم التحقق"
+  };
+  return labels[value] || value || "-";
+}
+
+function databaseJobLabel(value) {
+  const labels = { backup: "نسخ احتياطي", restore: "استعادة", reset: "إعادة ضبط", maintenance: "صيانة", migration: "ترحيلات" };
+  return labels[value] || value || "-";
+}
+
+function databaseActionLabel(value) {
+  const labels = {
+    database_status_viewed: "عرض حالة قاعدة البيانات",
+    backup_created: "إنشاء نسخة احتياطية",
+    backup_downloaded: "تنزيل نسخة احتياطية",
+    backup_verified: "التحقق من نسخة احتياطية",
+    backup_deleted: "حذف نسخة احتياطية",
+    restore_validated: "التحقق من الاستعادة",
+    restore_started: "بدء الاستعادة",
+    restore_completed: "اكتمال الاستعادة",
+    reset_preview_viewed: "عرض معاينة إعادة الضبط",
+    reset_completed: "تنفيذ إعادة الضبط",
+    maintenance_run: "تنفيذ صيانة",
+    migration_run: "تشغيل ترحيلات",
+    backup_settings_saved: "حفظ إعدادات النسخ"
+  };
+  return labels[value] || value || "-";
 }
 
 function UpdateManagementSettings({ notify }) {

@@ -38,6 +38,9 @@ interface AIStatus {
   allow_message_drafting: boolean;
   allow_summarization: boolean;
   allow_reply_suggestion: boolean;
+  show_in_compose_message?: boolean;
+  show_in_message_details?: boolean;
+  show_in_request_messages_tab?: boolean;
 }
 
 const statusLabels: Record<string, string> = {
@@ -146,8 +149,8 @@ export function RequestDetails() {
   }, [requestId]);
 
   const timeline = useMemo(() => buildTimeline(request, messages), [request, messages]);
-  const canUseAiDrafting = Boolean(aiStatus.is_enabled && aiStatus.allow_message_drafting);
-  const canUseAiSummaries = Boolean(aiStatus.is_enabled && aiStatus.allow_summarization);
+  const canUseAiDrafting = Boolean(aiStatus.is_enabled && aiStatus.allow_message_drafting && aiStatus.show_in_request_messages_tab !== false);
+  const canUseAiSummaries = Boolean(aiStatus.is_enabled && aiStatus.allow_summarization && aiStatus.show_in_request_messages_tab !== false);
 
   async function loadAiStatus() {
     try {

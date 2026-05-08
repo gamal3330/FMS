@@ -10,10 +10,15 @@ import { ReportsPage } from "./pages/ReportsPage";
 import { RequestDetails } from "./pages/RequestDetails";
 import { Requests } from "./pages/Requests";
 import SettingsPage from "./pages/SettingsPage.jsx";
+import AISettingsPage from "./pages/settings/AISettingsPage.jsx";
+import DatabaseSettingsPage from "./pages/settings/DatabaseSettingsPage.jsx";
 import DepartmentsPage from "./pages/settings/DepartmentsPage.jsx";
 import HealthMonitoringPage from "./pages/settings/HealthMonitoringPage.jsx";
+import LocalUpdatePage from "./pages/settings/LocalUpdatePage.jsx";
+import MessagingSettingsPage from "./pages/settings/MessagingSettingsPage.jsx";
 import RequestTypesPage from "./pages/settings/RequestTypesPage.jsx";
 import SpecializedSectionsPage from "./pages/settings/SpecializedSectionsPage.jsx";
+import UpdateManagementPage from "./pages/settings/UpdateManagementPage.jsx";
 import UsersPage from "./pages/settings/UsersPage.jsx";
 import { apiFetch, CurrentUser } from "./lib/api";
 
@@ -26,7 +31,7 @@ const SCREEN_ROUTES: Record<string, string> = {
   reports: "/reports",
   settings: "/settings",
   request_types: "/request-types",
-  users: "/users",
+  users: "/settings/users-permissions",
   departments: "/departments",
   specialized_sections: "/specialized-sections",
   health_monitoring: "/settings/health-monitoring"
@@ -117,7 +122,23 @@ function ProtectedApp() {
         />
         <Route
           path="/settings/ai"
-          element={canAccessSettings(currentUser) && canAccessScreen("settings") ? <SettingsPage initialTab="ai" /> : <Navigate to={defaultPath()} replace />}
+          element={canAccessSettings(currentUser) && canAccessScreen("settings") ? <AISettingsPage /> : <Navigate to={defaultPath()} replace />}
+        />
+        <Route
+          path="/settings/database"
+          element={canAccessSettings(currentUser) && canAccessScreen("settings") ? <DatabaseSettingsPage /> : <Navigate to={defaultPath()} replace />}
+        />
+        <Route
+          path="/settings/messaging"
+          element={canAccessSettings(currentUser) && canAccessScreen("settings") ? <MessagingSettingsPage /> : <Navigate to={defaultPath()} replace />}
+        />
+        <Route
+          path="/settings/updates"
+          element={canAccessSettings(currentUser) && canAccessScreen("settings") ? <UpdateManagementPage /> : <Navigate to={defaultPath()} replace />}
+        />
+        <Route
+          path="/settings/updates/local"
+          element={canAccessSettings(currentUser) && canAccessScreen("settings") ? <LocalUpdatePage /> : <Navigate to={defaultPath()} replace />}
         />
         <Route
           path="/request-types"
@@ -125,6 +146,10 @@ function ProtectedApp() {
         />
         <Route
           path="/users"
+          element={canAccessSettings(currentUser) && canAccessScreen("users") ? <UsersPage /> : <Navigate to={defaultPath()} replace />}
+        />
+        <Route
+          path="/settings/users-permissions"
           element={canAccessSettings(currentUser) && canAccessScreen("users") ? <UsersPage /> : <Navigate to={defaultPath()} replace />}
         />
         <Route
@@ -140,7 +165,7 @@ function ProtectedApp() {
           element={canAccessSettings(currentUser) && canAccessScreen("health_monitoring") ? <HealthMonitoringPage /> : <Navigate to={defaultPath()} replace />}
         />
         <Route path="/settings/request-types" element={<Navigate to="/request-types" replace />} />
-        <Route path="/settings/users" element={<Navigate to="/users" replace />} />
+        <Route path="/settings/users" element={<Navigate to="/settings/users-permissions" replace />} />
         <Route path="/settings/departments" element={<Navigate to="/departments" replace />} />
         <Route path="/settings/specialized-sections" element={<Navigate to="/specialized-sections" replace />} />
         <Route path="*" element={<Navigate to={defaultPath()} replace />} />

@@ -27,6 +27,7 @@ backend/*.sqlite
 backend/*.sqlite3
 backend/uploads/
 backend/backups/
+backups/
 backend/*.log
 *.log
 deploy/nginx/certs/*

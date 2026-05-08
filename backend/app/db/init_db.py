@@ -103,10 +103,29 @@ def ensure_sqlite_dev_columns(db: Session) -> None:
         "users": {
             "username": "VARCHAR(80)",
             "mobile": "VARCHAR(40)",
+            "job_title": "VARCHAR(120)",
+            "role_id": "INTEGER",
             "administrative_section": "VARCHAR(40)",
+            "specialized_section_id": "INTEGER",
+            "relationship_type": "VARCHAR(40) DEFAULT 'employee'",
             "failed_login_attempts": "INTEGER DEFAULT 0",
             "locked_until": "DATETIME",
             "password_changed_at": "DATETIME",
+            "password_expires_at": "DATETIME",
+            "is_locked": "BOOLEAN DEFAULT 0",
+            "force_password_change": "BOOLEAN DEFAULT 0",
+            "allowed_login_from_ip": "VARCHAR(255)",
+            "notes": "TEXT",
+            "last_login_at": "DATETIME",
+            "updated_at": "DATETIME",
+        },
+        "roles": {
+            "name_ar": "VARCHAR(120)",
+            "name_en": "VARCHAR(120)",
+            "code": "VARCHAR(80)",
+            "description": "TEXT",
+            "is_system_role": "BOOLEAN DEFAULT 1",
+            "updated_at": "DATETIME",
         },
         "settings_general": {
             "login_intro_text": "TEXT",
@@ -172,6 +191,10 @@ def ensure_sqlite_dev_columns(db: Session) -> None:
 def ensure_runtime_columns(db: Session) -> None:
     inspector = inspect(db.bind)
     table_names = set(inspector.get_table_names())
+    dialect = db.bind.dialect.name if db.bind else "sqlite"
+    bool_true = "1" if dialect == "sqlite" else "true"
+    bool_false = "0" if dialect == "sqlite" else "false"
+    timestamp_type = "DATETIME" if dialect == "sqlite" else "TIMESTAMP WITH TIME ZONE"
     if "settings_general" in table_names:
         general_columns = {column["name"] for column in inspector.get_columns("settings_general")}
         if "login_intro_text" not in general_columns:
@@ -196,6 +219,41 @@ def ensure_runtime_columns(db: Session) -> None:
             db.execute(text("ALTER TABLE security_policies ADD COLUMN temporary_password VARCHAR(128) DEFAULT 'Change@12345'"))
             db.execute(text("UPDATE security_policies SET temporary_password = 'Change@12345' WHERE temporary_password IS NULL OR temporary_password = ''"))
             db.commit()
+    if "users" in table_names:
+        user_columns = {column["name"] for column in inspector.get_columns("users")}
+        user_column_defs = {
+            "job_title": "VARCHAR(120)",
+            "role_id": "INTEGER",
+            "specialized_section_id": "INTEGER",
+            "relationship_type": "VARCHAR(40) DEFAULT 'employee'",
+            "password_expires_at": timestamp_type,
+            "is_locked": f"BOOLEAN DEFAULT {bool_false}",
+            "force_password_change": f"BOOLEAN DEFAULT {bool_false}",
+            "allowed_login_from_ip": "VARCHAR(255)",
+            "notes": "TEXT",
+            "last_login_at": timestamp_type,
+            "updated_at": timestamp_type,
+        }
+        for column, definition in user_column_defs.items():
+            if column not in user_columns:
+                db.execute(text(f"ALTER TABLE users ADD COLUMN {column} {definition}"))
+        db.execute(text("UPDATE users SET relationship_type = COALESCE(NULLIF(relationship_type, ''), CASE WHEN role = 'direct_manager' THEN 'direct_manager' ELSE 'employee' END)"))
+        db.commit()
+    if "roles" in table_names:
+        role_columns = {column["name"] for column in inspector.get_columns("roles")}
+        role_column_defs = {
+            "name_ar": "VARCHAR(120)",
+            "name_en": "VARCHAR(120)",
+            "code": "VARCHAR(80)",
+            "description": "TEXT",
+            "is_system_role": f"BOOLEAN DEFAULT {bool_true}",
+            "updated_at": timestamp_type,
+        }
+        for column, definition in role_column_defs.items():
+            if column not in role_columns:
+                db.execute(text(f"ALTER TABLE roles ADD COLUMN {column} {definition}"))
+        db.execute(text("UPDATE roles SET code = COALESCE(NULLIF(code, ''), name), name_ar = COALESCE(NULLIF(name_ar, ''), label_ar), name_en = COALESCE(NULLIF(name_en, ''), name), is_system_role = COALESCE(is_system_role, :true_value)"), {"true_value": True})
+        db.commit()
     workflow_columns = {column["name"] for column in inspector.get_columns("workflow_template_steps")}
     if "return_to_step_order" not in workflow_columns:
         db.execute(text("ALTER TABLE workflow_template_steps ADD COLUMN return_to_step_order INTEGER"))
@@ -227,6 +285,91 @@ def ensure_runtime_columns(db: Session) -> None:
             db.commit()
         ensure_message_tracking_ids(db)
         db.execute(text('CREATE UNIQUE INDEX IF NOT EXISTS "idx_internal_messages_message_uid" ON "internal_messages" (message_uid)'))
+        db.commit()
+    if "ai_settings" in table_names:
+        ai_columns = {column["name"] for column in inspector.get_columns("ai_settings")}
+        ai_column_defs = {
+            "mode": "VARCHAR(30) DEFAULT 'disabled'",
+            "assistant_name": "VARCHAR(160) DEFAULT 'المساعد الذكي للمراسلات'",
+            "assistant_description": "TEXT",
+            "default_language": "VARCHAR(20) DEFAULT 'ar'",
+            "timeout_seconds": "INTEGER DEFAULT 60",
+            "show_human_review_disclaimer": f"BOOLEAN DEFAULT {bool_true}",
+            "allow_message_improvement": f"BOOLEAN DEFAULT {bool_true}",
+            "allow_missing_info_detection": f"BOOLEAN DEFAULT {bool_true}",
+            "allow_translate_ar_en": f"BOOLEAN DEFAULT {bool_false}",
+            "mask_emails": f"BOOLEAN DEFAULT {bool_true}",
+            "mask_phone_numbers": f"BOOLEAN DEFAULT {bool_true}",
+            "mask_employee_ids": f"BOOLEAN DEFAULT {bool_true}",
+            "mask_usernames": f"BOOLEAN DEFAULT {bool_false}",
+            "mask_request_numbers": f"BOOLEAN DEFAULT {bool_false}",
+            "allow_request_context": f"BOOLEAN DEFAULT {bool_true}",
+            "request_context_level": "VARCHAR(40) DEFAULT 'basic_only'",
+            "allow_attachments_to_ai": f"BOOLEAN DEFAULT {bool_false}",
+            "store_full_prompt_logs": f"BOOLEAN DEFAULT {bool_false}",
+            "show_in_compose_message": f"BOOLEAN DEFAULT {bool_true}",
+            "show_in_message_details": f"BOOLEAN DEFAULT {bool_true}",
+            "show_in_request_messages_tab": f"BOOLEAN DEFAULT {bool_true}",
+        }
+        for column, definition in ai_column_defs.items():
+            if column not in ai_columns:
+                db.execute(text(f"ALTER TABLE ai_settings ADD COLUMN {column} {definition}"))
+        db.execute(
+            text(
+                """
+                UPDATE ai_settings
+                SET
+                    provider = COALESCE(NULLIF(provider, ''), 'local_ollama'),
+                    api_base_url = CASE WHEN COALESCE(NULLIF(api_base_url, ''), '') = '' AND COALESCE(NULLIF(provider, ''), 'local_ollama') IN ('local_ollama', 'ollama', 'ollama_native') THEN 'http://localhost:11434' ELSE api_base_url END,
+                    model_name = COALESCE(NULLIF(model_name, ''), 'qwen3:8b'),
+                    mode = CASE WHEN is_enabled THEN COALESCE(NULLIF(mode, ''), 'enabled') ELSE COALESCE(NULLIF(mode, ''), 'disabled') END,
+                    assistant_name = COALESCE(NULLIF(assistant_name, ''), 'المساعد الذكي للمراسلات'),
+                    default_language = COALESCE(NULLIF(default_language, ''), 'ar'),
+                    timeout_seconds = COALESCE(timeout_seconds, 60),
+                    request_context_level = COALESCE(NULLIF(request_context_level, ''), 'basic_only')
+                """
+            )
+        )
+        db.commit()
+    if "ai_usage_logs" in table_names:
+        usage_columns = {column["name"] for column in inspector.get_columns("ai_usage_logs")}
+        if "feature_code" not in usage_columns:
+            db.execute(text("ALTER TABLE ai_usage_logs ADD COLUMN feature_code VARCHAR(80)"))
+            db.execute(text("UPDATE ai_usage_logs SET feature_code = feature WHERE feature_code IS NULL OR feature_code = ''"))
+        if "latency_ms" not in usage_columns:
+            db.execute(text("ALTER TABLE ai_usage_logs ADD COLUMN latency_ms INTEGER DEFAULT 0"))
+        db.commit()
+    if "ai_prompt_templates" in table_names:
+        prompt_columns = {column["name"] for column in inspector.get_columns("ai_prompt_templates")}
+        if "description" not in prompt_columns:
+            db.execute(text("ALTER TABLE ai_prompt_templates ADD COLUMN description TEXT"))
+        if "version_number" not in prompt_columns:
+            db.execute(text("ALTER TABLE ai_prompt_templates ADD COLUMN version_number INTEGER DEFAULT 1"))
+        if "created_by" not in prompt_columns:
+            db.execute(text("ALTER TABLE ai_prompt_templates ADD COLUMN created_by INTEGER"))
+        db.commit()
+    if "message_request_integration_settings" in table_names:
+        request_message_columns = {column["name"] for column in inspector.get_columns("message_request_integration_settings")}
+        request_message_column_defs = {
+            "show_request_notification_checkbox": f"BOOLEAN DEFAULT {bool_true}",
+            "default_send_request_notification": f"BOOLEAN DEFAULT {bool_true}",
+            "allow_requester_toggle_notification": f"BOOLEAN DEFAULT {bool_true}",
+        }
+        for column, definition in request_message_column_defs.items():
+            if column not in request_message_columns:
+                db.execute(text(f"ALTER TABLE message_request_integration_settings ADD COLUMN {column} {definition}"))
+        db.commit()
+    if "system_versions" in table_names:
+        version_columns = {column["name"] for column in inspector.get_columns("system_versions")}
+        version_column_defs = {
+            "build_number": "VARCHAR(80)",
+            "commit_hash": "VARCHAR(80)",
+            "deployed_by": "INTEGER",
+            "status": "VARCHAR(30) DEFAULT 'installed'",
+        }
+        for column, definition in version_column_defs.items():
+            if column not in version_columns:
+                db.execute(text(f"ALTER TABLE system_versions ADD COLUMN {column} {definition}"))
         db.commit()
 
 
@@ -316,9 +459,13 @@ def seed_database(db: Session) -> None:
     for name, label_ar in DEFAULT_ROLES:
         role = db.scalar(select(Role).where(Role.name == name))
         if not role:
-            db.add(Role(name=name, label_ar=label_ar))
-        elif name == "it_staff" and role.label_ar != label_ar:
+            db.add(Role(name=name, label_ar=label_ar, name_ar=label_ar, name_en=name.replace("_", " ").title(), code=name, is_system_role=True, is_active=True))
+        else:
             role.label_ar = label_ar
+            role.name_ar = role.name_ar or label_ar
+            role.name_en = role.name_en or name.replace("_", " ").title()
+            role.code = role.code or name
+            role.is_system_role = True
     db.flush()
 
     admin = db.scalar(select(User).where(User.email == settings.seed_admin_email))
@@ -337,4 +484,8 @@ def seed_database(db: Session) -> None:
             )
         )
     seed_request_types(db)
+    from app.services.messaging_settings_service import seed_messaging_settings, sync_legacy_message_settings
+
+    seed_messaging_settings(db)
+    sync_legacy_message_settings(db)
     db.commit()

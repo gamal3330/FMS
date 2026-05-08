@@ -17,7 +17,7 @@ export default function AIAssistantBox({ body = "", relatedRequestId = "", reque
       .catch(() => setStatus({ is_enabled: false, allow_message_drafting: false }));
   }, []);
 
-  const isEnabled = Boolean(status?.is_enabled && status?.allow_message_drafting);
+  const isEnabled = Boolean(status?.is_enabled && status?.allow_message_drafting && status?.show_in_compose_message !== false);
   if (!isEnabled) return null;
 
   async function run(action) {

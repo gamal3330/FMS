@@ -47,6 +47,12 @@ interface LinkedMessage {
   created_at: string;
 }
 
+interface RequestNotificationControl {
+  show_checkbox: boolean;
+  default_checked: boolean;
+  allow_toggle: boolean;
+}
+
 const administrativeSections: Record<AdministrativeSection, string> = {
   servers: "قسم السيرفرات",
   networks: "قسم الشبكات",
@@ -229,6 +235,11 @@ export function Requests() {
   const [priority, setPriority] = useState<Priority>("medium");
   const [businessJustification, setBusinessJustification] = useState("");
   const [sendNotification, setSendNotification] = useState(true);
+  const [requestNotificationControl, setRequestNotificationControl] = useState<RequestNotificationControl>({
+    show_checkbox: true,
+    default_checked: true,
+    allow_toggle: true
+  });
   const [formData, setFormData] = useState<Record<string, string>>({});
   const [attachment, setAttachment] = useState<File | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -261,7 +272,7 @@ export function Requests() {
     setTitle("");
     setPriority("medium");
     setBusinessJustification("");
-    setSendNotification(true);
+    setSendNotification(requestNotificationControl.default_checked);
     setAttachment(null);
     if (!nextConfig) {
       setFormData({});
@@ -356,6 +367,12 @@ export function Requests() {
   useEffect(() => {
     loadActiveRequestTypes();
     apiFetch<CurrentUser>("/auth/me").then(setCurrentUser).catch(() => setCurrentUser(null));
+    apiFetch<RequestNotificationControl>("/settings/messaging/request-notification-control")
+      .then((control) => {
+        setRequestNotificationControl(control);
+        setSendNotification(control.default_checked);
+      })
+      .catch(() => undefined);
   }, []);
 
   useEffect(() => {
@@ -420,7 +437,7 @@ export function Requests() {
     setTitle(item.title);
     setPriority(item.priority as Priority);
     setBusinessJustification(item.business_justification || "");
-    setSendNotification(true);
+    setSendNotification(requestNotificationControl.default_checked);
     setAttachment(null);
     setFormData({ ...(item.form_data || {}) });
     setMessage("");
@@ -432,6 +449,7 @@ export function Requests() {
     if (!selectedType) {
       throw new Error("Request type is not loaded");
     }
+    const sendRequestNotification = requestNotificationControl.allow_toggle ? sendNotification : requestNotificationControl.default_checked;
     const enrichedFormData = {
       ...formData,
       administrative_section: selectedType.section,
@@ -448,7 +466,7 @@ export function Requests() {
         title,
         priority,
         business_justification: businessJustification,
-        send_notification: sendNotification,
+        send_notification: sendRequestNotification,
         form_data: enrichedFormData
       };
     }
@@ -458,7 +476,7 @@ export function Requests() {
       request_type: requestType,
       priority,
       business_justification: businessJustification,
-      send_notification: sendNotification,
+      send_notification: sendRequestNotification,
       form_data: enrichedFormData
     };
   }
@@ -641,18 +659,24 @@ export function Requests() {
               <textarea value={businessJustification} onChange={(event) => setBusinessJustification(event.target.value)} required rows={4} placeholder="اشرح سبب الطلب والأثر التشغيلي المتوقع" className="w-full resize-y rounded-md border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-bank-600 focus:ring-2 focus:ring-bank-100" />
             </label>
 
-            <label className="flex items-start gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
-              <input
-                type="checkbox"
-                checked={sendNotification}
-                onChange={(event) => setSendNotification(event.target.checked)}
-                className="mt-1 h-4 w-4 rounded border-slate-300 text-bank-700 focus:ring-bank-600"
-              />
-              <span>
-                <span className="block font-bold text-slate-900">إرسال إشعار في المراسلات</span>
-                <span className="mt-1 block text-xs leading-5 text-slate-500">عند التفعيل سيتم إرسال رسالة تصنيفها إشعار للجهة الأولى في مسار الموافقات.</span>
-              </span>
-            </label>
+            {requestNotificationControl.show_checkbox && (
+              <label className="flex items-start gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={requestNotificationControl.allow_toggle ? sendNotification : requestNotificationControl.default_checked}
+                  disabled={!requestNotificationControl.allow_toggle}
+                  onChange={(event) => setSendNotification(event.target.checked)}
+                  className="mt-1 h-4 w-4 rounded border-slate-300 text-bank-700 focus:ring-bank-600 disabled:opacity-60"
+                />
+                <span>
+                  <span className="block font-bold text-slate-900">إرسال إشعار في المراسلات</span>
+                  <span className="mt-1 block text-xs leading-5 text-slate-500">
+                    عند التفعيل سيتم إرسال رسالة تصنيفها إشعار للجهة الأولى في مسار الموافقات.
+                    {!requestNotificationControl.allow_toggle && " هذا الخيار مقفل من إعدادات المراسلات."}
+                  </span>
+                </span>
+              </label>
+            )}
 
             <div className="flex flex-col gap-3 sm:flex-row">
               <Button type="submit" disabled={isSubmitting} className="gap-2">

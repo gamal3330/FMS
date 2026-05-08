@@ -42,9 +42,15 @@ def ai_status(db: Session = Depends(get_db), _: User = Depends(get_current_user)
     db.refresh(item)
     return AIStatusRead(
         is_enabled=bool(item.is_enabled),
+        mode=item.mode or ("enabled" if item.is_enabled else "disabled"),
         allow_message_drafting=bool(item.is_enabled and item.allow_message_drafting),
         allow_summarization=bool(item.is_enabled and item.allow_summarization),
         allow_reply_suggestion=bool(item.is_enabled and item.allow_reply_suggestion),
+        allow_message_improvement=bool(item.is_enabled and item.allow_message_improvement),
+        allow_missing_info_detection=bool(item.is_enabled and item.allow_missing_info_detection),
+        show_in_compose_message=bool(item.is_enabled and item.show_in_compose_message),
+        show_in_message_details=bool(item.is_enabled and item.show_in_message_details),
+        show_in_request_messages_tab=bool(item.is_enabled and item.show_in_request_messages_tab),
         max_input_chars=item.max_input_chars,
     )
 

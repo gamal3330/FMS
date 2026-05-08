@@ -17,16 +17,16 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.config import get_settings
-from app.models.ai import AISettings, AIPromptTemplate, AIUsageLog
+from app.models.ai import AIFeaturePermission, AISettings, AIPromptTemplate, AIUsageLog
 from app.models.enums import UserRole
 from app.models.message import InternalMessage
 from app.models.request import ApprovalStep, ServiceRequest
-from app.models.user import Department, User
+from app.models.user import Department, Role, User
 from app.services.workflow import IMPLEMENTATION_STEP_ROLES
 
 settings = get_settings()
 
-DEFAULT_AI_PROVIDER = "openai_compatible"
+DEFAULT_AI_PROVIDER = "local_ollama"
 AI_RATE_LIMIT_WINDOW_SECONDS = 60
 AI_RATE_LIMIT_MAX_REQUESTS = 20
 _rate_limit_hits: dict[int, list[float]] = {}
@@ -39,8 +39,81 @@ SECTION_KEYWORDS = {
 }
 
 DEFAULT_PROMPTS = {
+    "draft_message": {
+        "name_ar": "توليد مسودة رسالة",
+        "description": "إنشاء موضوع ونص رسالة داخلية بصياغة المستخدم نفسه.",
+        "prompt_text": (
+            "اكتب مسودة رسالة داخلية باللغة العربية المهنية كأن المستخدم الحالي هو مرسل الرسالة بنفسه.\n"
+            "المطلوب من المستخدم: {instruction}\n\n"
+            "سياق الطلب إن وجد:\n{request_context}\n\n"
+            "أعد النتيجة بصيغة JSON فقط وبالمفاتيح: subject, body. اجعل body نص الرسالة فقط بدون شرح."
+        ),
+    },
+    "improve_message": {
+        "name_ar": "تحسين صياغة رسالة",
+        "description": "تحسين النص مع الحفاظ على المعنى.",
+        "prompt_text": (
+            "حسّن صياغة الرسالة التالية باللغة العربية المهنية دون تغيير المعنى، ودون إضافة معلومات غير موجودة.\n"
+            "النص:\n{text}\n\n"
+            "أعد النص المحسن فقط."
+        ),
+    },
+    "formalize_message": {
+        "name_ar": "جعل الرسالة رسمية",
+        "description": "تحويل النص إلى صياغة رسمية مناسبة للعمل المصرفي.",
+        "prompt_text": (
+            "حوّل الرسالة التالية إلى صياغة رسمية مناسبة لمراسلات داخلية مصرفية، دون إرسال أو اتخاذ أي إجراء.\n"
+            "النص:\n{text}\n\n"
+            "أعد النص الرسمي فقط."
+        ),
+    },
+    "shorten_message": {
+        "name_ar": "اختصار رسالة",
+        "description": "اختصار النص مع إبقاء المعلومات المهمة.",
+        "prompt_text": (
+            "اختصر الرسالة التالية مع الحفاظ على المعلومات المهمة ونبرة مهنية واضحة.\n"
+            "النص:\n{text}\n\n"
+            "أعد النص المختصر فقط."
+        ),
+    },
+    "suggest_reply": {
+        "name_ar": "اقتراح رد",
+        "description": "اقتراح رد مهني على رسالة مستلمة.",
+        "prompt_text": (
+            "اقترح رداً مهنياً باللغة العربية على الرسالة التالية. لا تعتمد أو ترفض أو تنفذ أي إجراء، فقط اكتب مسودة رد.\n"
+            "سياق الطلب إن وجد:\n{request_context}\n\n"
+            "الرسالة المستلمة:\n{text}\n\n"
+            "أعد نص الرد فقط."
+        ),
+    },
+    "summarize_thread": {
+        "name_ar": "تلخيص مراسلات",
+        "description": "تلخيص سلسلة مراسلات أو مراسلات طلب.",
+        "prompt_text": (
+            "لخّص المراسلات التالية باللغة العربية في نقاط قصيرة، مع إبراز المطلوب والقرارات والملاحظات المفتوحة.\n"
+            "المراسلات:\n{text}\n\n"
+            "أعد الملخص فقط."
+        ),
+    },
+    "detect_missing_info": {
+        "name_ar": "اكتشاف المعلومات الناقصة",
+        "description": "اكتشاف المعلومات غير الواضحة أو الناقصة في المسودة.",
+        "prompt_text": (
+            "راجع مسودة الرسالة التالية وحدد المعلومات الناقصة أو غير الواضحة قبل الإرسال.\n"
+            "نوع الطلب إن وجد: {request_type}\n"
+            "سياق الطلب إن وجد:\n{request_context}\n\n"
+            "المسودة:\n{text}\n\n"
+            "أعد JSON فقط بالمفتاح items وقيمته قائمة نصوص عربية قصيرة."
+        ),
+    },
+    "translate": {
+        "name_ar": "ترجمة عربي/إنجليزي",
+        "description": "ترجمة نصوص المراسلات بين العربية والإنجليزية.",
+        "prompt_text": "ترجم النص التالي ترجمة مهنية مناسبة للمراسلات الداخلية:\n{text}\n\nأعد الترجمة فقط.",
+    },
     "message_draft": {
         "name_ar": "توليد مسودة رسالة",
+        "description": "إنشاء موضوع ونص رسالة داخلية بصياغة المستخدم نفسه.",
         "prompt_text": (
             "اكتب مسودة رسالة داخلية باللغة العربية المهنية كأن المستخدم الحالي هو مرسل الرسالة بنفسه.\n"
             "المطلوب من المستخدم: {instruction}\n\n"
@@ -50,6 +123,7 @@ DEFAULT_PROMPTS = {
     },
     "message_improve": {
         "name_ar": "تحسين صياغة رسالة",
+        "description": "تحسين النص مع الحفاظ على المعنى.",
         "prompt_text": (
             "حسّن صياغة الرسالة التالية باللغة العربية المهنية دون تغيير المعنى، ودون إضافة معلومات غير موجودة.\n"
             "النص:\n{text}\n\n"
@@ -58,6 +132,7 @@ DEFAULT_PROMPTS = {
     },
     "message_formalize": {
         "name_ar": "جعل الرسالة رسمية",
+        "description": "تحويل النص إلى صياغة رسمية مناسبة للعمل المصرفي.",
         "prompt_text": (
             "حوّل الرسالة التالية إلى صياغة رسمية مناسبة لمراسلات داخلية مصرفية، دون إرسال أو اتخاذ أي إجراء.\n"
             "النص:\n{text}\n\n"
@@ -66,6 +141,7 @@ DEFAULT_PROMPTS = {
     },
     "message_shorten": {
         "name_ar": "اختصار رسالة",
+        "description": "اختصار النص مع إبقاء المعلومات المهمة.",
         "prompt_text": (
             "اختصر الرسالة التالية مع الحفاظ على المعلومات المهمة ونبرة مهنية واضحة.\n"
             "النص:\n{text}\n\n"
@@ -74,6 +150,7 @@ DEFAULT_PROMPTS = {
     },
     "message_reply": {
         "name_ar": "اقتراح رد",
+        "description": "اقتراح رد مهني على رسالة مستلمة.",
         "prompt_text": (
             "اقترح رداً مهنياً باللغة العربية على الرسالة التالية. لا تعتمد أو ترفض أو تنفذ أي إجراء، فقط اكتب مسودة رد.\n"
             "سياق الطلب إن وجد:\n{request_context}\n\n"
@@ -83,6 +160,7 @@ DEFAULT_PROMPTS = {
     },
     "message_summary": {
         "name_ar": "تلخيص مراسلات",
+        "description": "تلخيص سلسلة مراسلات أو مراسلات طلب.",
         "prompt_text": (
             "لخّص المراسلات التالية باللغة العربية في نقاط قصيرة، مع إبراز المطلوب والقرارات والملاحظات المفتوحة.\n"
             "المراسلات:\n{text}\n\n"
@@ -91,6 +169,7 @@ DEFAULT_PROMPTS = {
     },
     "missing_info": {
         "name_ar": "اكتشاف المعلومات الناقصة",
+        "description": "اكتشاف المعلومات غير الواضحة أو الناقصة في المسودة.",
         "prompt_text": (
             "راجع مسودة الرسالة التالية وحدد المعلومات الناقصة أو غير الواضحة قبل الإرسال.\n"
             "نوع الطلب إن وجد: {request_type}\n"
@@ -101,6 +180,16 @@ DEFAULT_PROMPTS = {
     },
 }
 
+PROMPT_ALIASES = {
+    "message_draft": "draft_message",
+    "message_improve": "improve_message",
+    "message_formalize": "formalize_message",
+    "message_shorten": "shorten_message",
+    "message_reply": "suggest_reply",
+    "message_summary": "summarize_thread",
+    "missing_info": "detect_missing_info",
+}
+
 ROLE_LABELS = {
     UserRole.EMPLOYEE: "موظف",
     UserRole.DIRECT_MANAGER: "مدير مباشر",
@@ -109,6 +198,16 @@ ROLE_LABELS = {
     UserRole.INFOSEC: "أمن المعلومات",
     UserRole.EXECUTIVE: "الإدارة التنفيذية",
     UserRole.SUPER_ADMIN: "مدير النظام",
+}
+
+FEATURE_PERMISSION_MAP = {
+    "draft": "draft_message",
+    "improve": "improve_message",
+    "formalize": "formalize_message",
+    "shorten": "shorten_message",
+    "suggest_reply": "suggest_reply",
+    "summarize": "summarize_message",
+    "missing_info": "detect_missing_info",
 }
 
 
@@ -153,15 +252,36 @@ def ai_settings_read(item: AISettings) -> dict[str, Any]:
     return {
         "id": item.id,
         "is_enabled": bool(item.is_enabled),
+        "mode": item.mode or ("enabled" if item.is_enabled else "disabled"),
+        "assistant_name": item.assistant_name or "المساعد الذكي للمراسلات",
+        "assistant_description": item.assistant_description,
         "provider": item.provider or DEFAULT_AI_PROVIDER,
         "api_base_url": item.api_base_url,
         "api_key_configured": bool(item.api_key_encrypted),
         "model_name": item.model_name,
+        "default_language": item.default_language or "ar",
         "max_input_chars": item.max_input_chars,
+        "timeout_seconds": item.timeout_seconds or 60,
+        "show_human_review_disclaimer": bool(item.show_human_review_disclaimer),
         "allow_message_drafting": bool(item.allow_message_drafting),
         "allow_summarization": bool(item.allow_summarization),
         "allow_reply_suggestion": bool(item.allow_reply_suggestion),
+        "allow_message_improvement": bool(item.allow_message_improvement),
+        "allow_missing_info_detection": bool(item.allow_missing_info_detection),
+        "allow_translate_ar_en": bool(item.allow_translate_ar_en),
         "mask_sensitive_data": bool(item.mask_sensitive_data),
+        "mask_emails": bool(item.mask_emails),
+        "mask_phone_numbers": bool(item.mask_phone_numbers),
+        "mask_employee_ids": bool(item.mask_employee_ids),
+        "mask_usernames": bool(item.mask_usernames),
+        "mask_request_numbers": bool(item.mask_request_numbers),
+        "allow_request_context": bool(item.allow_request_context),
+        "request_context_level": item.request_context_level or "basic_only",
+        "allow_attachments_to_ai": bool(item.allow_attachments_to_ai),
+        "store_full_prompt_logs": bool(item.store_full_prompt_logs),
+        "show_in_compose_message": bool(item.show_in_compose_message),
+        "show_in_message_details": bool(item.show_in_message_details),
+        "show_in_request_messages_tab": bool(item.show_in_request_messages_tab),
         "created_at": item.created_at,
         "updated_at": item.updated_at,
     }
@@ -172,16 +292,28 @@ def ensure_prompt_templates(db: Session) -> None:
     for code, value in DEFAULT_PROMPTS.items():
         if code in existing:
             continue
-        db.add(AIPromptTemplate(code=code, name_ar=value["name_ar"], prompt_text=value["prompt_text"], is_active=True))
+        db.add(
+            AIPromptTemplate(
+                code=code,
+                name_ar=value["name_ar"],
+                description=value.get("description"),
+                prompt_text=value["prompt_text"],
+                version_number=1,
+                is_active=True,
+            )
+        )
     db.flush()
 
 
 def prompt_template(db: Session, code: str) -> str:
     ensure_prompt_templates(db)
-    item = db.scalar(select(AIPromptTemplate).where(AIPromptTemplate.code == code, AIPromptTemplate.is_active == True))
+    canonical_code = PROMPT_ALIASES.get(code, code)
+    item = db.scalar(select(AIPromptTemplate).where(AIPromptTemplate.code == canonical_code, AIPromptTemplate.is_active == True))
+    if not item and canonical_code != code:
+        item = db.scalar(select(AIPromptTemplate).where(AIPromptTemplate.code == code, AIPromptTemplate.is_active == True))
     if item:
         return item.prompt_text
-    return DEFAULT_PROMPTS[code]["prompt_text"]
+    return DEFAULT_PROMPTS.get(canonical_code, DEFAULT_PROMPTS[code])["prompt_text"]
 
 
 def strip_html(value: str | None) -> str:
@@ -419,12 +551,12 @@ def visible_request_messages_text(db: Session, current_user: User, service_reque
 
 
 class AIProvider:
-    def generate_text(self, prompt: str, max_tokens: int = 800) -> str:
+    def generate_text(self, prompt: str, max_tokens: int = 800, temperature: float = 0.2) -> str:
         raise NotImplementedError
 
 
 class MockAIProvider(AIProvider):
-    def generate_text(self, prompt: str, max_tokens: int = 800) -> str:
+    def generate_text(self, prompt: str, max_tokens: int = 800, temperature: float = 0.2) -> str:
         if '"subject"' in prompt or "subject, body" in prompt:
             return json.dumps(
                 {
@@ -439,13 +571,14 @@ class MockAIProvider(AIProvider):
 
 
 class HTTPAIProvider(AIProvider):
-    def __init__(self, provider: str, api_base_url: str, api_key: str | None, model_name: str):
+    def __init__(self, provider: str, api_base_url: str, api_key: str | None, model_name: str, timeout_seconds: int = 60):
         self.provider = provider
         self.api_base_url = api_base_url.rstrip("/")
         self.api_key = api_key
         self.model_name = model_name
+        self.timeout_seconds = max(5, min(int(timeout_seconds or 60), 300))
 
-    def generate_text(self, prompt: str, max_tokens: int = 800) -> str:
+    def generate_text(self, prompt: str, max_tokens: int = 800, temperature: float = 0.2) -> str:
         provider = (self.provider or "").lower()
         endpoint = self.api_base_url
         if provider in {"openai_compatible", "openai-compatible", "chat_completions"}:
@@ -455,10 +588,10 @@ class HTTPAIProvider(AIProvider):
                     {"role": "system", "content": "You are a careful Arabic writing assistant for an internal banking service portal."},
                     {"role": "user", "content": prompt},
                 ],
-                "temperature": 0.2,
+                "temperature": temperature,
                 "max_tokens": max_tokens,
             }
-        elif provider in {"ollama", "ollama_native"}:
+        elif provider in {"local_ollama", "ollama", "ollama_native"}:
             if endpoint.endswith("/v1/chat/completions"):
                 payload = {
                     "model": self.model_name,
@@ -466,27 +599,29 @@ class HTTPAIProvider(AIProvider):
                         {"role": "system", "content": "You are a careful Arabic writing assistant for an internal banking service portal."},
                         {"role": "user", "content": prompt},
                     ],
-                    "temperature": 0.2,
+                    "temperature": temperature,
                     "max_tokens": max_tokens,
                 }
             else:
-                if not endpoint.endswith("/api/generate"):
-                    endpoint = f"{endpoint}/api/generate"
+                endpoint = normalize_ollama_chat_endpoint(endpoint)
                 payload = {
                     "model": self.model_name,
-                    "prompt": prompt,
+                    "messages": [
+                        {"role": "system", "content": "You are a careful Arabic writing assistant for an internal banking service portal."},
+                        {"role": "user", "content": prompt},
+                    ],
                     "stream": False,
-                    "options": {"temperature": 0.2, "num_predict": max_tokens},
+                    "options": {"temperature": temperature, "num_predict": max_tokens},
                 }
         else:
-            payload = {"model": self.model_name, "prompt": prompt, "max_tokens": max_tokens, "temperature": 0.2}
+            payload = {"model": self.model_name, "prompt": prompt, "max_tokens": max_tokens, "temperature": temperature}
         data = json.dumps(payload).encode("utf-8")
         headers = {"Content-Type": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
         req = urlrequest.Request(endpoint, data=data, headers=headers, method="POST")
         try:
-            with urlrequest.urlopen(req, timeout=45) as response:
+            with urlrequest.urlopen(req, timeout=self.timeout_seconds) as response:
                 raw = response.read().decode("utf-8")
         except urlerror.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="ignore")[:500]
@@ -508,6 +643,9 @@ def extract_provider_text(raw: str) -> str:
             return data["text"].strip()
         if isinstance(data.get("output"), str):
             return data["output"].strip()
+        message = data.get("message")
+        if isinstance(message, dict) and isinstance(message.get("content"), str):
+            return message["content"].strip()
         choices = data.get("choices")
         if isinstance(choices, list) and choices:
             first = choices[0]
@@ -522,25 +660,53 @@ def extract_provider_text(raw: str) -> str:
     return raw.strip()
 
 
+def normalize_ollama_chat_endpoint(endpoint: str) -> str:
+    value = (endpoint or "").rstrip("/")
+    if value.endswith("/api/chat"):
+        return value
+    if value.endswith("/api/generate"):
+        return f"{value[: -len('/api/generate')]}/api/chat"
+    if value.endswith("/api"):
+        return f"{value}/chat"
+    return f"{value}/api/chat"
+
+
 def provider_for_settings(item: AISettings) -> AIProvider:
     provider = (item.provider or DEFAULT_AI_PROVIDER).lower()
     if provider in {"mock", "local_mock"}:
         return MockAIProvider()
     if not item.api_base_url:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="لم يتم ضبط رابط مزود الذكاء الاصطناعي")
-    api_key = None if provider in {"ollama", "ollama_native"} else decrypt_api_key(item.api_key_encrypted)
-    return HTTPAIProvider(provider, item.api_base_url, api_key, item.model_name)
+    api_key = None if provider in {"local_ollama", "ollama", "ollama_native"} else decrypt_api_key(item.api_key_encrypted)
+    return HTTPAIProvider(provider, item.api_base_url, api_key, item.model_name, timeout_seconds=item.timeout_seconds)
 
 
 def validate_ai_feature(item: AISettings, feature: str) -> None:
-    if not item.is_enabled:
+    mode = item.mode or ("enabled" if item.is_enabled else "disabled")
+    if not item.is_enabled or mode == "disabled":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="المساعد الذكي غير مفعل من إعدادات النظام")
     if feature in {"draft", "improve", "formalize", "shorten", "missing_info"} and not item.allow_message_drafting:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="توليد الرسائل غير مفعل في إعدادات المساعد الذكي")
+    if feature in {"improve", "formalize", "shorten"} and not item.allow_message_improvement:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="تحسين صياغة الرسائل غير مفعل في إعدادات المساعد الذكي")
+    if feature == "missing_info" and not item.allow_missing_info_detection:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="فحص المعلومات الناقصة غير مفعل في إعدادات المساعد الذكي")
     if feature == "summarize" and not item.allow_summarization:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="تلخيص المراسلات غير مفعل في إعدادات المساعد الذكي")
     if feature == "suggest_reply" and not item.allow_reply_suggestion:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="اقتراح الردود غير مفعل في إعدادات المساعد الذكي")
+
+
+def validate_ai_role_permission(db: Session, user: User, feature: str) -> None:
+    if user.role == UserRole.SUPER_ADMIN:
+        return
+    feature_code = FEATURE_PERMISSION_MAP.get(feature, feature)
+    role = db.scalar(select(Role).where(Role.name == user.role))
+    if not role:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="لا توجد صلاحية لاستخدام هذه خاصية الذكاء الاصطناعي")
+    permission = db.scalar(select(AIFeaturePermission).where(AIFeaturePermission.role_id == role.id, AIFeaturePermission.feature_code == feature_code))
+    if permission and not permission.is_enabled:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="هذه الخاصية غير مفعلة لدورك الوظيفي")
 
 
 def render_prompt(template: str, **kwargs: str) -> str:
@@ -558,6 +724,7 @@ def generate_ai_text(
 ) -> AIResult:
     item = get_or_create_ai_settings(db)
     validate_ai_feature(item, feature)
+    validate_ai_role_permission(db, current_user, feature)
     enforce_ai_rate_limit(current_user)
     clean_prompt = mask_sensitive_text(build_ai_prompt(current_user, feature, prompt), bool(item.mask_sensitive_data))
     if len(clean_prompt) > item.max_input_chars:
@@ -565,23 +732,28 @@ def generate_ai_text(
     usage = AIUsageLog(
         user_id=current_user.id,
         feature=feature,
+        feature_code=feature,
         entity_type=entity_type,
         entity_id=entity_id,
         input_length=len(clean_prompt),
         status="success",
     )
     db.add(usage)
+    started = time.perf_counter()
     try:
         output = clean_ai_text_output(provider_for_settings(item).generate_text(clean_prompt, max_tokens=max_tokens))
+        usage.latency_ms = int((time.perf_counter() - started) * 1000)
         usage.output_length = len(output)
         db.commit()
         return AIResult(text=output, input_length=len(clean_prompt), output_length=len(output))
     except HTTPException as exc:
+        usage.latency_ms = int((time.perf_counter() - started) * 1000)
         usage.status = "failed"
         usage.error_message = str(exc.detail)[:1000]
         db.commit()
         raise
     except Exception as exc:
+        usage.latency_ms = int((time.perf_counter() - started) * 1000)
         usage.status = "failed"
         usage.error_message = str(exc)[:1000]
         db.commit()

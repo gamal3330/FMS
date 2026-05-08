@@ -28,6 +28,8 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
     user = db.get(User, user_id_int) if user_id_int else None
     if not user or not user.is_active:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Inactive or missing user")
+    if getattr(user, "is_locked", False):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account is locked")
     if user.locked_until:
         locked_until = user.locked_until
         if locked_until.tzinfo is None:
