@@ -38,6 +38,8 @@ const defaultSettings = {
   mode: "disabled",
   assistant_name: "المساعد الذكي للمراسلات",
   assistant_description: "يساعد المستخدمين في توليد مسودات وتحسين وتلخيص المراسلات دون إرسال أي رسالة تلقائياً.",
+  system_prompt:
+    "أنت مساعد ذكي للكتابة داخل نظام QIB Service Portal. مهمتك مساعدة المستخدم في صياغة وتحسين وتلخيص المراسلات الداخلية باللغة العربية بأسلوب مهني وواضح. لا ترسل الرسائل تلقائياً، ولا توافق على الطلبات، ولا ترفضها، ولا تغير حالة أي طلب، ولا تحذف أو تعدل بيانات النظام. أعد فقط النص المقترح المطلوب من المستخدم وبصيغة جاهزة للمراجعة البشرية.",
   provider: "local_ollama",
   api_base_url: "http://localhost:11434",
   api_key: "",
@@ -278,6 +280,18 @@ export default function AIControlCenter({ notify }) {
               وصف المساعد
               <textarea disabled={!isSuperAdmin} value={settings.assistant_description || ""} onChange={(event) => updateSettings("assistant_description", event.target.value)} className="min-h-24 w-full rounded-md border border-slate-300 bg-white p-3 text-sm leading-7 outline-none focus:border-bank-600 focus:ring-2 focus:ring-bank-100 disabled:bg-slate-50" />
             </label>
+            <div className="md:col-span-2 xl:col-span-4">
+              <TextArea
+                label="تعليمات النظام للمساعد"
+                value={settings.system_prompt || ""}
+                disabled={!isSuperAdmin}
+                rows={7}
+                onChange={(value) => updateSettings("system_prompt", value)}
+              />
+              <p className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm leading-6 text-amber-900">
+                هذا النص يحدد شخصية ووظيفة المساعد الذكي في كل طلب توليد. اجعله واضحاً ومقيداً بسياسات النظام، لأن المساعد سيستخدمه قبل تعليمات المستخدم.
+              </p>
+            </div>
           </div>
           <SaveBar onSave={saveSettings} onRefresh={load} disabled={!isSuperAdmin || saving} saving={saving} />
         </SettingsCard>

@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.security import get_password_hash
+from app.models.ai import DEFAULT_AI_SYSTEM_PROMPT
 from app.models.enums import UserRole
 from app.models.settings import RequestTypeField, RequestTypeSetting, SpecializedSection, WorkflowTemplate, WorkflowTemplateStep
 from app.models.user import Department, Role, User
@@ -302,6 +303,7 @@ def ensure_runtime_columns(db: Session) -> None:
             "mode": "VARCHAR(30) DEFAULT 'disabled'",
             "assistant_name": "VARCHAR(160) DEFAULT 'المساعد الذكي للمراسلات'",
             "assistant_description": "TEXT",
+            "system_prompt": "TEXT",
             "default_language": "VARCHAR(20) DEFAULT 'ar'",
             "timeout_seconds": "INTEGER DEFAULT 60",
             "show_human_review_disclaimer": f"BOOLEAN DEFAULT {bool_true}",
@@ -336,9 +338,11 @@ def ensure_runtime_columns(db: Session) -> None:
                     assistant_name = COALESCE(NULLIF(assistant_name, ''), 'المساعد الذكي للمراسلات'),
                     default_language = COALESCE(NULLIF(default_language, ''), 'ar'),
                     timeout_seconds = COALESCE(timeout_seconds, 60),
-                    request_context_level = COALESCE(NULLIF(request_context_level, ''), 'basic_only')
+                    request_context_level = COALESCE(NULLIF(request_context_level, ''), 'basic_only'),
+                    system_prompt = COALESCE(NULLIF(system_prompt, ''), :default_system_prompt)
                 """
-            )
+            ),
+            {"default_system_prompt": DEFAULT_AI_SYSTEM_PROMPT},
         )
         db.commit()
     if "ai_usage_logs" in table_names:

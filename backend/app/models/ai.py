@@ -6,6 +6,14 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.session import Base
 
 
+DEFAULT_AI_SYSTEM_PROMPT = (
+    "أنت مساعد ذكي للكتابة داخل نظام QIB Service Portal. "
+    "مهمتك مساعدة المستخدم في صياغة وتحسين وتلخيص المراسلات الداخلية باللغة العربية بأسلوب مهني وواضح. "
+    "لا ترسل الرسائل تلقائياً، ولا توافق على الطلبات، ولا ترفضها، ولا تغير حالة أي طلب، ولا تحذف أو تعدل بيانات النظام. "
+    "أعد فقط النص المقترح المطلوب من المستخدم وبصيغة جاهزة للمراجعة البشرية."
+)
+
+
 class AISettings(Base):
     __tablename__ = "ai_settings"
 
@@ -14,6 +22,7 @@ class AISettings(Base):
     mode: Mapped[str] = mapped_column(String(30), default="disabled")
     assistant_name: Mapped[str] = mapped_column(String(160), default="المساعد الذكي للمراسلات")
     assistant_description: Mapped[str | None] = mapped_column(Text)
+    system_prompt: Mapped[str | None] = mapped_column(Text, default=DEFAULT_AI_SYSTEM_PROMPT)
     provider: Mapped[str] = mapped_column(String(80), default="local_ollama")
     api_base_url: Mapped[str | None] = mapped_column(String(500), default="http://localhost:11434")
     api_key_encrypted: Mapped[str | None] = mapped_column(Text)

@@ -22,6 +22,7 @@ class AISettingsRead(BaseModel):
     mode: str = "disabled"
     assistant_name: str = "المساعد الذكي للمراسلات"
     assistant_description: str | None = None
+    system_prompt: str | None = None
     provider: str = "local_ollama"
     api_base_url: str | None = None
     api_key_configured: bool = False
@@ -60,6 +61,7 @@ class AISettingsUpdate(BaseModel):
     mode: str = Field(default="disabled", pattern="^(disabled|pilot|enabled)$")
     assistant_name: str = Field(default="المساعد الذكي للمراسلات", max_length=160)
     assistant_description: str | None = Field(default=None, max_length=2000)
+    system_prompt: str | None = Field(default=None, max_length=8000)
     provider: str = Field(default="local_ollama", max_length=80)
     api_base_url: str | None = Field(default=None, max_length=500)
     api_key: str | None = Field(default=None, max_length=5000)

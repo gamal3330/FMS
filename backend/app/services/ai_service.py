@@ -17,7 +17,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.config import get_settings
-from app.models.ai import AIFeaturePermission, AISettings, AIPromptTemplate, AIUsageLog
+from app.models.ai import DEFAULT_AI_SYSTEM_PROMPT, AIFeaturePermission, AISettings, AIPromptTemplate, AIUsageLog
 from app.models.enums import UserRole
 from app.models.message import InternalMessage
 from app.models.request import ApprovalStep, ServiceRequest
@@ -258,6 +258,7 @@ def ai_settings_read(item: AISettings) -> dict[str, Any]:
         "mode": item.mode or ("enabled" if item.is_enabled else "disabled"),
         "assistant_name": item.assistant_name or "المساعد الذكي للمراسلات",
         "assistant_description": item.assistant_description,
+        "system_prompt": item.system_prompt or DEFAULT_AI_SYSTEM_PROMPT,
         "provider": item.provider or DEFAULT_AI_PROVIDER,
         "api_base_url": item.api_base_url,
         "api_key_configured": bool(item.api_key_encrypted),
@@ -581,21 +582,31 @@ class MockAIProvider(AIProvider):
 
 
 class HTTPAIProvider(AIProvider):
-    def __init__(self, provider: str, api_base_url: str, api_key: str | None, model_name: str, timeout_seconds: int = 60):
+    def __init__(
+        self,
+        provider: str,
+        api_base_url: str,
+        api_key: str | None,
+        model_name: str,
+        timeout_seconds: int = 60,
+        system_prompt: str | None = None,
+    ):
         self.provider = provider
         self.api_base_url = api_base_url.rstrip("/")
         self.api_key = api_key
         self.model_name = model_name
         self.timeout_seconds = max(5, min(int(timeout_seconds or 60), 300))
+        self.system_prompt = (system_prompt or DEFAULT_AI_SYSTEM_PROMPT).strip()
 
     def generate_text(self, prompt: str, max_tokens: int = 800, temperature: float = 0.2) -> str:
         provider = (self.provider or "").lower()
         endpoint = self.api_base_url
+        system_message = self.system_prompt or DEFAULT_AI_SYSTEM_PROMPT
         if provider in {"openai_compatible", "openai-compatible", "chat_completions"}:
             payload = {
                 "model": self.model_name,
                 "messages": [
-                    {"role": "system", "content": "You are a careful Arabic writing assistant for an internal banking service portal."},
+                    {"role": "system", "content": system_message},
                     {"role": "user", "content": prompt},
                 ],
                 "temperature": temperature,
@@ -606,7 +617,7 @@ class HTTPAIProvider(AIProvider):
                 payload = {
                     "model": self.model_name,
                     "messages": [
-                        {"role": "system", "content": "You are a careful Arabic writing assistant for an internal banking service portal."},
+                        {"role": "system", "content": system_message},
                         {"role": "user", "content": prompt},
                     ],
                     "temperature": temperature,
@@ -617,14 +628,19 @@ class HTTPAIProvider(AIProvider):
                 payload = {
                     "model": self.model_name,
                     "messages": [
-                        {"role": "system", "content": "You are a careful Arabic writing assistant for an internal banking service portal."},
+                        {"role": "system", "content": system_message},
                         {"role": "user", "content": prompt},
                     ],
                     "stream": False,
                     "options": {"temperature": temperature, "num_predict": max_tokens},
                 }
         else:
-            payload = {"model": self.model_name, "prompt": prompt, "max_tokens": max_tokens, "temperature": temperature}
+            payload = {
+                "model": self.model_name,
+                "prompt": f"{system_message}\n\n{prompt}",
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+            }
         data = json.dumps(payload).encode("utf-8")
         headers = {"Content-Type": "application/json"}
         if self.api_key:
@@ -688,7 +704,7 @@ def provider_for_settings(item: AISettings) -> AIProvider:
     if not item.api_base_url:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="لم يتم ضبط رابط مزود الذكاء الاصطناعي")
     api_key = None if provider in {"local_ollama", "ollama", "ollama_native"} else decrypt_api_key(item.api_key_encrypted)
-    return HTTPAIProvider(provider, item.api_base_url, api_key, item.model_name, timeout_seconds=item.timeout_seconds)
+    return HTTPAIProvider(provider, item.api_base_url, api_key, item.model_name, timeout_seconds=item.timeout_seconds, system_prompt=item.system_prompt)
 
 
 def validate_ai_feature(item: AISettings, feature: str) -> None:
