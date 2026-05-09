@@ -29,7 +29,7 @@ const SCREEN_ROUTES: Record<string, string> = {
   messages: "/messages",
   reports: "/reports",
   settings: "/settings",
-  request_types: "/request-types",
+  request_types: "/settings/request-management",
   users: "/settings/users-permissions",
   departments: "/departments",
   specialized_sections: "/specialized-sections",
@@ -146,6 +146,7 @@ function ProtectedApp() {
       <Routes>
         <Route path="/dashboard" element={screenElement("dashboard", <Dashboard />)} />
         <Route path="/requests" element={screenElement("requests", <Requests />)} />
+        <Route path="/requests/new" element={screenElement("requests", <Requests />)} />
         <Route path="/requests/:requestId" element={screenElement("requests", <RequestDetails />)} />
         <Route path="/approvals" element={screenElement("approvals", <Approvals />)} />
         <Route path="/messages" element={screenElement("messages", <MessagesPage />)} />
@@ -182,6 +183,10 @@ function ProtectedApp() {
           element={canAccessScreen("request_types") ? <RequestTypesPage /> : <Navigate to={defaultPath()} replace />}
         />
         <Route
+          path="/settings/request-management"
+          element={canAccessScreen("request_types") ? <RequestTypesPage /> : <Navigate to={defaultPath()} replace />}
+        />
+        <Route
           path="/users"
           element={canAccessScreen("users") ? <UsersPage /> : <Navigate to={defaultPath()} replace />}
         />
@@ -201,7 +206,7 @@ function ProtectedApp() {
           path="/settings/health-monitoring"
           element={canAccessScreen("health_monitoring") ? <HealthMonitoringPage /> : <Navigate to={defaultPath()} replace />}
         />
-        <Route path="/settings/request-types" element={<Navigate to="/request-types" replace />} />
+        <Route path="/settings/request-types" element={<Navigate to="/settings/request-management" replace />} />
         <Route path="/settings/users" element={<Navigate to="/settings/users-permissions" replace />} />
         <Route path="/settings/departments" element={<Navigate to="/departments" replace />} />
         <Route path="/settings/specialized-sections" element={<Navigate to="/specialized-sections" replace />} />

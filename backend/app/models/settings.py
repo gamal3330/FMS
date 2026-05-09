@@ -143,6 +143,7 @@ class RequestTypeSetting(Base):
     category: Mapped[str] = mapped_column(String(80), index=True)
     assigned_section: Mapped[str | None] = mapped_column(String(40), index=True)
     assigned_department_id: Mapped[int | None] = mapped_column(ForeignKey("departments.id"), index=True)
+    auto_assign_strategy: Mapped[str] = mapped_column(String(40), default="none")
     description: Mapped[str | None] = mapped_column(Text)
     icon: Mapped[str | None] = mapped_column(String(80))
     is_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -150,14 +151,36 @@ class RequestTypeSetting(Base):
     require_attachment: Mapped[bool | None] = mapped_column(Boolean, default=False)
     requires_attachment: Mapped[bool] = mapped_column(Boolean, default=False)
     allow_multiple_attachments: Mapped[bool] = mapped_column(Boolean, default=False)
+    max_attachments: Mapped[int] = mapped_column(Integer, default=1)
+    max_file_size_mb: Mapped[int] = mapped_column(Integer, default=10)
+    allowed_extensions_json: Mapped[list] = mapped_column(JSON, default=list)
     default_priority: Mapped[str] = mapped_column(String(20), default="medium")
     sla_response_hours: Mapped[int] = mapped_column(Integer, default=4)
     sla_resolution_hours: Mapped[int] = mapped_column(Integer, default=24)
+    current_version_number: Mapped[int] = mapped_column(Integer, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     fields: Mapped[list["RequestTypeField"]] = relationship(back_populates="request_type", cascade="all, delete-orphan")
     assigned_department = relationship("Department")
+
+
+class RequestTypeVersion(Base):
+    __tablename__ = "request_type_versions"
+    __table_args__ = (UniqueConstraint("request_type_id", "version_number", name="uq_request_type_version_number"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    request_type_id: Mapped[int] = mapped_column(ForeignKey("request_types.id", ondelete="CASCADE"), index=True)
+    version_number: Mapped[int] = mapped_column(Integer, default=1)
+    status: Mapped[str] = mapped_column(String(30), default="draft", index=True)
+    change_summary: Mapped[str | None] = mapped_column(Text)
+    snapshot_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    activated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    request_type = relationship("RequestTypeSetting")
+    created_by = relationship("User")
 
 
 class RequestTypeField(Base):

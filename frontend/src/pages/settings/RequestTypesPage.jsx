@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Plus, Search } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Plus, RefreshCw, Rocket, Search, XCircle } from "lucide-react";
 import { api, getErrorMessage } from "../../lib/axios";
 import { Button } from "../../components/ui/button";
 import { Card } from "../../components/ui/card";
@@ -11,12 +11,13 @@ import RequestTypesTable from "../../components/request-types/RequestTypesTable"
 import WorkflowBuilder from "../../components/request-types/WorkflowBuilder";
 import WorkflowPreview from "../../components/request-types/WorkflowPreview";
 
-const tabs = ["البيانات الأساسية", "الحقول", "مسار الموافقات", "معاينة الموافقات"];
+const tabs = ["البيانات الأساسية", "الحقول", "مسار الموافقات", "معاينة الموافقات", "المعاينة والنشر", "النسخ والإصدارات"];
 
 export default function RequestTypesPage() {
   const [items, setItems] = useState([]);
   const [departments, setDepartments] = useState([]);
   const [sections, setSections] = useState([]);
+  const [overview, setOverview] = useState(null);
   const [selected, setSelected] = useState(null);
   const [modal, setModal] = useState(false);
   const [activeTab, setActiveTab] = useState(tabs[0]);
@@ -24,6 +25,8 @@ export default function RequestTypesPage() {
   const [status, setStatus] = useState("");
   const [dialog, setDialog] = useState({ type: "success", message: "" });
   const [workflowPreview, setWorkflowPreview] = useState([]);
+  const [versionInfo, setVersionInfo] = useState(null);
+  const [publishValidation, setPublishValidation] = useState(null);
 
   function notify(message, type = "success") {
     setDialog({ type, message });
@@ -31,10 +34,14 @@ export default function RequestTypesPage() {
 
   async function load() {
     try {
-      const { data } = await api.get("/request-types/bootstrap", { params: { search: search || undefined, status: status || undefined } });
+      const [{ data }, overviewResponse] = await Promise.all([
+        api.get("/request-types/bootstrap", { params: { search: search || undefined, status: status || undefined } }),
+        api.get("/settings/request-management/overview").catch(() => ({ data: null }))
+      ]);
       setItems(data.request_types || []);
       setDepartments(data.departments || []);
       setSections((data.specialized_sections || []).map((section) => [section.code, section.name_ar]));
+      setOverview(overviewResponse.data);
       setSelected((current) => current || data.request_types?.[0] || null);
     } catch (error) {
       setDialog({ type: "error", message: getErrorMessage(error) });
@@ -101,6 +108,53 @@ export default function RequestTypesPage() {
     previewWorkflow(false);
   }, [selected?.id, activeTab]);
 
+  async function publishDraft() {
+    if (!selected?.id) return;
+    if (!confirm("هل تريد نشر المسودة؟ الطلبات الجديدة ستستخدم هذه النسخة بعد النشر.")) return;
+    try {
+      await api.post(`/request-types/${selected.id}/versions/publish-draft`);
+      notify("تم نشر نسخة نوع الطلب");
+      const [{ data: updated }, { data: versions }] = await Promise.all([
+        api.get(`/request-types/${selected.id}`),
+        api.get(`/request-types/${selected.id}/versions`)
+      ]);
+      setSelected(updated);
+      setVersionInfo(versions);
+      await load();
+    } catch (error) {
+      setDialog({ type: "error", message: getErrorMessage(error) });
+    }
+  }
+
+  useEffect(() => {
+    if (!selected?.id || activeTab !== "النسخ والإصدارات") {
+      setVersionInfo(null);
+      return;
+    }
+    api.get(`/request-types/${selected.id}/versions`)
+      .then(({ data }) => setVersionInfo(data))
+      .catch((error) => setDialog({ type: "error", message: getErrorMessage(error) }));
+  }, [selected?.id, activeTab]);
+
+  async function loadPublishValidation(showNotice = false) {
+    if (!selected?.id) return;
+    try {
+      const { data } = await api.post(`/request-types/${selected.id}/versions/validate-draft`);
+      setPublishValidation(data);
+      if (showNotice) notify("تم تحديث فحص النشر");
+    } catch (error) {
+      setDialog({ type: "error", message: getErrorMessage(error) });
+    }
+  }
+
+  useEffect(() => {
+    if (!selected?.id || activeTab !== "المعاينة والنشر") {
+      setPublishValidation(null);
+      return;
+    }
+    loadPublishValidation(false);
+  }, [selected?.id, activeTab]);
+
   return (
     <section className="space-y-6" dir="rtl">
       <FeedbackDialog open={Boolean(dialog.message)} type={dialog.type} message={dialog.message} onClose={() => setDialog({ ...dialog, message: "" })} />
@@ -108,9 +162,9 @@ export default function RequestTypesPage() {
         <p className="text-sm font-semibold text-bank-700">إدارة النظام</p>
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <div>
-            <h2 className="mt-2 text-2xl font-bold text-slate-950">إدارة أنواع الطلبات</h2>
+            <h2 className="mt-2 text-2xl font-bold text-slate-950">إدارة الطلبات</h2>
             <p className="mt-2 text-sm text-slate-500">
-              إضافة وتعديل وتعطيل وحذف أنواع الطلبات، مع إدارة الحقول ومراحل الموافقات لكل نوع.
+              مركز تحكم أنواع الطلبات والحقول ومسارات الموافقات، وكل تعديل هنا ينعكس على شاشة إنشاء الطلبات.
             </p>
           </div>
           <Button onClick={() => { setSelected(null); setModal("create"); }} className="gap-2">
@@ -119,6 +173,19 @@ export default function RequestTypesPage() {
           </Button>
         </div>
       </div>
+
+      {overview && (
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <OverviewCard label="إجمالي أنواع الطلبات" value={overview.total_request_types} />
+          <OverviewCard label="الأنواع المفعلة" value={overview.active_request_types} tone="green" />
+          <OverviewCard label="بدون مسار موافقات" value={overview.missing_workflow} tone={overview.missing_workflow ? "amber" : "green"} />
+          <OverviewCard label="بدون قسم مختص" value={overview.missing_specialized_section} tone={overview.missing_specialized_section ? "amber" : "green"} />
+          <OverviewCard label="تتطلب مرفقات" value={overview.requires_attachment} />
+          <OverviewCard label="لها SLA" value={overview.has_sla} />
+          <OverviewCard label="المعطلة" value={overview.inactive_request_types} tone="slate" />
+          <OverviewCard label="آخر تعديل" value={overview.last_updated_at ? new Date(overview.last_updated_at).toLocaleDateString("ar") : "-"} />
+        </div>
+      )}
 
       <Card className="p-5">
         <div className="mb-4 grid gap-3 md:grid-cols-[1fr_180px_auto]">
@@ -133,7 +200,7 @@ export default function RequestTypesPage() {
           </select>
           <Button onClick={load}>بحث</Button>
         </div>
-        <RequestTypesTable items={items} departments={departments} onView={(item) => setSelected(item)} onEdit={(item) => { setSelected(item); setModal("edit"); }} onToggle={toggle} onDelete={remove} />
+        <RequestTypesTable items={items} departments={departments} sections={sections} onView={(item) => setSelected(item)} onEdit={(item) => { setSelected(item); setModal("edit"); }} onToggle={toggle} onDelete={remove} />
       </Card>
 
       {selected && (
@@ -142,6 +209,9 @@ export default function RequestTypesPage() {
             <div>
               <h3 className="text-xl font-bold text-slate-950">{selected.name_ar}</h3>
               <p className="mt-1 text-sm text-slate-500">{selected.name_en} - {selected.code}</p>
+              <span className="mt-2 inline-flex rounded-md bg-slate-100 px-2 py-1 text-xs font-black text-slate-700">
+                النسخة الحالية v{selected.current_version_number || 1}
+              </span>
             </div>
             <Button onClick={previewWorkflow}>معاينة المسار</Button>
           </div>
@@ -156,6 +226,8 @@ export default function RequestTypesPage() {
           {activeTab === "الحقول" && <DynamicFieldsBuilder requestTypeId={selected.id} notify={notify} />}
           {activeTab === "مسار الموافقات" && <WorkflowBuilder requestTypeId={selected.id} notify={notify} onWorkflowChange={() => previewWorkflow(false)} />}
           {activeTab === "معاينة الموافقات" && <WorkflowPreview steps={workflowPreview} />}
+          {activeTab === "المعاينة والنشر" && <PublishValidationPanel validation={publishValidation} onRefresh={() => loadPublishValidation(true)} onPublish={publishDraft} />}
+          {activeTab === "النسخ والإصدارات" && <RequestTypeVersionsPanel versionInfo={versionInfo} onPublishDraft={publishDraft} />}
         </Card>
       )}
 
@@ -171,5 +243,150 @@ export default function RequestTypesPage() {
         </div>
       )}
     </section>
+  );
+}
+
+function OverviewCard({ label, value, tone = "bank" }) {
+  const tones = {
+    bank: "border-bank-100 bg-bank-50 text-bank-800",
+    green: "border-emerald-100 bg-emerald-50 text-emerald-800",
+    amber: "border-amber-100 bg-amber-50 text-amber-800",
+    slate: "border-slate-200 bg-slate-50 text-slate-700"
+  };
+  return (
+    <div className={`rounded-lg border p-4 shadow-sm ${tones[tone] || tones.bank}`}>
+      <p className="text-xs font-bold opacity-80">{label}</p>
+      <p className="mt-2 text-2xl font-black">{value ?? "-"}</p>
+    </div>
+  );
+}
+
+function PublishValidationPanel({ validation, onRefresh, onPublish }) {
+  if (!validation) {
+    return <div className="rounded-md bg-slate-50 p-4 text-sm font-semibold text-slate-500">جاري فحص المسودة...</div>;
+  }
+  const preview = validation.preview || {};
+  const canPublish = validation.can_publish && validation.has_draft;
+  return (
+    <div className="space-y-4">
+      <div className={`rounded-md border p-4 ${validation.can_publish ? "border-emerald-200 bg-emerald-50" : "border-red-200 bg-red-50"}`}>
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <p className={`text-base font-black ${validation.can_publish ? "text-emerald-900" : "text-red-900"}`}>
+              {validation.can_publish ? "المسودة قابلة للنشر" : "المسودة تحتاج معالجة قبل النشر"}
+            </p>
+            <p className={`mt-1 text-sm font-semibold ${validation.can_publish ? "text-emerald-800" : "text-red-800"}`}>
+              {validation.has_draft ? `سيتم نشر النسخة v${validation.version_number}.` : "لا توجد مسودة جديدة؛ عدّل البيانات أو الحقول أو المسار لإنشاء مسودة."}
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" onClick={onRefresh} className="gap-2 border border-slate-200 bg-white text-slate-700 hover:bg-slate-50">
+              <RefreshCw className="h-4 w-4" />
+              إعادة الفحص
+            </Button>
+            <Button type="button" onClick={onPublish} disabled={!canPublish} className="gap-2">
+              <Rocket className="h-4 w-4" />
+              نشر المسودة
+            </Button>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <OverviewCard label="عدد الأخطاء" value={validation.errors_count || 0} tone={validation.errors_count ? "amber" : "green"} />
+        <OverviewCard label="عدد التحذيرات" value={validation.warnings_count || 0} tone={validation.warnings_count ? "amber" : "green"} />
+        <OverviewCard label="حقول النموذج" value={preview.fields_count ?? 0} />
+        <OverviewCard label="مراحل الموافقات" value={preview.workflow_steps_count ?? 0} />
+      </div>
+
+      <div className="overflow-x-auto rounded-md border border-slate-200">
+        <table className="w-full min-w-[760px] text-sm">
+          <thead className="bg-slate-50 text-slate-500">
+            <tr>
+              {["الفحص", "الحالة", "النتيجة"].map((header) => (
+                <th key={header} className="p-3 text-right font-bold">{header}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100 bg-white">
+            {(validation.checks || []).map((check) => (
+              <tr key={check.code}>
+                <td className="p-3 font-black text-slate-900">{check.label}</td>
+                <td className="p-3"><ValidationBadge status={check.status} /></td>
+                <td className="p-3 text-slate-600">{check.message}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function ValidationBadge({ status }) {
+  if (status === "passed") {
+    return <span className="inline-flex items-center gap-1 rounded-md bg-emerald-50 px-2 py-1 text-xs font-bold text-emerald-700"><CheckCircle2 className="h-3.5 w-3.5" />ناجح</span>;
+  }
+  if (status === "warning") {
+    return <span className="inline-flex items-center gap-1 rounded-md bg-amber-50 px-2 py-1 text-xs font-bold text-amber-700"><AlertTriangle className="h-3.5 w-3.5" />تحذير</span>;
+  }
+  return <span className="inline-flex items-center gap-1 rounded-md bg-red-50 px-2 py-1 text-xs font-bold text-red-700"><XCircle className="h-3.5 w-3.5" />فشل</span>;
+}
+
+function RequestTypeVersionsPanel({ versionInfo, onPublishDraft }) {
+  if (!versionInfo) {
+    return <div className="rounded-md bg-slate-50 p-4 text-sm text-slate-500">جاري تحميل النسخ...</div>;
+  }
+  const draft = (versionInfo.versions || []).find((version) => version.status === "draft");
+  return (
+    <div className="space-y-4">
+      <div className="rounded-md border border-bank-100 bg-bank-50 p-4 text-sm leading-7 text-bank-900">
+        يتم حفظ التعديلات الجديدة كمسودة أولاً. الطلبات الجديدة تستخدم النسخة النشطة فقط، ولن تنتقل للمسودة إلا بعد الضغط على نشر المسودة.
+      </div>
+      {draft && (
+        <div className="flex flex-col gap-3 rounded-md border border-amber-200 bg-amber-50 p-4 md:flex-row md:items-center md:justify-between">
+          <div>
+            <p className="text-sm font-black text-amber-900">توجد مسودة غير منشورة v{draft.version_number}</p>
+            <p className="mt-1 text-xs font-semibold text-amber-800">
+              {draft.is_ready ? "المسودة جاهزة للنشر بعد مراجعتها." : "المسودة تحتاج إلى قسم مختص ومسار موافقات فعال قبل النشر."}
+            </p>
+          </div>
+          <Button type="button" onClick={onPublishDraft} disabled={!draft.is_ready} className="gap-2">
+            <Rocket className="h-4 w-4" />
+            نشر المسودة
+          </Button>
+        </div>
+      )}
+      <div className="overflow-x-auto rounded-md border border-slate-200">
+        <table className="w-full min-w-[720px] text-sm">
+          <thead className="bg-slate-50 text-slate-500">
+            <tr>
+              {["رقم النسخة", "الحالة", "جاهزية النشر", "عدد الطلبات", "آخر تعديل"].map((header) => (
+                <th key={header} className="p-3 text-right font-bold">{header}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100 bg-white">
+            {(versionInfo.versions || []).map((version) => (
+              <tr key={version.version_number}>
+                <td className="p-3 font-black text-slate-950">v{version.version_number}</td>
+                <td className="p-3">
+                  <span className={`rounded-md px-2 py-1 text-xs font-bold ${version.status === "active" ? "bg-bank-50 text-bank-700" : "bg-slate-100 text-slate-600"}`}>
+                    {version.status === "active" ? "نشطة" : version.status === "draft" ? "مسودة" : "مؤرشفة"}
+                  </span>
+                </td>
+                <td className="p-3">
+                  <span className={`rounded-md px-2 py-1 text-xs font-bold ${version.is_ready ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>
+                    {version.is_ready ? "جاهزة" : "ناقصة"}
+                  </span>
+                </td>
+                <td className="p-3">{version.requests_count || 0}</td>
+                <td className="p-3 text-slate-600">{version.updated_at ? new Date(version.updated_at).toLocaleString("ar") : "-"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
   );
 }

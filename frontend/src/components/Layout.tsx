@@ -67,7 +67,7 @@ export function Layout({
   const canSeeScreen = (screenKey: string) => !allowedScreens || allowedScreens.has(screenKey);
   const visibleBaseNav = baseNav.filter((item) => !(isEmployee && item.hiddenForEmployee)).filter((item) => canSeeScreen(item.screenKey));
   const managementNav = [
-    { label: "إدارة أنواع الطلبات", href: "/request-types", icon: ScrollText, screenKey: "request_types" },
+    { label: "إدارة الطلبات", href: "/settings/request-management", icon: ScrollText, screenKey: "request_types" },
     { label: "المستخدمون والصلاحيات", href: "/settings/users-permissions", icon: Users, screenKey: "users" },
     { label: "الإدارات", href: "/departments", icon: Building2, screenKey: "departments" },
     { label: "الأقسام المختصة", href: "/specialized-sections", icon: Network, screenKey: "specialized_sections" },
@@ -238,13 +238,15 @@ export function Layout({
       socket = new WebSocket(buildWebSocketUrl("/ws/notifications", wsToken));
       socket.onmessage = (event) => {
         const payload = parseRealtimePayload(event.data);
-        if (!payload || payload.type !== "new_message") return;
-        previousMessageUnreadCount.current += 1;
-        messageCountersInitialized.current = true;
-        setMessageUnreadCount((value) => value + 1);
+        if (!payload || !["new_message", "message_read"].includes(payload.type)) return;
+        if (payload.type === "new_message") {
+          previousMessageUnreadCount.current += 1;
+          messageCountersInitialized.current = true;
+          setMessageUnreadCount((value) => value + 1);
+        }
         setMessageToast({ message: `${payload.body}${payload.subject ? `: ${payload.subject}` : ""}` });
         showBrowserNotification(payload);
-        window.dispatchEvent(new Event("qib-messages-updated"));
+        if (payload.type === "new_message") window.dispatchEvent(new Event("qib-messages-updated"));
       };
       socket.onclose = () => {
         if (closedByEffect) return;

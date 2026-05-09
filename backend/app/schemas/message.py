@@ -87,9 +87,14 @@ class MessageSettingsRead(BaseModel):
     enable_unread_badge: bool = True
     enable_linked_requests: bool = True
     allow_send_message_from_request: bool = True
+    show_messages_tab_in_request_details: bool = True
+    show_message_count_on_request: bool = True
+    allow_request_owner_to_view_messages: bool = False
+    allow_approvers_to_view_request_messages: bool = True
     enable_message_notifications: bool = True
     notify_on_new_message: bool = True
     notify_on_reply: bool = True
+    notify_on_read: bool = False
     auto_refresh_seconds: int = 20
     max_attachment_mb: int = 25
     max_attachments_per_message: int = 10

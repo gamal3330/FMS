@@ -1,22 +1,29 @@
 import { Edit, Eye, Power, Trash2 } from "lucide-react";
 
 const priorityLabels = { low: "منخفضة", medium: "متوسطة", high: "عالية", critical: "حرجة" };
+const assignmentLabels = {
+  none: "بدون تعيين",
+  section_manager: "مدير القسم",
+  least_open_requests: "الأقل طلبات",
+  round_robin: "توزيع دوري"
+};
 
-export default function RequestTypesTable({ items, departments = [], onView, onEdit, onToggle, onDelete }) {
+export default function RequestTypesTable({ items, departments = [], sections = [], onView, onEdit, onToggle, onDelete }) {
   const departmentNameById = new Map(departments.map((department) => [department.id, department.name_ar]));
+  const sectionNameByCode = new Map(sections);
   return (
     <div className="overflow-x-auto rounded-md border border-slate-200">
       <table className="w-full min-w-[1120px] text-sm">
         <thead className="bg-slate-50 text-slate-500">
           <tr>
-            {["نوع الطلب", "الرمز", "القسم المختص", "الحالة", "المرفقات", "الأولوية", "الحقول", "مسار الموافقات", "الإجراءات"].map((header) => (
+            {["نوع الطلب", "الرمز", "التصنيف", "القسم المختص", "الحالة", "المرفقات", "الأولوية", "SLA", "النسخة", "الحقول", "مسار الموافقات", "الإجراءات"].map((header) => (
               <th key={header} className="p-3 text-right font-semibold">{header}</th>
             ))}
           </tr>
         </thead>
         <tbody className="divide-y divide-slate-100 bg-white">
           {items.length === 0 && (
-            <tr><td colSpan={9} className="p-8 text-center text-slate-500">لا توجد أنواع طلبات مطابقة.</td></tr>
+            <tr><td colSpan={12} className="p-8 text-center text-slate-500">لا توجد أنواع طلبات مطابقة.</td></tr>
           )}
           {items.map((item) => (
             <tr key={item.id} className="hover:bg-slate-50">
@@ -25,10 +32,22 @@ export default function RequestTypesTable({ items, departments = [], onView, onE
                 <p className="mt-1 text-xs text-slate-500">{item.name_en}</p>
               </td>
               <td className="p-3 font-mono text-xs">{item.code}</td>
-              <td className="p-3">{item.assigned_section || departmentNameById.get(item.assigned_department_id) || "-"}</td>
+              <td className="p-3">{categoryLabel(item.category)}</td>
+              <td className="p-3">
+                <span className="block">{sectionNameByCode.get(item.assigned_section) || item.assigned_section || departmentNameById.get(item.assigned_department_id) || "-"}</span>
+                <span className="mt-1 block text-xs font-bold text-slate-500">{assignmentLabels[item.auto_assign_strategy] || item.auto_assign_strategy || "بدون تعيين"}</span>
+              </td>
               <td className="p-3"><Pill active={item.is_active} /></td>
-              <td className="p-3">{item.requires_attachment ? "مطلوبة" : item.allow_multiple_attachments ? "اختيارية متعددة" : "اختيارية"}</td>
+              <td className="p-3 text-xs leading-5">
+                {item.requires_attachment ? "مطلوبة" : "اختيارية"}
+                <br />
+                {item.max_attachments || (item.allow_multiple_attachments ? 5 : 1)} ملف / {item.max_file_size_mb || 10} MB
+                <br />
+                <span className="text-slate-500">{(item.allowed_extensions_json || ["pdf", "png", "jpg", "jpeg"]).join(", ")}</span>
+              </td>
               <td className="p-3">{priorityLabels[item.default_priority] || item.default_priority}</td>
+              <td className="p-3 text-xs leading-5 text-slate-600">استجابة {item.sla_response_hours || "-"}س<br />حل {item.sla_resolution_hours || "-"}س</td>
+              <td className="p-3"><span className="rounded-md bg-slate-100 px-2 py-1 text-xs font-black text-slate-700">v{item.current_version_number || 1}</span></td>
               <td className="p-3">{item.fields_count ?? 0}</td>
               <td className="max-w-sm truncate p-3">{item.workflow_summary || "لم يحدد"}</td>
               <td className="p-3">
@@ -45,6 +64,18 @@ export default function RequestTypesTable({ items, departments = [], onView, onE
       </table>
     </div>
   );
+}
+
+function categoryLabel(value) {
+  const labels = {
+    general: "عام",
+    access: "صلاحيات",
+    network: "شبكات",
+    accounts: "حسابات",
+    software: "برامج",
+    development: "تطوير"
+  };
+  return labels[value] || value || "-";
 }
 
 function Pill({ active }) {

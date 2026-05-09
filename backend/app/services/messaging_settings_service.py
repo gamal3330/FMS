@@ -170,8 +170,8 @@ def sync_legacy_message_settings(db: Session) -> None:
     ai = get_singleton(db, MessageAISettings)
     recipient_setting = db.scalar(select(PortalSetting).where(PortalSetting.category == "messaging_recipient_settings", PortalSetting.setting_key == "defaults"))
     recipient_value = recipient_setting.setting_value if recipient_setting and isinstance(recipient_setting.setting_value, dict) else {}
-    allow_broadcast = bool(general.allow_broadcast_messages)
-    allow_department_broadcast = bool(allow_broadcast and recipient_value.get("allow_send_to_department", True) and recipient_value.get("allow_broadcast", True))
+    allow_broadcast = bool(general.allow_broadcast_messages and recipient_value.get("allow_broadcast", False))
+    allow_department_broadcast = bool(allow_broadcast and recipient_value.get("allow_send_to_department", True))
     value = {
         "enabled": bool(general.enable_messaging),
         "enable_attachments": bool(attachments.allow_message_attachments),
@@ -210,7 +210,6 @@ def sync_legacy_message_settings(db: Session) -> None:
         "allowed_department_ids": [],
         "blocked_department_ids": [],
         "circular_allowed_roles": [],
-        "circular_allowed_user_ids": [],
         "department_broadcast_allowed_roles": [],
         "department_broadcast_allowed_user_ids": [],
         "template_allowed_roles": [],

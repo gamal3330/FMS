@@ -87,6 +87,10 @@ def user_can_act(db: Session, request: ServiceRequest, user: User, step: Approva
 
 
 def workflow_return_config(db: Session, request: ServiceRequest, step: ApprovalStep) -> tuple[bool, int | None]:
+    snapshot_step = workflow_snapshot_step(request, step)
+    if snapshot_step and "can_return_for_edit" in snapshot_step:
+        return bool(snapshot_step.get("can_return_for_edit")), snapshot_step.get("return_to_step_order")
+
     if not request.request_type_id:
         return False, None
     row = db.execute(
@@ -104,6 +108,36 @@ def workflow_return_config(db: Session, request: ServiceRequest, step: ApprovalS
     if not row:
         return False, None
     return bool(row.can_return_for_edit), row.return_to_step_order
+
+
+def workflow_snapshot_step(request: ServiceRequest, step: ApprovalStep) -> dict | None:
+    workflow = (request.request_type_snapshot or {}).get("workflow") or []
+    for item in workflow:
+        if int(item.get("sort_order") or 0) == step.step_order and str(item.get("step_type") or "") == str(step.role):
+            return item
+    return None
+
+
+def step_can_reject(db: Session, request: ServiceRequest, step: ApprovalStep) -> bool:
+    snapshot_step = workflow_snapshot_step(request, step)
+    if snapshot_step and "can_reject" in snapshot_step:
+        return bool(snapshot_step.get("can_reject"))
+
+    if not request.request_type_id:
+        return True
+    row = db.execute(
+        select(WorkflowTemplateStep.can_reject)
+        .join(WorkflowTemplate, WorkflowTemplateStep.workflow_template_id == WorkflowTemplate.id)
+        .where(
+            WorkflowTemplate.request_type_id == request.request_type_id,
+            WorkflowTemplate.is_active == True,
+            WorkflowTemplateStep.is_active == True,
+            WorkflowTemplateStep.sort_order == step.step_order,
+            WorkflowTemplateStep.step_type == step.role,
+        )
+        .limit(1)
+    ).first()
+    return True if not row else bool(row.can_reject)
 
 
 def step_can_return_for_edit(db: Session, request: ServiceRequest, step: ApprovalStep) -> bool:
@@ -162,6 +196,8 @@ def advance_workflow(db: Session, request: ServiceRequest, actor: User, action: 
         can_return, return_target_order = workflow_return_config(db, request, pending_step)
         if not can_return:
             raise PermissionError("This step cannot return the request for editing")
+    if action == ApprovalAction.REJECTED and not step_can_reject(db, request, pending_step):
+        raise PermissionError("هذه المرحلة لا تسمح بالرفض حسب إعدادات مسار الموافقات")
 
     pending_step.action = action
     pending_step.approver_id = actor.id

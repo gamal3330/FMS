@@ -193,6 +193,13 @@ export function Approvals() {
   const completedCount = requests.filter((request) => ["closed", "completed"].includes(request.status)).length;
   const actionableCount = requests.filter((request) => isActionableForUser(getCurrentStep(request), currentUser, activeDelegations)).length;
   const canShowDecisionForm = isActionableForUser(currentStep, currentUser, activeDelegations);
+  const currentStepCanReject = Boolean(currentStep && currentStep.can_reject !== false);
+  const decisionGridClass =
+    currentStepCanReject && currentStep?.can_return_for_edit
+      ? "grid-cols-3"
+      : currentStepCanReject || currentStep?.can_return_for_edit
+        ? "grid-cols-2"
+        : "grid-cols-1";
   const filteredRequests = useMemo(() => {
     const term = search.trim().toLowerCase();
     return requests.filter((request) => {
@@ -250,11 +257,25 @@ export function Approvals() {
     apiFetch<ActiveDelegation[]>("/users/delegations/me").then(setActiveDelegations).catch(() => setActiveDelegations([]));
   }, []);
 
+  useEffect(() => {
+    if ((decision === "rejected" && !currentStepCanReject) || (decision === "returned_for_edit" && !currentStep?.can_return_for_edit)) {
+      setDecision("approved");
+    }
+  }, [currentStep?.can_return_for_edit, currentStepCanReject, decision]);
+
   async function submitDecision(event: FormEvent) {
     event.preventDefault();
     if (!selectedRequest) return;
     setMessage("");
     setError("");
+    if (decision === "rejected" && !currentStepCanReject) {
+      setError("هذه المرحلة لا تسمح بالرفض حسب إعدادات مسار الموافقات.");
+      return;
+    }
+    if (decision === "returned_for_edit" && !currentStep?.can_return_for_edit) {
+      setError("هذه المرحلة لا تسمح بالإرجاع للتعديل حسب إعدادات مسار الموافقات.");
+      return;
+    }
     setIsSubmitting(true);
 
     try {
@@ -480,7 +501,7 @@ export function Approvals() {
                       المرحلة الحالية: <span className="font-bold">{currentStep ? roleLabels[currentStep.role] ?? currentStep.role : "-"}</span>
                     </div>
                     <form onSubmit={submitDecision} className="space-y-4">
-                      <div className={`grid gap-2 ${currentStep?.can_return_for_edit ? "grid-cols-3" : "grid-cols-2"}`}>
+                      <div className={`grid gap-2 ${decisionGridClass}`}>
                         <button
                           type="button"
                           onClick={() => setDecision("approved")}
@@ -491,16 +512,18 @@ export function Approvals() {
                           <CheckCircle2 className="h-4 w-4" />
                           موافقة
                         </button>
-                        <button
-                          type="button"
-                          onClick={() => setDecision("rejected")}
-                          className={`flex h-10 items-center justify-center gap-2 rounded-md border text-sm font-semibold ${
-                            decision === "rejected" ? "border-red-600 bg-red-50 text-red-700" : "border-slate-200 text-slate-600"
-                          }`}
-                        >
-                          <XCircle className="h-4 w-4" />
-                          رفض
-                        </button>
+                        {currentStepCanReject && (
+                          <button
+                            type="button"
+                            onClick={() => setDecision("rejected")}
+                            className={`flex h-10 items-center justify-center gap-2 rounded-md border text-sm font-semibold ${
+                              decision === "rejected" ? "border-red-600 bg-red-50 text-red-700" : "border-slate-200 text-slate-600"
+                            }`}
+                          >
+                            <XCircle className="h-4 w-4" />
+                            رفض
+                          </button>
+                        )}
                         {currentStep?.can_return_for_edit && (
                           <button
                             type="button"

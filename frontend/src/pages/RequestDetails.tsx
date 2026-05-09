@@ -17,7 +17,7 @@ import {
   XCircle
 } from "lucide-react";
 import { API_BASE, apiFetch, ApprovalStep, Attachment, ServiceRequest } from "../lib/api";
-import { formatSystemDateTime } from "../lib/datetime";
+import { formatSystemDateTime, parseApiDate } from "../lib/datetime";
 import { Button } from "../components/ui/button";
 import { Card } from "../components/ui/card";
 import AISuggestionPanel from "../components/ai/AISuggestionPanel";
@@ -42,6 +42,18 @@ interface AIStatus {
   show_in_message_details?: boolean;
   show_in_request_messages_tab?: boolean;
 }
+
+interface MessageSettings {
+  enable_linked_requests: boolean;
+  allow_send_message_from_request: boolean;
+  show_messages_tab_in_request_details: boolean;
+}
+
+const defaultMessageSettings: MessageSettings = {
+  enable_linked_requests: true,
+  allow_send_message_from_request: true,
+  show_messages_tab_in_request_details: true
+};
 
 const statusLabels: Record<string, string> = {
   draft: "مسودة",
@@ -124,6 +136,7 @@ export function RequestDetails() {
   const [aiError, setAiError] = useState("");
   const [aiLoading, setAiLoading] = useState(false);
   const [aiStatus, setAiStatus] = useState<AIStatus>({ is_enabled: false, allow_message_drafting: false, allow_summarization: false, allow_reply_suggestion: false });
+  const [messageSettings, setMessageSettings] = useState<MessageSettings>(defaultMessageSettings);
 
   async function loadDetails() {
     if (!requestId) return;
@@ -132,8 +145,14 @@ export function RequestDetails() {
     try {
       const nextRequest = await apiFetch<ServiceRequest>(`/requests/${requestId}`);
       setRequest(nextRequest);
-      const linked = await apiFetch<LinkedMessage[]>(`/messages/request/${nextRequest.id}`).catch(() => []);
-      setMessages(linked);
+      const nextMessageSettings = await apiFetch<MessageSettings>("/messages/settings").catch(() => defaultMessageSettings);
+      setMessageSettings(nextMessageSettings);
+      if (nextMessageSettings.enable_linked_requests && nextMessageSettings.show_messages_tab_in_request_details) {
+        const linked = await apiFetch<LinkedMessage[]>(`/messages/request/${nextRequest.id}`).catch(() => []);
+        setMessages(linked);
+      } else {
+        setMessages([]);
+      }
     } catch {
       setRequest(null);
       setMessages([]);
@@ -149,8 +168,10 @@ export function RequestDetails() {
   }, [requestId]);
 
   const timeline = useMemo(() => buildTimeline(request, messages), [request, messages]);
-  const canUseAiDrafting = Boolean(aiStatus.is_enabled && aiStatus.allow_message_drafting && aiStatus.show_in_request_messages_tab !== false);
-  const canUseAiSummaries = Boolean(aiStatus.is_enabled && aiStatus.allow_summarization && aiStatus.show_in_request_messages_tab !== false);
+  const canShowRequestMessages = Boolean(messageSettings.enable_linked_requests && messageSettings.show_messages_tab_in_request_details);
+  const canSendFromRequest = Boolean(canShowRequestMessages && messageSettings.allow_send_message_from_request);
+  const canUseAiDrafting = Boolean(canShowRequestMessages && aiStatus.is_enabled && aiStatus.allow_message_drafting && aiStatus.show_in_request_messages_tab !== false);
+  const canUseAiSummaries = Boolean(canShowRequestMessages && aiStatus.is_enabled && aiStatus.allow_summarization && aiStatus.show_in_request_messages_tab !== false);
 
   async function loadAiStatus() {
     try {
@@ -162,6 +183,7 @@ export function RequestDetails() {
 
   function composeMessage(draft?: { subject?: string; body?: string }) {
     if (!request) return;
+    if (!canSendFromRequest) return;
     if (draft?.body || draft?.subject) {
       sessionStorage.setItem("qib_ai_compose_draft", JSON.stringify({ subject: draft.subject || "", body: draft.body || "", message_type: "clarification_request" }));
     }
@@ -231,10 +253,12 @@ export function RequestDetails() {
           </div>
           <div className="flex flex-wrap gap-2">
             <StatusPill status={request.status} />
-            <Button type="button" onClick={() => composeMessage()} className="gap-2">
-              <Send className="h-4 w-4" />
-              مراسلة بخصوص الطلب
-            </Button>
+            {canSendFromRequest && (
+              <Button type="button" onClick={() => composeMessage()} className="gap-2">
+                <Send className="h-4 w-4" />
+                مراسلة بخصوص الطلب
+              </Button>
+            )}
             <button
               type="button"
               onClick={() => downloadPdf(request)}
@@ -247,10 +271,14 @@ export function RequestDetails() {
         </div>
 
         <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <Info label="نوع الطلب" value={requestTypeName(request)} />
+          <Info label="نسخة نوع الطلب" value={`v${request.request_type_version_number || 1}`} />
           <Info label="الأولوية" value={priorityLabels[request.priority] ?? request.priority} />
+          <Info label="SLA" value={requestSlaText(request)} />
           <Info label="تاريخ الإنشاء" value={formatDate(request.created_at)} />
           <Info label="آخر تحديث" value={formatDate(request.updated_at)} />
           <Info label="القسم المختص" value={assignedSection(request)} />
+          <Info label="الموظف المعيّن" value={request.assigned_to?.full_name_ar || "-"} />
         </div>
       </Card>
 
@@ -263,11 +291,9 @@ export function RequestDetails() {
               <Info label="الحالة" value={statusLabels[request.status] ?? request.status} />
               <Info label="مقدم الطلب" value={request.requester?.full_name_ar || "-"} />
               <Info label="إدارة مقدم الطلب" value={request.department?.name_ar || "-"} />
-              {Object.entries(request.form_data ?? {})
-                .filter(([key, value]) => !hiddenFormKeys.has(key) && value !== null && value !== "")
-                .map(([key, value]) => (
-                  <Info key={key} label={fieldLabels[key] ?? key.replace(/_/g, " ")} value={String(value || "-")} />
-                ))}
+              {requestFieldRows(request).map((field) => (
+                <Info key={field.key} label={field.label} value={field.value} />
+              ))}
             </div>
             <div className="mt-4 rounded-md bg-slate-50 p-4">
               <p className="mb-2 text-sm font-bold text-slate-700">مبرر العمل</p>
@@ -285,6 +311,7 @@ export function RequestDetails() {
             </div>
           </Card>
 
+          {canShowRequestMessages && (
           <Card className="p-5">
             <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
               <SectionTitle icon={MessageSquare} title="المراسلات المرتبطة" />
@@ -336,6 +363,7 @@ export function RequestDetails() {
               {messages.length === 0 && <Empty text="لا توجد مراسلات مرتبطة بهذا الطلب حتى الآن." />}
             </div>
           </Card>
+          )}
         </div>
 
         <aside className="space-y-5">
@@ -418,6 +446,33 @@ function Info({ label, value }: { label: string; value: string }) {
   );
 }
 
+function requestTypeName(request: ServiceRequest) {
+  const snapshot = request.request_type_snapshot || {};
+  const name = snapshot.name_ar;
+  return typeof name === "string" && name ? name : request.form_data?.request_type_label || request.request_type || "-";
+}
+
+function requestFieldRows(request: ServiceRequest) {
+  const formData = request.form_data ?? {};
+  const snapshot = [...(request.form_schema_snapshot || [])].sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
+  if (snapshot.length > 0) {
+    return snapshot
+      .filter((field) => !hiddenFormKeys.has(field.field_name) && formData[field.field_name] !== null && formData[field.field_name] !== undefined && formData[field.field_name] !== "")
+      .map((field) => ({
+        key: field.field_name,
+        label: field.label_ar || fieldLabels[field.field_name] || field.field_name.replace(/_/g, " "),
+        value: String(formData[field.field_name] || "-")
+      }));
+  }
+  return Object.entries(formData)
+    .filter(([key, value]) => !hiddenFormKeys.has(key) && value !== null && value !== "")
+    .map(([key, value]) => ({
+      key,
+      label: fieldLabels[key] ?? key.replace(/_/g, " "),
+      value: String(value || "-")
+    }));
+}
+
 function SectionTitle({ icon: Icon, title }: { icon: typeof FileText; title: string }) {
   return (
     <div className="flex items-center gap-2">
@@ -459,6 +514,18 @@ function Empty({ text }: { text: string }) {
 function assignedSection(request: ServiceRequest) {
   const key = request.form_data?.assigned_section || request.form_data?.administrative_section || "";
   return request.form_data?.assigned_section_label || request.form_data?.administrative_section_label || sectionLabels[key] || "-";
+}
+
+function requestSlaText(request: ServiceRequest) {
+  if (!request.sla_due_at) return "بدون SLA";
+  const dueDate = parseApiDate(request.sla_due_at);
+  if (!dueDate) return "غير محدد";
+  const finalStatuses = new Set(["completed", "closed", "rejected", "cancelled"]);
+  if (finalStatuses.has(request.status)) return `انتهى في ${formatDate(request.sla_due_at)}`;
+  const diffMs = dueDate.getTime() - Date.now();
+  if (diffMs < 0) return `متأخر منذ ${formatDate(request.sla_due_at)}`;
+  const remainingHours = Math.max(1, Math.ceil(diffMs / (1000 * 60 * 60)));
+  return `متبقّي ${remainingHours} ساعة - ${formatDate(request.sla_due_at)}`;
 }
 
 function formatDate(value?: string | null) {

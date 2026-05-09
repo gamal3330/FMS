@@ -1,8 +1,8 @@
 import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
-import { Eye, FilePlus2, Laptop, Mail, MessageSquare, Network, RefreshCw, Router, RotateCcw, Save, Search, Send, Shield, Ticket, Upload } from "lucide-react";
+import { Eye, FilePlus2, MessageSquare, RefreshCw, RotateCcw, Save, Search, Send } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { API_BASE, apiFetch, CurrentUser, ServiceRequest } from "../lib/api";
-import { formatSystemDate } from "../lib/datetime";
+import { formatSystemDate, formatSystemDateTime, parseApiDate } from "../lib/datetime";
 import { Button } from "../components/ui/button";
 import { Card } from "../components/ui/card";
 import FeedbackDialog from "../components/ui/FeedbackDialog";
@@ -31,8 +31,16 @@ interface TypeConfig {
   label: string;
   description: string;
   section: AdministrativeSection;
+  autoAssignStrategy?: string;
   requiresAttachment?: boolean;
-  icon: typeof Mail;
+  allowMultipleAttachments?: boolean;
+  maxAttachments?: number;
+  maxFileSizeMb?: number;
+  allowedExtensions?: string[];
+  defaultPriority?: Priority;
+  slaResponseHours?: number | null;
+  slaResolutionHours?: number | null;
+  icon: typeof FilePlus2;
   fields: FieldConfig[];
 }
 
@@ -53,30 +61,23 @@ interface RequestNotificationControl {
   allow_toggle: boolean;
 }
 
+interface MessageSettings {
+  enable_linked_requests: boolean;
+  allow_send_message_from_request: boolean;
+  show_messages_tab_in_request_details: boolean;
+}
+
+const defaultMessageSettings: MessageSettings = {
+  enable_linked_requests: true,
+  allow_send_message_from_request: true,
+  show_messages_tab_in_request_details: true
+};
+
 const administrativeSections: Record<AdministrativeSection, string> = {
   servers: "قسم السيرفرات",
   networks: "قسم الشبكات",
   support: "قسم الدعم الفني",
   development: "وحدة تطوير البرامج"
-};
-
-const backendTypeMap: Record<string, RequestType> = {
-  EMAIL: "email",
-  email: "email",
-  DOMAIN: "domain",
-  domain: "domain",
-  VPN: "vpn_remote_access",
-  vpn_remote_access: "vpn_remote_access",
-  INTERNET: "internet_access",
-  internet_access: "internet_access",
-  DATA_COPY: "data_copy",
-  data_copy: "data_copy",
-  NETWORK: "network_access",
-  network_access: "network_access",
-  COMPUTER_MOVE: "computer_move_installation",
-  computer_move_installation: "computer_move_installation",
-  SUPPORT: "it_support_ticket",
-  it_support_ticket: "it_support_ticket"
 };
 
 const fieldTypeMap: Record<string, FieldKind> = {
@@ -92,116 +93,6 @@ const fieldTypeMap: Record<string, FieldKind> = {
   date: "date",
   datetime: "date"
 };
-
-const requestTypes: TypeConfig[] = [
-  {
-    value: "email",
-    label: "طلبات البريد الإلكتروني",
-    description: "إنشاء بريد، إعادة تعيين كلمة المرور، أو نقل الملكية.",
-    section: "servers",
-    icon: Mail,
-    fields: [
-      { name: "email_action", label: "نوع الإجراء", kind: "select", options: ["إنشاء بريد", "إعادة تعيين كلمة المرور", "نقل الملكية"], required: true },
-      { name: "target_user", label: "المستخدم المستفيد", placeholder: "اسم الموظف أو الرقم الوظيفي", required: true },
-      { name: "mailbox_address", label: "عنوان البريد المطلوب", placeholder: "user@qib.com.qa" },
-      { name: "current_owner", label: "المالك الحالي", placeholder: "في حالة نقل الملكية" },
-      { name: "new_owner", label: "المالك الجديد", placeholder: "في حالة نقل الملكية" }
-    ]
-  },
-  {
-    value: "domain",
-    label: "طلبات الدومين",
-    description: "إنشاء مستخدم دومين، إعادة كلمة المرور، أو نقل الملكية.",
-    section: "servers",
-    icon: Shield,
-    fields: [
-      { name: "domain_action", label: "نوع الإجراء", kind: "select", options: ["إنشاء مستخدم دومين", "إعادة تعيين كلمة المرور", "نقل الملكية"], required: true },
-      { name: "target_user", label: "المستخدم المستفيد", placeholder: "اسم الموظف أو الرقم الوظيفي", required: true },
-      { name: "domain_username", label: "اسم مستخدم الدومين", placeholder: "qib\\username" },
-      { name: "device_name", label: "اسم الجهاز", placeholder: "اختياري" }
-    ]
-  },
-  {
-    value: "vpn_remote_access",
-    label: "طلب VPN",
-    description: "صلاحية وصول آمن للأنظمة الداخلية من خارج الشبكة.",
-    section: "networks",
-    icon: Router,
-    fields: [
-      { name: "target_user", label: "المستخدم المستفيد", placeholder: "اسم الموظف أو الرقم الوظيفي", required: true },
-      { name: "access_duration", label: "مدة الوصول", kind: "select", options: ["أسبوع", "شهر", "3 أشهر", "6 أشهر", "دائم"], required: true },
-      { name: "business_systems", label: "الأنظمة المطلوبة", placeholder: "Core Banking, HR, Email", colSpan: true },
-      { name: "remote_country", label: "الدولة المتوقعة للوصول", placeholder: "قطر" }
-    ]
-  },
-  {
-    value: "internet_access",
-    label: "الوصول للإنترنت",
-    description: "طلب صلاحية إنترنت أو تغيير مستوى التصفح.",
-    section: "networks",
-    icon: Network,
-    fields: [
-      { name: "target_user", label: "المستخدم المستفيد", placeholder: "اسم الموظف أو الرقم الوظيفي", required: true },
-      { name: "access_level", label: "مستوى الوصول", kind: "select", options: ["أساسي", "موسع", "مواقع أعمال محددة"], required: true },
-      { name: "websites", label: "المواقع المطلوبة", kind: "textarea", placeholder: "اكتب المواقع أو التصنيفات المطلوبة", colSpan: true }
-    ]
-  },
-  {
-    value: "data_copy",
-    label: "نسخ البيانات",
-    description: "نسخ بيانات إلى فلاش، بريد، أو قرص خارجي مع اعتماد أمني.",
-    section: "support",
-    icon: Upload,
-    fields: [
-      { name: "copy_method", label: "طريقة النسخ", kind: "select", options: ["Flash", "Email", "External Hard Drive"], required: true },
-      { name: "data_classification", label: "تصنيف البيانات", kind: "select", options: ["عام", "داخلي", "سري", "سري للغاية"], required: true },
-      { name: "source_location", label: "مصدر البيانات", placeholder: "مسار المجلد أو النظام", required: true },
-      { name: "destination", label: "الوجهة", placeholder: "البريد أو الجهاز أو القرص", required: true },
-      { name: "data_description", label: "وصف البيانات", kind: "textarea", colSpan: true, required: true }
-    ]
-  },
-  {
-    value: "network_access",
-    label: "صلاحيات الشبكة",
-    description: "فتح اتصال بين مصدر ووجهة مع تحديد المنفذ و NAT.",
-    section: "networks",
-    icon: Network,
-    fields: [
-      { name: "source_ip", label: "Source IP", placeholder: "10.10.10.10", required: true },
-      { name: "destination_ip", label: "Destination IP", placeholder: "10.20.20.20", required: true },
-      { name: "port", label: "Port", placeholder: "443", required: true },
-      { name: "nat_port", label: "NAT Port", placeholder: "اختياري" },
-      { name: "protocol", label: "Protocol", kind: "select", options: ["TCP", "UDP", "Both"], required: true }
-    ]
-  },
-  {
-    value: "computer_move_installation",
-    label: "نقل أو تركيب جهاز",
-    description: "طلب نقل جهاز، تركيب جهاز جديد، أو تجهيز مكتب.",
-    section: "support",
-    icon: Laptop,
-    fields: [
-      { name: "service_action", label: "نوع الخدمة", kind: "select", options: ["نقل جهاز", "تركيب جهاز", "تجهيز مكتب"], required: true },
-      { name: "asset_tag", label: "رقم الأصل", placeholder: "Asset Tag" },
-      { name: "current_location", label: "الموقع الحالي", placeholder: "الطابق / الفرع / المكتب" },
-      { name: "new_location", label: "الموقع الجديد", placeholder: "الطابق / الفرع / المكتب", required: true },
-      { name: "preferred_date", label: "التاريخ المفضل", kind: "date" }
-    ]
-  },
-  {
-    value: "it_support_ticket",
-    label: "تذكرة دعم فني",
-    description: "بلاغ عطل أو طلب دعم عام من فريق تقنية المعلومات.",
-    section: "support",
-    icon: Ticket,
-    fields: [
-      { name: "category", label: "التصنيف", kind: "select", options: ["جهاز", "طابعة", "نظام", "شبكة", "صلاحيات", "أخرى"], required: true },
-      { name: "affected_user", label: "المستخدم المتأثر", placeholder: "اسم الموظف أو الرقم الوظيفي", required: true },
-      { name: "asset_tag", label: "رقم الأصل", placeholder: "اختياري" },
-      { name: "issue_description", label: "وصف المشكلة", kind: "textarea", colSpan: true, required: true }
-    ]
-  }
-];
 
 const priorities: { value: Priority; label: string }[] = [
   { value: "low", label: "منخفضة" },
@@ -252,6 +143,7 @@ export function Requests() {
   const [linkedRequest, setLinkedRequest] = useState<ServiceRequest | null>(null);
   const [linkedMessages, setLinkedMessages] = useState<LinkedMessage[]>([]);
   const [isLinkedMessagesLoading, setIsLinkedMessagesLoading] = useState(false);
+  const [messageSettings, setMessageSettings] = useState<MessageSettings>(defaultMessageSettings);
   const [requestSearch, setRequestSearch] = useState("");
   const [requestsPage, setRequestsPage] = useState(1);
   const [requestsHasMore, setRequestsHasMore] = useState(false);
@@ -270,7 +162,7 @@ export function Requests() {
   function resetForm(nextType = requestType, sourceTypes = availableRequestTypes) {
     const nextConfig = sourceTypes.find((item) => item.value === nextType) ?? sourceTypes[0];
     setTitle("");
-    setPriority("medium");
+    setPriority(nextConfig?.defaultPriority ?? "medium");
     setBusinessJustification("");
     setSendNotification(requestNotificationControl.default_checked);
     setAttachment(null);
@@ -311,7 +203,24 @@ export function Requests() {
     setIsTypesLoading(true);
     try {
       const data = await apiFetch<
-        Array<{ id: number; code?: string; request_type?: string; name_ar?: string; description?: string; category?: string; assigned_section?: string; requires_attachment?: boolean }>
+        Array<{
+          id: number;
+          code?: string;
+          request_type?: string;
+          name_ar?: string;
+          description?: string;
+          category?: string;
+          assigned_section?: string;
+          auto_assign_strategy?: string;
+          requires_attachment?: boolean;
+          allow_multiple_attachments?: boolean;
+          max_attachments?: number;
+          max_file_size_mb?: number;
+          allowed_extensions_json?: string[];
+          default_priority?: string;
+          sla_response_hours?: number | null;
+          sla_resolution_hours?: number | null;
+        }>
       >("/request-types/active");
       const sections = await apiFetch<Array<{ code: string; name_ar: string }>>("/settings/specialized-sections?active_only=true").catch(() => []);
       const labels = { ...administrativeSections, ...Object.fromEntries(sections.map((section) => [section.code, section.name_ar])) };
@@ -319,25 +228,25 @@ export function Requests() {
 
       const nextTypes = await Promise.all(
         data.map(async (item) => {
-          const mappedValue = backendTypeMap[item.code || ""] ?? backendTypeMap[item.request_type || ""];
-          const base = mappedValue ? requestTypes.find((type) => type.value === mappedValue) : null;
-          const fields = await loadManagedFields(item.id, base?.fields ?? []);
+          const fields = await loadManagedFields(item.id, []);
           return {
-            ...(base ?? {
-              value: `managed_${item.id}`,
-              label: item.name_ar || item.code || "نوع طلب",
-              description: item.description || "نوع طلب معرف من شاشة إدارة أنواع الطلبات.",
-              section: item.assigned_section || categoryToSection(item.category),
-              icon: FilePlus2,
-              fields: []
-            }),
+            value: `managed_${item.id}`,
+            label: item.name_ar || item.code || "نوع طلب",
+            description: item.description || "نوع طلب معرف من شاشة إدارة الطلبات.",
+            section: item.assigned_section || categoryToSection(item.category),
+            autoAssignStrategy: item.auto_assign_strategy || "none",
+            icon: FilePlus2,
             requestTypeId: item.id,
             code: item.code,
-            label: item.name_ar || base?.label || item.code || "نوع طلب",
-            description: item.description || base?.description || "نوع طلب معرف من شاشة إدارة أنواع الطلبات.",
-            section: item.assigned_section || base?.section || categoryToSection(item.category),
             requiresAttachment: Boolean(item.requires_attachment),
-            fields: fields.length ? fields : base?.fields ?? []
+            allowMultipleAttachments: Boolean(item.allow_multiple_attachments),
+            maxAttachments: item.max_attachments ?? (item.allow_multiple_attachments ? 5 : 1),
+            maxFileSizeMb: item.max_file_size_mb ?? 10,
+            allowedExtensions: item.allowed_extensions_json ?? ["pdf", "png", "jpg", "jpeg"],
+            defaultPriority: normalizePriority(item.default_priority),
+            slaResponseHours: item.sla_response_hours ?? null,
+            slaResolutionHours: item.sla_resolution_hours ?? null,
+            fields
           } as TypeConfig;
         })
       );
@@ -373,6 +282,7 @@ export function Requests() {
         setSendNotification(control.default_checked);
       })
       .catch(() => undefined);
+    apiFetch<MessageSettings>("/messages/settings").then(setMessageSettings).catch(() => setMessageSettings(defaultMessageSettings));
   }, []);
 
   useEffect(() => {
@@ -394,6 +304,17 @@ export function Requests() {
     setIsSubmitting(true);
 
     try {
+      if (selectedType?.requiresAttachment && !attachment && !editingRequestId) {
+        setError("هذا النوع من الطلبات يتطلب إرفاق ملف قبل الإرسال.");
+        return;
+      }
+      if (attachment && selectedType) {
+        const attachmentError = validateAttachmentForType(attachment, selectedType);
+        if (attachmentError) {
+          setError(attachmentError);
+          return;
+        }
+      }
       const payload = buildRequestPayload();
       if (editingRequestId) {
         await apiFetch<ServiceRequest>(`/requests/${editingRequestId}`, {
@@ -467,6 +388,7 @@ export function Requests() {
         priority,
         business_justification: businessJustification,
         send_notification: sendRequestNotification,
+        attachment_count: attachment ? 1 : 0,
         form_data: enrichedFormData
       };
     }
@@ -477,6 +399,7 @@ export function Requests() {
       priority,
       business_justification: businessJustification,
       send_notification: sendRequestNotification,
+      attachment_count: attachment ? 1 : 0,
       form_data: enrichedFormData
     };
   }
@@ -495,6 +418,7 @@ export function Requests() {
   }
 
   async function showLinkedMessages(item: ServiceRequest) {
+    if (!messageSettings.enable_linked_requests || !messageSettings.show_messages_tab_in_request_details) return;
     setLinkedRequest(item);
     setLinkedMessages([]);
     setIsLinkedMessagesLoading(true);
@@ -510,6 +434,7 @@ export function Requests() {
   }
 
   function composeRequestMessage(item: ServiceRequest) {
+    if (!messageSettings.enable_linked_requests || !messageSettings.allow_send_message_from_request) return;
     const params = new URLSearchParams({
       compose: "1",
       related_request_id: item.request_number,
@@ -611,6 +536,14 @@ export function Requests() {
               </select>
             </label>
 
+            <div className="grid gap-3 rounded-md border border-bank-100 bg-bank-50/40 p-3 md:grid-cols-2 xl:grid-cols-4">
+              <RequestTypeMeta label="قاعدة المرفقات" value={selectedType.requiresAttachment ? "مرفق مطلوب" : "مرفق اختياري"} tone={selectedType.requiresAttachment ? "amber" : "slate"} />
+              <RequestTypeMeta label="حد المرفقات" value={`${selectedType.maxAttachments ?? 1} ملف / ${selectedType.maxFileSizeMb ?? 10} MB`} />
+              <RequestTypeMeta label="الامتدادات" value={(selectedType.allowedExtensions ?? ["pdf", "png", "jpg", "jpeg"]).join(", ")} />
+              <RequestTypeMeta label="التعيين" value={assignmentStrategyLabel(selectedType.autoAssignStrategy)} />
+              <RequestTypeMeta label="SLA المتوقع" value={selectedTypeSlaText(selectedType)} tone={selectedType.slaResolutionHours || selectedType.slaResponseHours ? "bank" : "slate"} />
+            </div>
+
             <div className="grid gap-4 md:grid-cols-2">
               {selectedType.fields.map((field) => (
                 <label key={field.name} className={`block space-y-2 text-sm font-medium text-slate-700 ${field.colSpan ? "md:col-span-2" : ""}`}>
@@ -635,12 +568,13 @@ export function Requests() {
                 المرفق المطلوب
                 <input
                   type="file"
-                  accept="application/pdf,image/png,image/jpeg,image/webp"
+                  accept={fileAcceptAttribute(selectedType)}
                   required
                   onChange={(event) => {
                     const file = event.target.files?.[0] || null;
-                    if (file && !["application/pdf", "image/png", "image/jpeg", "image/webp"].includes(file.type)) {
-                      setError("صيغة المرفق غير مدعومة. يسمح فقط بملفات PDF أو الصور.");
+                    const attachmentError = file ? validateAttachmentForType(file, selectedType) : "";
+                    if (attachmentError) {
+                      setError(attachmentError);
                       event.target.value = "";
                       setAttachment(null);
                       return;
@@ -650,7 +584,9 @@ export function Requests() {
                   }}
                   className="block w-full rounded-md border border-dashed border-slate-300 bg-white px-3 py-2 text-sm file:ml-3 file:rounded-md file:border-0 file:bg-bank-50 file:px-3 file:py-1.5 file:text-sm file:font-bold file:text-bank-700"
                 />
-                <span className="block text-xs font-normal text-slate-500">يسمح فقط بملف PDF أو صورة PNG/JPG/WEBP.</span>
+                <span className="block text-xs font-normal text-slate-500">
+                  الامتدادات المسموحة: {(selectedType.allowedExtensions ?? ["pdf", "png", "jpg", "jpeg"]).join(", ")}. الحد الأقصى: {selectedType.maxFileSizeMb ?? 10} MB.
+                </span>
               </label>
             )}
 
@@ -716,14 +652,16 @@ export function Requests() {
           <div className="overflow-hidden">
             <table className="w-full table-fixed text-sm">
               <colgroup>
-                <col className="w-[14%]" />
-                <col className="w-[22%]" />
-                <col className="w-[14%]" />
-                <col className="w-[14%]" />
+                <col className="w-[12%]" />
+                <col className="w-[18%]" />
+                <col className="w-[11%]" />
                 <col className="w-[10%]" />
-                <col className="w-[9%]" />
+                <col className="w-[10%]" />
+                <col className="w-[8%]" />
+                <col className="w-[8%]" />
                 <col className="w-[9%]" />
                 <col className="w-[8%]" />
+                <col className="w-[6%]" />
               </colgroup>
               <thead className="bg-slate-50 text-xs font-bold text-slate-600">
                 <tr>
@@ -731,8 +669,10 @@ export function Requests() {
                   <th className="px-3 py-3 text-right leading-5">العنوان</th>
                   <th className="px-3 py-3 text-right leading-5">النوع</th>
                   <th className="px-3 py-3 text-right leading-5">القسم المختص</th>
+                  <th className="px-3 py-3 text-right leading-5">المعيّن</th>
                   <th className="px-3 py-3 text-right leading-5">الحالة</th>
                   <th className="px-3 py-3 text-right leading-5">الأولوية</th>
+                  <th className="px-3 py-3 text-right leading-5">SLA</th>
                   <th className="px-3 py-3 text-right leading-5">تاريخ الإنشاء</th>
                   <th className="px-3 py-3 text-right leading-5">الإجراء</th>
                 </tr>
@@ -740,7 +680,7 @@ export function Requests() {
               <tbody className="divide-y divide-slate-100">
                 {items.length === 0 && (
                   <tr>
-                    <td colSpan={8} className="p-6 text-center text-slate-500">
+                    <td colSpan={10} className="p-6 text-center text-slate-500">
                       {requestSearch.trim() ? "لا توجد نتائج مطابقة للبحث." : "لا توجد طلبات لعرضها حالياً."}
                     </td>
                   </tr>
@@ -755,8 +695,12 @@ export function Requests() {
                     </td>
                     <td className="px-3 py-4 leading-6 text-slate-700">{requestTypeLabel(item)}</td>
                     <td className="px-3 py-4 leading-6 text-slate-700">{requestSectionLabel(item)}</td>
+                    <td className="px-3 py-4 leading-6 text-slate-700">{item.assigned_to?.full_name_ar || "-"}</td>
                     <td className="px-3 py-4 leading-6 text-slate-700">{statusLabels[item.status] ?? item.status}</td>
                     <td className="px-3 py-4 leading-6 text-slate-700">{priorities.find((type) => type.value === item.priority)?.label ?? item.priority}</td>
+                    <td className="px-3 py-4">
+                      <SLABadge request={item} />
+                    </td>
                     <td className="px-3 py-4 text-xs leading-6 text-slate-600">{formatSystemDate(item.created_at)}</td>
                     <td className="px-3 py-4">
                       {item.status === "returned_for_edit" && currentUser?.id === item.requester?.id ? (
@@ -777,14 +721,16 @@ export function Requests() {
                           >
                             <RotateCcw className="h-4 w-4" />
                           </button>
-                          <button
-                            type="button"
-                            onClick={() => showLinkedMessages(item)}
-                            className="inline-flex h-9 items-center justify-center rounded-md border border-slate-200 bg-white px-2 text-xs font-bold text-slate-700 hover:bg-slate-50"
-                            title="المراسلات"
-                          >
-                            <MessageSquare className="h-4 w-4" />
-                          </button>
+                          {messageSettings.enable_linked_requests && messageSettings.show_messages_tab_in_request_details && (
+                            <button
+                              type="button"
+                              onClick={() => showLinkedMessages(item)}
+                              className="inline-flex h-9 items-center justify-center rounded-md border border-slate-200 bg-white px-2 text-xs font-bold text-slate-700 hover:bg-slate-50"
+                              title="المراسلات"
+                            >
+                              <MessageSquare className="h-4 w-4" />
+                            </button>
+                          )}
                         </div>
                       ) : (
                         <div className="flex gap-2">
@@ -796,14 +742,16 @@ export function Requests() {
                           >
                             <Eye className="h-4 w-4" />
                           </button>
-                          <button
-                            type="button"
-                            onClick={() => showLinkedMessages(item)}
-                            className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
-                            title="المراسلات"
-                          >
-                            <MessageSquare className="h-4 w-4" />
-                          </button>
+                          {messageSettings.enable_linked_requests && messageSettings.show_messages_tab_in_request_details && (
+                            <button
+                              type="button"
+                              onClick={() => showLinkedMessages(item)}
+                              className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                              title="المراسلات"
+                            >
+                              <MessageSquare className="h-4 w-4" />
+                            </button>
+                          )}
                         </div>
                       )}
                     </td>
@@ -825,10 +773,12 @@ export function Requests() {
                 </h3>
               </div>
               <div className="flex flex-wrap gap-2">
-                <Button type="button" onClick={() => composeRequestMessage(linkedRequest)} className="gap-2">
-                  <MessageSquare className="h-4 w-4" />
-                  مراسلة بخصوص هذا الطلب
-                </Button>
+                {messageSettings.allow_send_message_from_request && (
+                  <Button type="button" onClick={() => composeRequestMessage(linkedRequest)} className="gap-2">
+                    <MessageSquare className="h-4 w-4" />
+                    مراسلة بخصوص هذا الطلب
+                  </Button>
+                )}
                 <button
                   type="button"
                   onClick={() => showLinkedMessages(linkedRequest)}
@@ -888,6 +838,100 @@ function messageTypeLabel(value: string) {
     circular: "تعميم"
   };
   return labels[value] || "مراسلة داخلية";
+}
+
+function normalizePriority(value?: string | null): Priority {
+  if (value === "low" || value === "medium" || value === "high" || value === "critical") return value;
+  if (value === "normal") return "medium";
+  if (value === "urgent") return "critical";
+  return "medium";
+}
+
+function formatHours(value?: number | null) {
+  if (!value || value <= 0) return "غير محدد";
+  if (value < 24) return `${value} ساعة`;
+  const days = value / 24;
+  return Number.isInteger(days) ? `${days} يوم` : `${value} ساعة`;
+}
+
+function selectedTypeSlaText(type: TypeConfig) {
+  const response = type.slaResponseHours ? `استجابة ${formatHours(type.slaResponseHours)}` : "";
+  const resolution = type.slaResolutionHours ? `إنجاز ${formatHours(type.slaResolutionHours)}` : "";
+  return [response, resolution].filter(Boolean).join(" / ") || "بدون SLA";
+}
+
+function assignmentStrategyLabel(value?: string) {
+  const labels: Record<string, string> = {
+    none: "بدون تعيين تلقائي",
+    section_manager: "مدير القسم المختص",
+    least_open_requests: "الأقل طلبات مفتوحة",
+    round_robin: "توزيع دوري"
+  };
+  return labels[value || "none"] || "بدون تعيين تلقائي";
+}
+
+function fileAcceptAttribute(type: TypeConfig) {
+  return (type.allowedExtensions ?? ["pdf", "png", "jpg", "jpeg"]).map((extension) => `.${String(extension).replace(/^\./, "")}`).join(",");
+}
+
+function validateAttachmentForType(file: File, type: TypeConfig) {
+  const allowedExtensions = new Set((type.allowedExtensions ?? ["pdf", "png", "jpg", "jpeg"]).map((extension) => String(extension).toLowerCase().replace(/^\./, "")));
+  const extension = file.name.split(".").pop()?.toLowerCase() || "";
+  if (!extension || !allowedExtensions.has(extension)) {
+    return `امتداد الملف غير مسموح. الامتدادات المسموحة: ${Array.from(allowedExtensions).join(", ")}`;
+  }
+  const maxBytes = (type.maxFileSizeMb ?? 10) * 1024 * 1024;
+  if (file.size > maxBytes) {
+    return `حجم الملف يتجاوز الحد المسموح (${type.maxFileSizeMb ?? 10} MB).`;
+  }
+  return "";
+}
+
+function RequestTypeMeta({ label, value, tone = "slate" }: { label: string; value: string; tone?: "slate" | "bank" | "amber" }) {
+  const toneClass =
+    tone === "bank"
+      ? "border-bank-100 bg-white text-bank-800"
+      : tone === "amber"
+        ? "border-amber-200 bg-amber-50 text-amber-800"
+        : "border-slate-200 bg-white text-slate-700";
+  return (
+    <div className={`rounded-md border px-3 py-2 ${toneClass}`}>
+      <p className="text-xs font-bold opacity-70">{label}</p>
+      <p className="mt-1 text-sm font-black leading-6">{value}</p>
+    </div>
+  );
+}
+
+function SLABadge({ request }: { request: ServiceRequest }) {
+  if (!request.sla_due_at) {
+    return <span className="inline-flex rounded-full bg-slate-100 px-2 py-1 text-xs font-bold text-slate-500">بدون SLA</span>;
+  }
+  const dueDate = parseApiDate(request.sla_due_at);
+  if (!dueDate) {
+    return <span className="inline-flex rounded-full bg-slate-100 px-2 py-1 text-xs font-bold text-slate-500">غير محدد</span>;
+  }
+  const finalStatuses = new Set(["completed", "closed", "rejected", "cancelled"]);
+  if (finalStatuses.has(request.status)) {
+    return (
+      <span title={formatSystemDateTime(request.sla_due_at)} className="inline-flex rounded-full bg-slate-100 px-2 py-1 text-xs font-bold text-slate-600">
+        منتهي
+      </span>
+    );
+  }
+  const diffMs = dueDate.getTime() - Date.now();
+  if (diffMs < 0) {
+    return (
+      <span title={formatSystemDateTime(request.sla_due_at)} className="inline-flex rounded-full bg-red-50 px-2 py-1 text-xs font-bold text-red-700">
+        متأخر
+      </span>
+    );
+  }
+  const remainingHours = Math.max(1, Math.ceil(diffMs / (1000 * 60 * 60)));
+  return (
+    <span title={formatSystemDateTime(request.sla_due_at)} className="inline-flex rounded-full bg-bank-50 px-2 py-1 text-xs font-bold text-bank-700">
+      متبقّي {formatHours(remainingHours)}
+    </span>
+  );
 }
 
 async function loadManagedFields(requestTypeId: number, fallback: FieldConfig[]) {

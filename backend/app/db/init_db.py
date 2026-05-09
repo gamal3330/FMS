@@ -7,7 +7,7 @@ from app.core.config import get_settings
 from app.core.security import get_password_hash
 from app.models.ai import DEFAULT_AI_SYSTEM_PROMPT
 from app.models.enums import UserRole
-from app.models.settings import RequestTypeField, RequestTypeSetting, SpecializedSection, WorkflowTemplate, WorkflowTemplateStep
+from app.models.settings import RequestTypeField, RequestTypeSetting, RequestTypeVersion, SpecializedSection, WorkflowTemplate, WorkflowTemplateStep
 from app.models.user import Department, Role, User
 
 settings = get_settings()
@@ -140,6 +140,11 @@ def ensure_sqlite_dev_columns(db: Session) -> None:
         },
         "service_requests": {
             "request_type_id": "INTEGER",
+            "request_type_version_id": "INTEGER",
+            "request_type_version_number": "INTEGER DEFAULT 1",
+            "assigned_to_id": "INTEGER",
+            "request_type_snapshot": "JSON DEFAULT '{}'",
+            "form_schema_snapshot": "JSON DEFAULT '[]'",
         },
         "request_types": {
             "name_ar": "VARCHAR(160)",
@@ -148,14 +153,19 @@ def ensure_sqlite_dev_columns(db: Session) -> None:
             "category": "VARCHAR(80)",
             "assigned_section": "VARCHAR(40)",
             "assigned_department_id": "INTEGER",
+            "auto_assign_strategy": "VARCHAR(40) DEFAULT 'none'",
             "description": "TEXT",
             "icon": "VARCHAR(80)",
             "is_active": "BOOLEAN DEFAULT 1",
             "requires_attachment": "BOOLEAN DEFAULT 0",
             "allow_multiple_attachments": "BOOLEAN DEFAULT 0",
+            "max_attachments": "INTEGER DEFAULT 1",
+            "max_file_size_mb": "INTEGER DEFAULT 10",
+            "allowed_extensions_json": "JSON DEFAULT '[\"pdf\", \"png\", \"jpg\", \"jpeg\"]'",
             "default_priority": "VARCHAR(20) DEFAULT 'medium'",
             "sla_response_hours": "INTEGER DEFAULT 4",
             "sla_resolution_hours": "INTEGER DEFAULT 24",
+            "current_version_number": "INTEGER DEFAULT 1",
             "created_at": "DATETIME",
             "updated_at": "DATETIME",
         },
@@ -389,6 +399,135 @@ def ensure_runtime_columns(db: Session) -> None:
             if column not in version_columns:
                 db.execute(text(f"ALTER TABLE system_versions ADD COLUMN {column} {definition}"))
         db.commit()
+    if "request_types" in table_names:
+        request_type_columns = {column["name"] for column in inspector.get_columns("request_types")}
+        request_type_defs = {
+            "current_version_number": "INTEGER DEFAULT 1",
+            "auto_assign_strategy": "VARCHAR(40) DEFAULT 'none'",
+            "max_attachments": "INTEGER DEFAULT 1",
+            "max_file_size_mb": "INTEGER DEFAULT 10",
+            "allowed_extensions_json": "JSON DEFAULT '[\"pdf\", \"png\", \"jpg\", \"jpeg\"]'",
+        }
+        for column, definition in request_type_defs.items():
+            if column not in request_type_columns:
+                db.execute(text(f"ALTER TABLE request_types ADD COLUMN {column} {definition}"))
+        db.execute(text("UPDATE request_types SET current_version_number = COALESCE(current_version_number, 1)"))
+        db.execute(text("UPDATE request_types SET auto_assign_strategy = COALESCE(NULLIF(auto_assign_strategy, ''), 'none')"))
+        db.execute(text("UPDATE request_types SET max_attachments = COALESCE(max_attachments, CASE WHEN allow_multiple_attachments THEN 5 ELSE 1 END)"))
+        db.execute(text("UPDATE request_types SET max_file_size_mb = COALESCE(max_file_size_mb, 10)"))
+        db.commit()
+    if "service_requests" in table_names:
+        request_columns = {column["name"] for column in inspector.get_columns("service_requests")}
+        service_request_defs = {
+            "request_type_version_id": "INTEGER",
+            "request_type_version_number": "INTEGER DEFAULT 1",
+            "assigned_to_id": "INTEGER",
+            "request_type_snapshot": "JSON DEFAULT '{}'" if dialect != "sqlite" else "JSON DEFAULT '{}'",
+            "form_schema_snapshot": "JSON DEFAULT '[]'" if dialect != "sqlite" else "JSON DEFAULT '[]'",
+        }
+        for column, definition in service_request_defs.items():
+            if column not in request_columns:
+                db.execute(text(f"ALTER TABLE service_requests ADD COLUMN {column} {definition}"))
+        db.execute(text("UPDATE service_requests SET request_type_version_number = COALESCE(request_type_version_number, 1)"))
+        db.commit()
+
+
+def request_type_version_snapshot(db: Session, request_type: RequestTypeSetting) -> dict:
+    fields = db.scalars(
+        select(RequestTypeField)
+        .where(RequestTypeField.request_type_id == request_type.id, RequestTypeField.is_active == True)
+        .order_by(RequestTypeField.sort_order)
+    ).all()
+    template = db.scalar(select(WorkflowTemplate).where(WorkflowTemplate.request_type_id == request_type.id, WorkflowTemplate.is_active == True))
+    steps = []
+    if template:
+        steps = db.scalars(
+            select(WorkflowTemplateStep)
+            .where(WorkflowTemplateStep.workflow_template_id == template.id, WorkflowTemplateStep.is_active == True)
+            .order_by(WorkflowTemplateStep.sort_order)
+        ).all()
+    return {
+        "request_type": {
+            "id": request_type.id,
+            "code": request_type.code,
+            "name_ar": request_type.name_ar,
+            "name_en": request_type.name_en,
+            "category": request_type.category,
+            "assigned_section": request_type.assigned_section,
+            "assigned_department_id": request_type.assigned_department_id,
+            "auto_assign_strategy": request_type.auto_assign_strategy or "none",
+            "description": request_type.description,
+            "icon": request_type.icon,
+            "is_active": request_type.is_active,
+            "requires_attachment": request_type.requires_attachment,
+            "allow_multiple_attachments": request_type.allow_multiple_attachments,
+            "max_attachments": request_type.max_attachments or (5 if request_type.allow_multiple_attachments else 1),
+            "max_file_size_mb": request_type.max_file_size_mb or 10,
+            "allowed_extensions_json": request_type.allowed_extensions_json or ["pdf", "png", "jpg", "jpeg"],
+            "default_priority": request_type.default_priority,
+            "sla_response_hours": request_type.sla_response_hours,
+            "sla_resolution_hours": request_type.sla_resolution_hours,
+            "version_number": request_type.current_version_number or 1,
+        },
+        "fields": [
+            {
+                "field_name": field.field_name,
+                "label_ar": field.label_ar,
+                "label_en": field.label_en,
+                "field_type": field.field_type,
+                "is_required": field.is_required,
+                "placeholder": field.placeholder,
+                "help_text": field.help_text,
+                "validation_rules": field.validation_rules or {},
+                "options": field.options or [],
+                "sort_order": field.sort_order,
+                "is_active": field.is_active,
+            }
+            for field in fields
+        ],
+        "workflow": [
+            {
+                "step_name_ar": step.step_name_ar,
+                "step_name_en": step.step_name_en,
+                "step_type": step.step_type,
+                "approver_role_id": step.approver_role_id,
+                "approver_user_id": step.approver_user_id,
+                "is_mandatory": step.is_mandatory,
+                "can_reject": step.can_reject,
+                "can_return_for_edit": step.can_return_for_edit,
+                "return_to_step_order": step.return_to_step_order,
+                "sla_hours": step.sla_hours,
+                "escalation_user_id": step.escalation_user_id,
+                "sort_order": step.sort_order,
+                "is_active": step.is_active,
+            }
+            for step in steps
+        ],
+    }
+
+
+def seed_request_type_versions(db: Session) -> None:
+    for request_type in db.scalars(select(RequestTypeSetting)).all():
+        active = db.scalar(
+            select(RequestTypeVersion).where(
+                RequestTypeVersion.request_type_id == request_type.id,
+                RequestTypeVersion.status == "active",
+            )
+        )
+        if active:
+            continue
+        version_number = request_type.current_version_number or 1
+        db.add(
+            RequestTypeVersion(
+                request_type_id=request_type.id,
+                version_number=version_number,
+                status="active",
+                change_summary="Initial published version",
+                snapshot_json=request_type_version_snapshot(db, request_type),
+                activated_at=datetime.utcnow(),
+            )
+        )
+    db.commit()
 
 
 def seed_request_types(db: Session) -> None:
@@ -407,6 +546,7 @@ def seed_request_types(db: Session) -> None:
                 code=code,
                 category=category,
                 assigned_department_id=it_department.id if it_department else None,
+                auto_assign_strategy="least_open_requests",
                 description=description,
                 icon="file-text",
                 is_enabled=True,
@@ -414,6 +554,9 @@ def seed_request_types(db: Session) -> None:
                 require_attachment=False,
                 requires_attachment=False,
                 allow_multiple_attachments=True,
+                max_attachments=5,
+                max_file_size_mb=10,
+                allowed_extensions_json=["pdf", "png", "jpg", "jpeg"],
                 default_priority="medium",
                 sla_response_hours=response_hours,
                 sla_resolution_hours=resolution_hours,
@@ -502,6 +645,7 @@ def seed_database(db: Session) -> None:
             )
         )
     seed_request_types(db)
+    seed_request_type_versions(db)
     from app.services.messaging_settings_service import seed_messaging_settings, sync_legacy_message_settings
 
     seed_messaging_settings(db)

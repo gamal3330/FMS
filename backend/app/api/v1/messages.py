@@ -68,8 +68,13 @@ MESSAGE_SETTINGS_DEFAULTS = {
     "enable_unread_badge": True,
     "enable_linked_requests": True,
     "enable_message_notifications": True,
+    "show_messages_tab_in_request_details": True,
+    "show_message_count_on_request": True,
+    "allow_request_owner_to_view_messages": False,
+    "allow_approvers_to_view_request_messages": True,
     "notify_on_new_message": True,
     "notify_on_reply": True,
+    "notify_on_read": False,
     "auto_refresh_seconds": 20,
     "max_attachment_mb": 25,
     "max_attachments_per_message": 10,
@@ -200,15 +205,21 @@ def load_message_settings(db: Session) -> dict:
     if integration is not None:
         loaded["enable_linked_requests"] = bool(integration.allow_link_to_request)
         loaded["allow_send_message_from_request"] = bool(integration.allow_send_message_from_request)
+        loaded["show_messages_tab_in_request_details"] = bool(integration.show_messages_tab_in_request_details)
+        loaded["show_message_count_on_request"] = bool(integration.show_message_count_on_request)
+        loaded["allow_request_owner_to_view_messages"] = bool(integration.allow_request_owner_to_view_messages)
+        loaded["allow_approvers_to_view_request_messages"] = bool(integration.allow_approvers_to_view_request_messages)
     if notifications is not None:
         loaded["enable_message_notifications"] = bool(notifications.enable_message_notifications)
         loaded["notify_on_new_message"] = bool(notifications.notify_on_new_message)
         loaded["notify_on_reply"] = bool(notifications.notify_on_reply)
+        loaded["notify_on_read"] = bool(notifications.notify_on_read)
         loaded["enable_unread_badge"] = bool(loaded.get("enable_unread_badge", True) and notifications.show_unread_count)
     if recipient_value:
         loaded["allow_send_to_user"] = bool(recipient_value.get("allow_send_to_user", True))
         loaded["allow_send_to_department"] = bool(recipient_value.get("allow_send_to_department", True))
         loaded["allow_broadcast"] = bool(recipient_value.get("allow_broadcast", False))
+        loaded["enable_circulars"] = bool(loaded.get("enable_circulars", True) and loaded["allow_broadcast"])
         loaded["allow_multiple_recipients"] = bool(loaded.get("allow_multiple_recipients", True) and recipient_value.get("allow_multiple_recipients", True))
         loaded["circular_allowed_user_ids"] = recipient_value.get("circular_allowed_user_ids", loaded.get("circular_allowed_user_ids", []))
         loaded["enable_department_broadcasts"] = bool(loaded.get("enable_department_broadcasts", True) and recipient_value.get("allow_send_to_department", True) and recipient_value.get("allow_broadcast", False))
@@ -264,6 +275,12 @@ def log_message_deleted_if_enabled(db: Session, current_user: User, message_id: 
         write_audit(db, "internal_message_deleted", "internal_message", actor=current_user, entity_id=str(message_id))
 
 
+def log_message_archived_if_enabled(db: Session, current_user: User, message_id: int, metadata: dict | None = None) -> None:
+    security_policy = db.scalar(select(MessageSecurityPolicy).limit(1))
+    if security_policy is None or security_policy.log_message_archived:
+        write_audit(db, "internal_message_archived", "internal_message", actor=current_user, entity_id=str(message_id), metadata=metadata)
+
+
 def user_allowed_by_message_scope(db: Session, user: User) -> bool:
     message_settings = load_message_settings(db)
     allowed_user_ids = set(message_settings.get("allowed_user_ids") or [])
@@ -292,7 +309,7 @@ def user_allowed_for_message_permission(message_settings: dict, user: User, role
 
 
 def can_send_circular(message_settings: dict, user: User) -> bool:
-    if not message_settings.get("enable_circulars", True):
+    if not message_settings.get("enable_circulars", True) or not message_settings.get("allow_broadcast", False):
         return False
     allowed_roles = message_settings.get("circular_allowed_roles") or []
     allowed_user_ids = message_settings.get("circular_allowed_user_ids") or []
@@ -304,6 +321,7 @@ def can_send_circular(message_settings: dict, user: User) -> bool:
 def can_send_department_broadcast(message_settings: dict, user: User) -> bool:
     return (
         bool(message_settings.get("enable_department_broadcasts", True))
+        and bool(message_settings.get("allow_send_to_department", True))
         and can_send_circular(message_settings, user)
         and user_allowed_for_message_permission(message_settings, user, "department_broadcast_allowed_roles", "department_broadcast_allowed_user_ids")
     )
@@ -696,6 +714,33 @@ def notify_message_recipients(db: Session, message: InternalMessage, sender: Use
         except RuntimeError:
             return
         loop.create_task(notification_manager.broadcast_to_users(recipient_ids, payload))
+
+
+def notify_message_read(db: Session, message: InternalMessage, reader: User) -> None:
+    message_settings = load_message_settings(db)
+    if not message_settings.get("enable_message_notifications", True) or not message_settings.get("notify_on_read", False):
+        return
+    if message.sender_id == reader.id:
+        return
+    payload = {
+        "type": "message_read",
+        "title": "تمت قراءة الرسالة",
+        "body": f"قرأ {reader.full_name_ar} الرسالة",
+        "message_id": message.id,
+        "message_uid": message.message_uid,
+        "subject": message.subject,
+        "sender_id": reader.id,
+        "sender_name": reader.full_name_ar,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        anyio.from_thread.run(notification_manager.broadcast_to_users, [message.sender_id], payload)
+    except RuntimeError:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        loop.create_task(notification_manager.broadcast_to_users([message.sender_id], payload))
 
 
 @router.get("/users", response_model=list[MessageUserRead])
@@ -1094,6 +1139,9 @@ def delete_draft(draft_id: int, db: Session = Depends(get_db), current_user: Use
 
 @router.get("/request/{request_id}", response_model=list[InternalMessageRead])
 def request_messages(request_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    message_settings = load_message_settings(db)
+    if not message_settings.get("enable_linked_requests", True) or not message_settings.get("show_messages_tab_in_request_details", True):
+        raise HTTPException(status_code=403, detail="عرض المراسلات المرتبطة بالطلبات غير مفعل من إعدادات المراسلات")
     stmt = (
         select(InternalMessage)
         .options(
@@ -1175,7 +1223,10 @@ def bulk_archive_messages(payload: MessageBulkAction, db: Session = Depends(get_
         if row:
             row.is_archived = True
             changed += 1
-    write_audit(db, "internal_messages_bulk_archived", "internal_message", actor=current_user, metadata={"count": changed})
+    if changed:
+        security_policy = db.scalar(select(MessageSecurityPolicy).limit(1))
+        if security_policy is None or security_policy.log_message_archived:
+            write_audit(db, "internal_messages_bulk_archived", "internal_message", actor=current_user, metadata={"count": changed})
     db.commit()
 
 
@@ -1398,6 +1449,7 @@ def mark_read(message_id: int, db: Session = Depends(get_db), current_user: User
             write_audit(db, "internal_message_read", "internal_message", actor=current_user, entity_id=str(message_id))
         db.commit()
         db.refresh(row)
+        notify_message_read(db, row.message, current_user)
     return message_read(row.message, current_user, row)
 
 
@@ -1408,7 +1460,7 @@ def archive_message(message_id: int, db: Session = Depends(get_db), current_user
     if not row:
         raise HTTPException(status_code=404, detail="Message not found")
     row.is_archived = True
-    write_audit(db, "internal_message_archived", "internal_message", actor=current_user, entity_id=str(message_id))
+    log_message_archived_if_enabled(db, current_user, message_id)
     db.commit()
 
 
@@ -1423,7 +1475,7 @@ def archive_any_message(message_id: int, db: Session = Depends(get_db), current_
         if not row:
             raise HTTPException(status_code=404, detail="Message not found")
         row.is_archived = True
-    write_audit(db, "internal_message_archived", "internal_message", actor=current_user, entity_id=str(message_id))
+    log_message_archived_if_enabled(db, current_user, message_id)
     db.commit()
 
 

@@ -33,6 +33,7 @@ export interface ApprovalStep {
   step_order: number;
   role: string;
   action: ApprovalAction;
+  can_reject?: boolean;
   can_return_for_edit?: boolean;
   note?: string | null;
   acted_at?: string | null;
@@ -60,6 +61,7 @@ export interface ServiceRequest {
   title: string;
   request_type: string;
   request_type_id?: number | null;
+  request_type_version_number?: number;
   status: RequestStatus;
   priority: string;
   created_at: string;
@@ -67,8 +69,11 @@ export interface ServiceRequest {
   sla_due_at?: string | null;
   closed_at?: string | null;
   form_data: Record<string, string>;
+  request_type_snapshot?: Record<string, unknown>;
+  form_schema_snapshot?: Array<{ field_name: string; label_ar?: string; label_en?: string; field_type?: string; sort_order?: number }>;
   business_justification?: string | null;
   requester: { id: number; full_name_ar: string; email: string };
+  assigned_to?: { id: number; full_name_ar: string; email: string } | null;
   department?: { name_ar: string };
   approvals?: ApprovalStep[];
   comments?: RequestComment[];

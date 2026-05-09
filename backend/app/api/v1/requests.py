@@ -38,9 +38,21 @@ from app.services.workflow import (
     create_approval_steps,
     next_request_number,
     reset_workflow_for_resubmission,
+    step_can_reject,
     step_can_return_for_edit,
 )
-from app.api.v1.request_type_management import create_snapshot_steps, validate_form_data
+from app.api.v1.request_type_management import (
+    active_version_for_usage,
+    create_snapshot_steps,
+    create_snapshot_steps_from_version,
+    form_schema_snapshot,
+    request_type_has_active_workflow,
+    request_type_snapshot,
+    resolve_assigned_user_id,
+    sla_due_from_request_type_config,
+    validate_form_data,
+    version_is_ready,
+)
 
 router = APIRouter(prefix="/requests", tags=["Service Requests"])
 settings = get_settings()
@@ -105,11 +117,14 @@ PDF_HIDDEN_FORM_KEYS = {
 
 ALLOWED_CONTENT_TYPES = {
     "application/pdf",
+    "application/msword",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.ms-excel",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     "image/jpeg",
     "image/png",
     "image/webp",
 }
-MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 SECTION_KEYWORDS = {
     "servers": ["server", "servers", "srv", "سيرفر", "خوادم"],
     "networks": ["network", "networks", "net", "شبكة", "شبكات"],
@@ -300,6 +315,7 @@ def create_request_created_message(db: Session, service_request: ServiceRequest,
 def request_query():
     return select(ServiceRequest).options(
         selectinload(ServiceRequest.requester).selectinload(User.department),
+        selectinload(ServiceRequest.assigned_to),
         selectinload(ServiceRequest.department),
         selectinload(ServiceRequest.approvals).selectinload(ApprovalStep.approver),
         selectinload(ServiceRequest.comments),
@@ -340,6 +356,7 @@ def enrich_approval_steps(db: Session, service_request: ServiceRequest | None) -
     if not service_request:
         return service_request
     for step in service_request.approvals or []:
+        step.can_reject = step.action == ApprovalAction.PENDING and step_can_reject(db, service_request, step)
         step.can_return_for_edit = step.action == ApprovalAction.PENDING and step_can_return_for_edit(db, service_request, step)
     return service_request
 
@@ -348,6 +365,28 @@ def enrich_request_list(db: Session, requests: list[ServiceRequest]) -> list[Ser
     for service_request in requests:
         enrich_approval_steps(db, service_request)
     return requests
+
+
+def attachment_rules_from_snapshot(snapshot: dict, request_type_record: RequestTypeSetting | None = None) -> dict:
+    allow_multiple = (
+        bool(snapshot.get("allow_multiple_attachments"))
+        if "allow_multiple_attachments" in snapshot
+        else bool(request_type_record.allow_multiple_attachments) if request_type_record else True
+    )
+    max_attachments = snapshot.get("max_attachments") or (request_type_record.max_attachments if request_type_record else None) or (5 if allow_multiple else 1)
+    max_file_size_mb = snapshot.get("max_file_size_mb") or (request_type_record.max_file_size_mb if request_type_record else None) or 10
+    allowed_extensions = snapshot.get("allowed_extensions_json") or (request_type_record.allowed_extensions_json if request_type_record else None) or ["pdf", "png", "jpg", "jpeg"]
+    allowed_extensions = sorted({str(item).strip().lower().lstrip(".") for item in allowed_extensions if str(item).strip()})
+    return {
+        "allow_multiple_attachments": allow_multiple,
+        "max_attachments": int(max_attachments),
+        "max_file_size_mb": int(max_file_size_mb),
+        "allowed_extensions": allowed_extensions,
+    }
+
+
+def attachment_extension(filename: str | None) -> str:
+    return Path(filename or "").suffix.lower().lstrip(".")
 
 
 def register_pdf_font() -> str:
@@ -738,26 +777,53 @@ def create_request(payload: ServiceRequestCreate, db: Session = Depends(get_db),
             detail="حسابك غير مرتبط بمدير مباشر. يرجى التواصل مع مدير النظام لربطك بمدير إدارة مباشر قبل رفع الطلب.",
         )
     request_type_record = db.get(RequestTypeSetting, payload.request_type_id) if payload.request_type_id else None
+    fields: list[RequestTypeField] | list[dict] = []
+    request_type_version = None
+    request_type_config: dict = {}
+    workflow_steps: list[dict] = []
     if payload.request_type_id:
         if not request_type_record or not request_type_record.is_active:
             raise HTTPException(status_code=404, detail="Request type not available")
-        fields = db.scalars(select(RequestTypeField).where(RequestTypeField.request_type_id == payload.request_type_id, RequestTypeField.is_active == True)).all()
+        request_type_version = active_version_for_usage(db, request_type_record)
+        if not version_is_ready(request_type_version):
+            raise HTTPException(status_code=409, detail="نوع الطلب غير جاهز للاستخدام")
+        version_snapshot = request_type_version.snapshot_json or {}
+        request_type_config = version_snapshot.get("request_type") or {}
+        workflow_steps = version_snapshot.get("workflow") or []
+        fields = version_snapshot.get("fields") or []
+        if not request_type_config.get("assigned_section") and not request_type_config.get("assigned_department_id"):
+            raise HTTPException(status_code=409, detail="نوع الطلب غير مرتبط بقسم مختص")
+        if not workflow_steps:
+            raise HTTPException(status_code=409, detail="نوع الطلب لا يحتوي على مسار موافقات فعال")
+        if request_type_config.get("requires_attachment") and payload.attachment_count <= 0:
+            raise HTTPException(status_code=422, detail="هذا النوع من الطلبات يتطلب إرفاق ملف قبل الإرسال")
+        rules = attachment_rules_from_snapshot(request_type_config, request_type_record)
+        if payload.attachment_count > rules["max_attachments"]:
+            raise HTTPException(status_code=422, detail=f"عدد المرفقات أكبر من الحد المسموح لهذا النوع ({rules['max_attachments']})")
         validate_form_data(fields, payload.form_data)
+    assigned_section = request_type_config.get("assigned_section") if request_type_record else None
+    assigned_to_id = resolve_assigned_user_id(db, request_type_config, assigned_section) if request_type_record else None
     service_request = ServiceRequest(
         request_number=next_request_number(db),
         title=payload.title,
         request_type=payload.request_type,
         request_type_id=payload.request_type_id,
+        request_type_version_id=request_type_version.id if request_type_version else None,
+        request_type_version_number=request_type_version.version_number if request_type_version else 1,
         priority=payload.priority,
         requester_id=current_user.id,
-        department_id=current_user.department_id,
+        assigned_to_id=assigned_to_id,
+        department_id=(request_type_config.get("assigned_department_id") if request_type_record else None) or current_user.department_id,
         form_data=payload.form_data,
+        request_type_snapshot={**request_type_config, "workflow": workflow_steps} if request_type_record else {},
+        form_schema_snapshot=fields if request_type_record else [],
         business_justification=payload.business_justification,
+        sla_due_at=sla_due_from_request_type_config(request_type_config) if request_type_record else None,
     )
     db.add(service_request)
     db.flush()
     if request_type_record:
-        create_snapshot_steps(db, service_request, request_type_record.id)
+        create_snapshot_steps_from_version(db, service_request, workflow_steps)
         service_request.status = RequestStatus.PENDING_APPROVAL
     else:
         create_approval_steps(db, service_request)
@@ -818,7 +884,9 @@ def resubmit_request(request_id: int, db: Session = Depends(get_db), current_use
     if service_request.status != RequestStatus.RETURNED_FOR_EDIT:
         raise HTTPException(status_code=400, detail="Only returned requests can be resubmitted")
     if service_request.request_type_id:
-        fields = db.scalars(select(RequestTypeField).where(RequestTypeField.request_type_id == service_request.request_type_id, RequestTypeField.is_active == True)).all()
+        fields = service_request.form_schema_snapshot or db.scalars(
+            select(RequestTypeField).where(RequestTypeField.request_type_id == service_request.request_type_id, RequestTypeField.is_active == True)
+        ).all()
         validate_form_data(fields, service_request.form_data or {})
     reset_workflow_for_resubmission(service_request)
     write_audit(db, "request_resubmitted", "service_request", actor=current_user, entity_id=str(service_request.id))
@@ -870,23 +938,37 @@ def upload_attachment(
     if not service_request:
         raise HTTPException(status_code=404, detail="Request not found")
     ensure_request_access(service_request, current_user, db)
-    if file.content_type not in ALLOWED_CONTENT_TYPES:
+    request_type_record = db.get(RequestTypeSetting, service_request.request_type_id) if service_request.request_type_id else None
+    snapshot = service_request.request_type_snapshot or {}
+    rules = attachment_rules_from_snapshot(snapshot, request_type_record)
+    current_count = db.scalar(select(func.count()).select_from(Attachment).where(Attachment.request_id == request_id)) or 0
+    if not rules["allow_multiple_attachments"] and current_count >= 1:
+        raise HTTPException(status_code=409, detail="هذا النوع من الطلبات لا يسمح بأكثر من مرفق واحد")
+    if current_count >= rules["max_attachments"]:
+        raise HTTPException(status_code=409, detail=f"وصل الطلب إلى الحد الأقصى للمرفقات ({rules['max_attachments']})")
+    extension = attachment_extension(file.filename)
+    if not extension or extension not in rules["allowed_extensions"]:
+        raise HTTPException(status_code=400, detail=f"امتداد الملف غير مسموح. الامتدادات المسموحة: {', '.join(rules['allowed_extensions'])}")
+    if file.content_type and file.content_type != "application/octet-stream" and file.content_type not in ALLOWED_CONTENT_TYPES:
         raise HTTPException(status_code=400, detail="File type is not allowed")
 
     upload_dir = Path(settings.upload_dir)
     upload_dir.mkdir(parents=True, exist_ok=True)
-    extension = Path(file.filename or "attachment").suffix.lower()
-    stored_name = f"{uuid4().hex}{extension}"
+    suffix = Path(file.filename or "attachment").suffix.lower()
+    stored_name = f"{uuid4().hex}{suffix}"
     destination = upload_dir / stored_name
 
     size = 0
+    general = db.scalar(select(SettingsGeneral).limit(1))
+    global_max_mb = int(general.upload_max_file_size_mb or 10) if general else 10
+    max_upload_bytes = min(rules["max_file_size_mb"], global_max_mb) * 1024 * 1024
     with destination.open("wb") as buffer:
         while chunk := file.file.read(1024 * 1024):
             size += len(chunk)
-            if size > MAX_UPLOAD_BYTES:
+            if size > max_upload_bytes:
                 buffer.close()
                 destination.unlink(missing_ok=True)
-                raise HTTPException(status_code=400, detail="File exceeds maximum size")
+                raise HTTPException(status_code=400, detail=f"حجم الملف يتجاوز الحد المسموح ({max_upload_bytes // (1024 * 1024)} MB)")
             buffer.write(chunk)
 
     attachment = Attachment(

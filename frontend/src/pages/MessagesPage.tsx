@@ -139,6 +139,7 @@ type MessageSettings = {
   enable_message_notifications: boolean;
   notify_on_new_message: boolean;
   notify_on_reply: boolean;
+  notify_on_read: boolean;
   max_attachment_mb: number;
   max_attachments_per_message: number;
   max_recipients: number;
@@ -195,6 +196,7 @@ const defaultMessageSettings: MessageSettings = {
   enable_message_notifications: true,
   notify_on_new_message: true,
   notify_on_reply: true,
+  notify_on_read: false,
   max_attachment_mb: 25,
   max_attachments_per_message: 10,
   max_recipients: 200,
