@@ -80,6 +80,23 @@ input, select, textarea {
   text-align: right;
 }
 
+.input {
+  width: 100%;
+  min-height: 2.5rem;
+  border-radius: 0.375rem;
+  border: 1px solid var(--app-border-strong);
+  background: var(--app-surface);
+  color: var(--app-text);
+  padding: 0.5rem 0.75rem;
+  font-size: 0.875rem;
+  outline: none;
+}
+
+.input:focus {
+  border-color: rgb(var(--bank-600) / 0.86);
+  box-shadow: 0 0 0 3px var(--app-focus);
+}
+
 input[type="email"],
 input[type="url"],
 input[type="password"],

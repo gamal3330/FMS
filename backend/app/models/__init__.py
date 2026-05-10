@@ -18,6 +18,7 @@ from app.models.messaging_settings import (
 )
 from app.models.notification import Notification
 from app.models.request import ApprovalStep, Attachment, RequestApprovalStep, RequestComment, ServiceRequest
+from app.models.report import ReportExportLog, ReportTemplate, SavedReport, ScheduledReport
 from app.models.settings import (
     IntegrationConfig,
     PortalSetting,
@@ -94,12 +95,16 @@ __all__ = [
     "NotificationSettings",
     "RequestComment",
     "RequestApprovalStep",
+    "ReportExportLog",
+    "ReportTemplate",
     "RequestTypeConfig",
     "RequestTypeField",
     "RequestTypeSetting",
     "RequestTypeVersion",
     "RollbackPoint",
     "Role",
+    "SavedReport",
+    "ScheduledReport",
     "ScreenPermission",
     "SecurityPolicy",
     "SettingsDepartment",

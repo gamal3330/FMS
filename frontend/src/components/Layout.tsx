@@ -11,7 +11,7 @@ const baseNav = [
   { label: "الطلبات", href: "/requests", icon: FileText, hiddenForEmployee: false, screenKey: "requests" },
   { label: "الموافقات", href: "/approvals", icon: ShieldCheck, hiddenForEmployee: false, screenKey: "approvals" },
   { label: "المراسلات", href: "/messages", icon: Mail, hiddenForEmployee: false, screenKey: "messages" },
-  { label: "التقارير", href: "/reports", icon: BarChart3, hiddenForEmployee: true, screenKey: "reports" }
+  { label: "التقارير", href: "/reports", icon: BarChart3, hiddenForEmployee: false, screenKey: "reports" }
 ];
 
 const roleLabels: Record<string, string> = {

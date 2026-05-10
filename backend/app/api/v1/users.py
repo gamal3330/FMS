@@ -59,7 +59,7 @@ SCREEN_DEFINITIONS = [
 
 ALL_SCREEN_KEYS = {item["key"] for item in SCREEN_DEFINITIONS}
 MANAGEMENT_SCREEN_KEYS = {"dashboard", "requests", "approvals", "messages", "reports", "request_types", "users", "departments", "specialized_sections", "messaging_settings", "ai_settings", "database_settings", "update_management", "health_monitoring", "settings"}
-EMPLOYEE_SCREEN_KEYS = {"requests", "approvals", "messages"}
+EMPLOYEE_SCREEN_KEYS = {"requests", "approvals", "messages", "reports"}
 DASHBOARD_SCREEN_ROLES = {UserRole.SUPER_ADMIN, UserRole.DEPARTMENT_MANAGER, UserRole.EXECUTIVE}
 ROLE_LABELS = {
     UserRole.EMPLOYEE.value: "موظف",

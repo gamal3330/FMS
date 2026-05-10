@@ -40,7 +40,6 @@ const tabs = [
   ["users", "المستخدمون", Users],
   ["roles", "الأدوار والصلاحيات", UserCog],
   ["screens", "صلاحيات الشاشات", ClipboardCheck],
-  ["actions", "الصلاحيات الإجرائية", KeyRound],
   ["organization", "الهيكل الإداري", Network],
   ["import", "الاستيراد الجماعي", Upload],
   ["security", "الأمان والجلسات", Lock],
@@ -122,7 +121,6 @@ function initialData() {
     specializedSections: [],
     roles: [],
     screenMatrix: null,
-    actionMatrix: null,
     securityPolicy: null,
     orgTree: [],
     orgIssues: [],
@@ -156,8 +154,6 @@ export default function UsersPage() {
   const [bulkManagerId, setBulkManagerId] = useState("");
   const [screenSubject, setScreenSubject] = useState({ type: "role", id: "" });
   const [screenDraft, setScreenDraft] = useState({});
-  const [actionSubject, setActionSubject] = useState({ type: "role", id: "" });
-  const [actionDraft, setActionDraft] = useState({});
   const [importState, setImportState] = useState({ file: null, validation: null });
   const [delegationForm, setDelegationForm] = useState(emptyDelegationForm);
 
@@ -179,7 +175,6 @@ export default function UsersPage() {
       specializedSections,
       roles,
       screenMatrix,
-      actionMatrix,
       securityPolicy,
       orgTree,
       orgIssues,
@@ -196,7 +191,6 @@ export default function UsersPage() {
       safeGet("/settings/specialized-sections?active_only=true", []),
       safeGet("/roles", []),
       safeGet("/permissions/screens", null),
-      safeGet("/permissions/actions", null),
       safeGet("/settings/security", null),
       safeGet("/users/organization/tree", []),
       safeGet("/users/organization/issues", []),
@@ -207,7 +201,7 @@ export default function UsersPage() {
       safeGet("/users/access-review", null),
       safeGet("/users/audit-logs", [])
     ]);
-    setData({ overview, users, departments, specializedSections, roles, screenMatrix, actionMatrix, securityPolicy, orgTree, orgIssues, importBatches, sessions, attempts, delegations, accessReview, auditLogs });
+    setData({ overview, users, departments, specializedSections, roles, screenMatrix, securityPolicy, orgTree, orgIssues, importBatches, sessions, attempts, delegations, accessReview, auditLogs });
     setLoading(false);
   }
 
@@ -223,11 +217,6 @@ export default function UsersPage() {
     });
     setScreenDraft(next);
   }, [data.screenMatrix, screenSubject.type, screenSubject.id]);
-
-  useEffect(() => {
-    const source = findPermissionSubject(data.actionMatrix, actionSubject);
-    setActionDraft({ ...(source?.permissions || {}) });
-  }, [data.actionMatrix, actionSubject.type, actionSubject.id]);
 
   const usersById = useMemo(() => new Map(data.users.map((user) => [user.id, user])), [data.users]);
   const departmentsById = useMemo(() => new Map(data.departments.map((department) => [department.id, department])), [data.departments]);
@@ -326,14 +315,6 @@ export default function UsersPage() {
   async function saveScreenPermissions() {
     const endpoint = screenSubject.type === "role" ? `/permissions/screens/role/${screenSubject.id}` : `/permissions/screens/user/${screenSubject.id}`;
     await runAction("screen-permissions", async () => api.put(endpoint, { permissions: screenDraft }));
-  }
-
-  async function saveActionPermissions() {
-    const endpoint = actionSubject.type === "role" ? `/permissions/actions/role/${actionSubject.id}` : `/permissions/actions/user/${actionSubject.id}`;
-    const needsConfirm = (data.actionMatrix?.actions || []).some((action) => action.dangerous && actionDraft[action.code]);
-    const confirmation_text = needsConfirm ? window.prompt("اكتب CONFIRM PERMISSIONS لتأكيد الصلاحيات الخطرة") : null;
-    if (needsConfirm && confirmation_text !== "CONFIRM PERMISSIONS") return;
-    await runAction("action-permissions", async () => api.put(endpoint, { permissions: actionDraft, confirmation_text }));
   }
 
   async function downloadImportTemplate() {
@@ -485,7 +466,6 @@ export default function UsersPage() {
                 />
               )}
               {activeTab === "screens" && <ScreenPermissionsTab matrix={data.screenMatrix} subject={screenSubject} setSubject={setScreenSubject} draft={screenDraft} setDraft={setScreenDraft} onSave={saveScreenPermissions} />}
-              {activeTab === "actions" && <ActionPermissionsTab matrix={data.actionMatrix} subject={actionSubject} setSubject={setActionSubject} draft={actionDraft} setDraft={setActionDraft} onSave={saveActionPermissions} />}
               {activeTab === "organization" && (
                 <OrganizationTab
                   tree={data.orgTree}
@@ -707,35 +687,6 @@ function ScreenPermissionsTab({ matrix, subject, setSubject, draft, setDraft, on
         <span>العنصر المحدد: {subjectItems.find((item) => String(item.id) === String(subject.id))?.name_ar || "اختر عنصرًا"}</span>
         <Button type="button" onClick={onSave} disabled={!subject.id} className="gap-2"><Save className="h-4 w-4" />حفظ صلاحيات الشاشات</Button>
       </div>
-    </div>
-  );
-}
-
-function ActionPermissionsTab({ matrix, subject, setSubject, draft, setDraft, onSave }) {
-  if (!matrix) return <EmptyState title="تعذر تحميل الصلاحيات الإجرائية." />;
-  const groups = groupBy(matrix.actions || [], "group");
-  return (
-    <div className="space-y-4">
-      <SubjectSelector matrix={matrix} subject={subject} setSubject={setSubject} />
-      <div className="grid gap-4 lg:grid-cols-2">
-        {Object.entries(groups).map(([group, actions]) => (
-          <Card key={group} className="p-4">
-            <h3 className="mb-3 text-lg font-black text-slate-950">{group}</h3>
-            <div className="space-y-2">
-              {actions.map((action) => (
-                <label key={action.code} className="flex items-center justify-between rounded-md border border-slate-200 p-3">
-                  <span>
-                    <span className="font-bold text-slate-800">{action.label}</span>
-                    {action.dangerous && <span className="mr-2 rounded-full bg-amber-50 px-2 py-1 text-xs font-bold text-amber-700">حساسة</span>}
-                  </span>
-                  <input type="checkbox" checked={Boolean(draft[action.code])} onChange={(event) => setDraft({ ...draft, [action.code]: event.target.checked })} />
-                </label>
-              ))}
-            </div>
-          </Card>
-        ))}
-      </div>
-      <div className="flex justify-end"><Button type="button" onClick={onSave} disabled={!subject.id} className="gap-2"><Save className="h-4 w-4" />حفظ الصلاحيات الإجرائية</Button></div>
     </div>
   );
 }
@@ -977,7 +928,6 @@ function UserDetailsDrawer({ details, usersById, departmentsById, onClose }) {
           <Info label="نوع العلاقة" value={relationLabel.get(user.relationship_type) || "-"} />
         </div>
         <Section title="صلاحيات الشاشات"><ChipList items={details.screen_permissions || []} /></Section>
-        <Section title="الصلاحيات الإجرائية"><ChipList items={Object.entries(details.action_permissions || {}).filter(([, value]) => value).map(([key]) => key)} /></Section>
         <Section title="الجلسات النشطة">
           <DataTable compact headers={["IP", "المتصفح", "الدخول", "آخر نشاط", "الحالة"]} rows={(details.sessions || []).map((session) => [session.ip_address || "-", truncate(session.user_agent, 45), formatSystemDateTime(session.login_at), formatSystemDateTime(session.last_activity_at), session.is_active ? "نشطة" : "منتهية"])} />
         </Section>
@@ -1222,15 +1172,6 @@ function statusText(user) {
   if (user.force_password_change) return "بانتظار تغيير كلمة المرور";
   if (!user.last_login_at) return "لم يسجل الدخول";
   return "نشط";
-}
-
-function groupBy(rows, key) {
-  return rows.reduce((groups, row) => {
-    const group = row[key] || "أخرى";
-    groups[group] = groups[group] || [];
-    groups[group].push(row);
-    return groups;
-  }, {});
 }
 
 function truncate(value, length) {
