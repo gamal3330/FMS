@@ -123,6 +123,19 @@ function CategoriesPanel({ categories, onSaved, notify }: { categories: Document
     }
   }
 
+  async function toggleStatus(category: DocumentCategory) {
+    try {
+      await apiFetch(`/documents/categories/${category.id}/status`, {
+        method: "PATCH",
+        body: JSON.stringify({ is_active: !category.is_active })
+      });
+      notify({ type: "success", message: category.is_active ? "تم إيقاف التصنيف." : "تم تفعيل التصنيف." });
+      onSaved();
+    } catch {
+      notify({ type: "error", message: "تعذر تغيير حالة التصنيف." });
+    }
+  }
+
   return (
     <Card className="space-y-5 p-5">
       <form onSubmit={save} className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
@@ -142,7 +155,17 @@ function CategoriesPanel({ categories, onSaved, notify }: { categories: Document
                 <td className="px-4 py-3 font-black">{category.name_ar}</td>
                 <td className="px-4 py-3">{category.code}</td>
                 <td className="px-4 py-3">{category.is_active ? "مفعل" : "معطل"}</td>
-                <td className="px-4 py-3"><button onClick={() => edit(category)} className="rounded-md border border-slate-200 px-3 py-2 text-xs font-bold">تعديل</button></td>
+                <td className="px-4 py-3">
+                  <div className="flex flex-wrap gap-2">
+                    <button onClick={() => edit(category)} className="rounded-md border border-slate-200 px-3 py-2 text-xs font-bold">تعديل</button>
+                    <button
+                      onClick={() => toggleStatus(category)}
+                      className={`rounded-md border px-3 py-2 text-xs font-bold ${category.is_active ? "border-amber-200 text-amber-700 hover:bg-amber-50" : "border-emerald-200 text-emerald-700 hover:bg-emerald-50"}`}
+                    >
+                      {category.is_active ? "إيقاف" : "تفعيل"}
+                    </button>
+                  </div>
+                </td>
               </tr>
             ))}
           </tbody>
