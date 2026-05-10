@@ -90,6 +90,8 @@ const reportTabs: Array<{ key: ReportKey; label: string; api?: string; reportTyp
   { key: "scheduled", label: "جدولة التقارير" }
 ];
 
+const primaryReportKeys = new Set<ReportKey>(["summary", "requests", "approvals", "sla", "saved"]);
+
 const quickRanges = [
   { key: "today", label: "اليوم", days: 0 },
   { key: "7", label: "آخر 7 أيام", days: 7 },
@@ -261,12 +263,18 @@ export function ReportsPage() {
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(false);
   const [exporting, setExporting] = useState("");
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
+  const [showAdvancedReports, setShowAdvancedReports] = useState(false);
+  const [showCharts, setShowCharts] = useState(false);
   const [notice, setNotice] = useState<{ type: "success" | "error"; message: string }>({ type: "success", message: "" });
   const [templateForm, setTemplateForm] = useState({ name_ar: "", code: "", report_type: "requests", description: "" });
   const [scheduleForm, setScheduleForm] = useState({ name: "", report_template_id: "", frequency: "monthly", run_time: "08:00", export_format: "excel" });
 
   const activeTabConfig = reportTabs.find((tab) => tab.key === activeTab);
   const activeReportType = activeTabConfig?.reportType || "requests";
+  const primaryTabs = reportTabs.filter((tab) => primaryReportKeys.has(tab.key));
+  const advancedTabs = reportTabs.filter((tab) => !primaryReportKeys.has(tab.key));
+  const isAdvancedTabActive = !primaryReportKeys.has(activeTab);
 
   useEffect(() => {
     loadOptions();
@@ -489,36 +497,55 @@ export function ReportsPage() {
       </section>
 
       <Card className="p-4">
-        <div className="flex gap-2 overflow-x-auto pb-1">
-          {reportTabs.map((tab) => (
-            <button
-              key={tab.key}
-              type="button"
-              onClick={() => setActiveTab(tab.key)}
-              className={`shrink-0 rounded-md border px-4 py-2 text-sm font-bold transition ${
-                activeTab === tab.key ? "border-bank-600 bg-bank-50 text-bank-800" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
-              }`}
-            >
-              {tab.label}
-            </button>
-          ))}
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex gap-2 overflow-x-auto pb-1">
+            {primaryTabs.map((tab) => (
+              <ReportTabButton key={tab.key} tab={tab} activeTab={activeTab} onSelect={setActiveTab} />
+            ))}
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowAdvancedReports((value) => !value)}
+            className="shrink-0 rounded-md border border-slate-300 px-4 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50"
+          >
+            {showAdvancedReports || isAdvancedTabActive ? "إخفاء التقارير المتقدمة" : "تقارير متقدمة"}
+          </button>
         </div>
+        {(showAdvancedReports || isAdvancedTabActive) && (
+          <div className="mt-3 flex gap-2 overflow-x-auto border-t border-slate-100 pt-3">
+            {advancedTabs.map((tab) => (
+              <ReportTabButton key={tab.key} tab={tab} activeTab={activeTab} onSelect={setActiveTab} />
+            ))}
+          </div>
+        )}
       </Card>
 
       <Card className="p-5">
         <form onSubmit={loadCurrentTab} className="space-y-4">
-          <div className="flex flex-wrap gap-2">
-            {quickRanges.map((range) => (
-              <button key={range.key} type="button" onClick={() => applyQuickRange(range)} className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-bold text-slate-700 hover:bg-bank-50">
-                {range.label}
-              </button>
-            ))}
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-wrap gap-2">
+              {quickRanges.map((range) => (
+                <button key={range.key} type="button" onClick={() => applyQuickRange(range)} className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-bold text-slate-700 hover:bg-bank-50">
+                  {range.label}
+                </button>
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowAdvancedFilters((value) => !value)}
+              className="rounded-md border border-slate-300 px-4 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50"
+            >
+              {showAdvancedFilters ? "إخفاء الفلاتر المتقدمة" : "فلاتر متقدمة"}
+            </button>
           </div>
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
             <Field label="من تاريخ"><input type="date" value={filters.date_from} onChange={(e) => setFilters({ ...filters, date_from: e.target.value })} className="input" /></Field>
             <Field label="إلى تاريخ"><input type="date" value={filters.date_to} onChange={(e) => setFilters({ ...filters, date_to: e.target.value })} className="input" /></Field>
             <Field label="الإدارة"><Select value={filters.department_id} onChange={(value) => setFilters({ ...filters, department_id: value })} options={departments} allLabel="كل الإدارات" /></Field>
             <Field label="نوع الطلب"><Select value={filters.request_type_id} onChange={(value) => setFilters({ ...filters, request_type_id: value })} options={requestTypes} allLabel="كل أنواع الطلب" /></Field>
+          </div>
+          {showAdvancedFilters && (
+            <div className="grid gap-3 rounded-lg border border-slate-100 bg-slate-50 p-3 md:grid-cols-2 xl:grid-cols-4">
             <Field label="الحالة"><NativeSelect value={filters.status} onChange={(value) => setFilters({ ...filters, status: value })} options={statusOptions} /></Field>
             <Field label="الأولوية"><NativeSelect value={filters.priority} onChange={(value) => setFilters({ ...filters, priority: value })} options={priorityOptions} /></Field>
             <Field label="القسم المختص"><Select value={filters.specialized_section_id} onChange={(value) => setFilters({ ...filters, specialized_section_id: value })} options={specializedSections} allLabel="كل الأقسام" /></Field>
@@ -527,13 +554,18 @@ export function ReportsPage() {
             <Field label="خطوة الموافقة"><input value={filters.approval_step} onChange={(e) => setFilters({ ...filters, approval_step: e.target.value })} placeholder="مثال: مدير مباشر" className="input" /></Field>
             <Field label="حالة SLA"><NativeSelect value={filters.sla_status} onChange={(value) => setFilters({ ...filters, sla_status: value })} options={slaOptions} /></Field>
             <Field label="نوع الرسالة"><input value={filters.message_type} onChange={(e) => setFilters({ ...filters, message_type: e.target.value })} placeholder="official_message" className="input" /></Field>
-          </div>
+            </div>
+          )}
           <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-4">
             <div className="flex flex-wrap gap-2">
               <Button type="submit" disabled={loading} className="gap-2"><Filter className="h-4 w-4" /> تطبيق الفلاتر</Button>
               <button type="button" onClick={() => { setFilters(emptyFilters); setPage(1); }} className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-300 px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50">
                 <RefreshCw className="h-4 w-4" />
                 إعادة تعيين
+              </button>
+              <button type="button" onClick={() => setShowCharts((value) => !value)} className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-300 px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+                <BarChart3 className="h-4 w-4" />
+                {showCharts ? "إخفاء الرسوم" : "عرض الرسوم"}
               </button>
             </div>
             <button type="button" onClick={saveCurrentReport} className="inline-flex h-10 items-center gap-2 rounded-md border border-bank-300 px-4 text-sm font-bold text-bank-700 hover:bg-bank-50">
@@ -562,9 +594,11 @@ export function ReportsPage() {
                 {Object.entries(cards).slice(0, 8).map(([key, value]) => <Metric key={key} label={summaryLabels[key] || key} value={formatMetric(value)} />)}
                 {!loading && Object.keys(cards).length === 0 && <EmptyCard text="لا توجد مؤشرات لهذا التبويب حالياً." />}
               </div>
-              <div className="grid gap-3 xl:grid-cols-2">
-                {chartGroups.map(([key, rows]) => <ChartCard key={key} title={chartTitle(key)} rows={rows || []} />)}
-              </div>
+              {showCharts && (
+                <div className="grid gap-3 xl:grid-cols-2">
+                  {chartGroups.map(([key, rows]) => <ChartCard key={key} title={chartTitle(key)} rows={rows || []} />)}
+                </div>
+              )}
               <Card className="p-5">
                 <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
                   <div>
@@ -634,6 +668,28 @@ function chartTitle(key: string) {
 
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return <label className="block space-y-2 text-sm font-bold text-slate-700">{label}{children}</label>;
+}
+
+function ReportTabButton({
+  tab,
+  activeTab,
+  onSelect
+}: {
+  tab: { key: ReportKey; label: string };
+  activeTab: ReportKey;
+  onSelect: (key: ReportKey) => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={() => onSelect(tab.key)}
+      className={`shrink-0 rounded-md border px-4 py-2 text-sm font-bold transition ${
+        activeTab === tab.key ? "border-bank-600 bg-bank-50 text-bank-800" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+      }`}
+    >
+      {tab.label}
+    </button>
+  );
 }
 
 function NativeSelect({ value, onChange, options }: { value: string; onChange: (value: string) => void; options: string[][] }) {

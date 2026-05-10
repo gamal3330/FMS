@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.core.security import get_password_hash
 from app.models.ai import DEFAULT_AI_SYSTEM_PROMPT
+from app.models.document import DocumentCategory
 from app.models.enums import UserRole
 from app.models.settings import RequestTypeField, RequestTypeSetting, RequestTypeVersion, SpecializedSection, WorkflowTemplate, WorkflowTemplateStep
 from app.models.user import Department, Role, User
@@ -34,6 +35,23 @@ DEFAULT_SPECIALIZED_SECTIONS = [
     ("networks", "قسم الشبكات", "Networks Section", "طلبات الشبكات والاتصالات وصلاحيات الوصول."),
     ("support", "قسم الدعم الفني", "Technical Support Section", "طلبات الدعم اليومي والأجهزة ومساندة المستخدمين."),
     ("development", "وحدة تطوير البرامج", "Software Development Unit", "طلبات التطوير والأنظمة والتكاملات."),
+]
+
+DEFAULT_DOCUMENT_CATEGORIES = [
+    ("decisions", "القرارات", "Decisions", "gavel", "#2563eb"),
+    ("circulars", "التعاميم", "Circulars", "megaphone", "#16a34a"),
+    ("announcements", "بلاغات", "Announcements", "bell", "#0891b2"),
+    ("forms", "النماذج", "Forms", "file-text", "#7c3aed"),
+    ("bank_services", "خدمات البنك", "Bank Services", "landmark", "#0f766e"),
+    ("organization_structure", "الهيكل التنظيمي", "Organization Structure", "network", "#ea580c"),
+    ("digital_plans", "الخطط الرقمية", "Digital Plans", "monitor", "#4f46e5"),
+    ("operational_plans", "الخطط التشغيلية", "Operational Plans", "clipboard-list", "#9333ea"),
+    ("external_documents", "الوثائق الخارجية", "External Documents", "folder-open", "#64748b"),
+    ("policies", "السياسات", "Policies", "shield-check", "#0d6337"),
+    ("instructions", "التعليمات", "Instructions", "list-checks", "#0284c7"),
+    ("procedures", "الإجراءات", "Procedures", "workflow", "#ca8a04"),
+    ("sharia_fatwas", "فتاوى الهيئة الشرعية", "Sharia Committee Fatwas", "scroll-text", "#be123c"),
+    ("job_descriptions", "الوصف الوظيفي", "Job Descriptions", "briefcase", "#475569"),
 ]
 
 DEFAULT_REQUEST_TYPES = [
@@ -665,6 +683,30 @@ def seed_request_types(db: Session) -> None:
     db.commit()
 
 
+def seed_document_categories(db: Session) -> None:
+    for index, (code, name_ar, name_en, icon, color) in enumerate(DEFAULT_DOCUMENT_CATEGORIES, start=1):
+        category = db.scalar(select(DocumentCategory).where(DocumentCategory.code == code))
+        if category:
+            category.name_ar = category.name_ar or name_ar
+            category.name_en = category.name_en or name_en
+            category.icon = category.icon or icon
+            category.color = category.color or color
+            category.sort_order = category.sort_order or index
+            continue
+        db.add(
+            DocumentCategory(
+                code=code,
+                name_ar=name_ar,
+                name_en=name_en,
+                icon=icon,
+                color=color,
+                sort_order=index,
+                is_active=True,
+            )
+        )
+    db.commit()
+
+
 def seed_database(db: Session) -> None:
     ensure_sqlite_dev_columns(db)
     ensure_runtime_columns(db)
@@ -709,6 +751,7 @@ def seed_database(db: Session) -> None:
         )
     seed_request_types(db)
     seed_request_type_versions(db)
+    seed_document_categories(db)
     from app.services.messaging_settings_service import seed_messaging_settings, sync_legacy_message_settings
 
     seed_messaging_settings(db)

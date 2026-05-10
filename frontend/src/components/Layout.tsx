@@ -1,5 +1,5 @@
-import { Activity, BarChart3, Bell, BellRing, Building2, Database, FileText, KeyRound, LayoutDashboard, LogOut, Mail, Moon, Network, PackageCheck, PanelRightClose, PanelRightOpen, ScrollText, Settings, ShieldCheck, Sparkles, Sun, UploadCloud, UserCircle, Users, X } from "lucide-react";
-import { ReactNode, useEffect, useRef, useState } from "react";
+import { Activity, BarChart3, Bell, BellRing, BookOpen, Building2, Database, FileText, KeyRound, LayoutDashboard, LogOut, Mail, Moon, Network, PackageCheck, PanelRightClose, PanelRightOpen, ScrollText, Settings, ShieldCheck, Sparkles, Sun, UploadCloud, UserCircle, Users, X } from "lucide-react";
+import { ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { NavLink } from "react-router-dom";
 import { API_BASE, apiFetch, CurrentUser, ServiceRequest } from "../lib/api";
 import { applyBrandColor, applyBranding, applyStoredFavicon } from "../lib/branding";
@@ -11,6 +11,7 @@ const baseNav = [
   { label: "الطلبات", href: "/requests", icon: FileText, hiddenForEmployee: false, screenKey: "requests" },
   { label: "الموافقات", href: "/approvals", icon: ShieldCheck, hiddenForEmployee: false, screenKey: "approvals" },
   { label: "المراسلات", href: "/messages", icon: Mail, hiddenForEmployee: false, screenKey: "messages" },
+  { label: "مكتبة الوثائق", href: "/documents", icon: BookOpen, hiddenForEmployee: false, screenKey: "documents" },
   { label: "التقارير", href: "/reports", icon: BarChart3, hiddenForEmployee: false, screenKey: "reports" }
 ];
 
@@ -47,6 +48,8 @@ export function Layout({
   const [passwordChangeRequired, setPasswordChangeRequired] = useState(Boolean(currentUser?.force_password_change));
   const [feedback, setFeedback] = useState<{ type: "success" | "error" | "info"; message: string }>({ type: "success", message: "" });
   const [messageToast, setMessageToast] = useState<{ message: string }>({ message: "" });
+  const [generalNotifications, setGeneralNotifications] = useState<SystemNotification[]>([]);
+  const [generalUnreadCount, setGeneralUnreadCount] = useState(0);
   const [notificationCount, setNotificationCount] = useState(0);
   const [messageUnreadCount, setMessageUnreadCount] = useState(0);
   const [notificationOpen, setNotificationOpen] = useState(false);
@@ -76,6 +79,7 @@ export function Layout({
     { label: "الأقسام المختصة", href: "/specialized-sections", icon: Network, screenKey: "specialized_sections" },
     { label: "مراقبة صحة النظام", href: "/settings/health-monitoring", icon: Activity, screenKey: "health_monitoring" },
     { label: "إعدادات المراسلات", href: "/settings/messaging", icon: Mail, screenKey: "messaging_settings" },
+    { label: "إعدادات الوثائق", href: "/settings/documents", icon: BookOpen, screenKey: "document_settings" },
     { label: "الذكاء الاصطناعي", href: "/settings/ai", icon: Sparkles, screenKey: "ai_settings" },
     { label: "قاعدة البيانات", href: "/settings/database", icon: Database, screenKey: "database_settings" },
     { label: "إدارة التحديثات", href: "/settings/updates", icon: PackageCheck, screenKey: "update_management" },
@@ -140,12 +144,39 @@ export function Layout({
     if (!currentUser || passwordChangeRequired) {
       setAllowedScreens(null);
       setMessageUnreadCount(0);
+      setGeneralNotifications([]);
+      setGeneralUnreadCount(0);
       return;
     }
     apiFetch<{ screens: string[]; available_screens?: { key: string; label: string }[] }>("/users/screen-permissions/me")
       .then((data) => setAllowedScreens(new Set(normalizeScreens(data.screens, data.available_screens))))
       .catch(() => setAllowedScreens(null));
   }, [currentUser?.id, passwordChangeRequired]);
+
+  const loadGeneralNotifications = useCallback(async () => {
+    if (!currentUser || passwordChangeRequired) {
+      setGeneralNotifications([]);
+      setGeneralUnreadCount(0);
+      return;
+    }
+    try {
+      const [notifications, count] = await Promise.all([
+        apiFetch<SystemNotification[]>("/notifications?limit=10"),
+        apiFetch<{ count: number }>("/notifications/unread-count")
+      ]);
+      setGeneralNotifications(notifications);
+      setGeneralUnreadCount(count.count || 0);
+    } catch {
+      setGeneralNotifications([]);
+      setGeneralUnreadCount(0);
+    }
+  }, [currentUser?.id, passwordChangeRequired]);
+
+  useEffect(() => {
+    loadGeneralNotifications();
+    window.addEventListener("qib-notifications-updated", loadGeneralNotifications);
+    return () => window.removeEventListener("qib-notifications-updated", loadGeneralNotifications);
+  }, [loadGeneralNotifications]);
 
   useEffect(() => {
     if (!currentUser || passwordChangeRequired || !canSeeScreen("messages")) {
@@ -228,7 +259,7 @@ export function Layout({
   }, [currentUser?.id]);
 
   useEffect(() => {
-    if (!currentUser || passwordChangeRequired || !canSeeScreen("messages")) return;
+    if (!currentUser || passwordChangeRequired) return;
     const token = localStorage.getItem("qib_token");
     if (!token) return;
     const wsToken = token;
@@ -241,7 +272,25 @@ export function Layout({
       socket = new WebSocket(buildWebSocketUrl("/ws/notifications", wsToken));
       socket.onmessage = (event) => {
         const payload = parseRealtimePayload(event.data);
-        if (!payload || !["new_message", "message_read"].includes(payload.type)) return;
+        if (!payload) return;
+        if (payload.type === "notification") {
+          setGeneralUnreadCount((value) => value + 1);
+          setGeneralNotifications((value) => [
+            {
+              id: Date.now(),
+              title: payload.title || "إشعار جديد",
+              body: payload.body || "",
+              is_read: false,
+              created_at: payload.created_at || new Date().toISOString()
+            },
+            ...value
+          ].slice(0, 10));
+          setFeedback({ type: "info", message: payload.title || "وصل إشعار جديد" });
+          showBrowserNotification(payload);
+          window.dispatchEvent(new Event("qib-notifications-updated"));
+          return;
+        }
+        if (!["new_message", "message_read"].includes(payload.type) || !canSeeScreen("messages")) return;
         if (payload.type === "new_message") {
           previousMessageUnreadCount.current += 1;
           messageCountersInitialized.current = true;
@@ -307,13 +356,34 @@ export function Layout({
     if (permission === "granted") {
       setFeedback({ type: "success", message: "تم تفعيل إشعارات المتصفح" });
       new Notification("تم تفعيل الإشعارات", {
-        body: "ستصلك إشعارات عند وصول رسائل جديدة.",
+        body: "ستصلك إشعارات النظام والتنبيهات المهمة.",
         dir: "rtl"
       });
     } else if (permission === "denied") {
       setFeedback({ type: "error", message: "تم حظر إشعارات المتصفح. يمكنك تفعيلها من إعدادات الموقع في المتصفح." });
     }
   }
+
+  async function markNotificationRead(notification: SystemNotification) {
+    if (notification.id > 1000000000000) return;
+    try {
+      await apiFetch(`/notifications/${notification.id}/read`, { method: "POST" });
+      loadGeneralNotifications();
+    } catch {
+      undefined;
+    }
+  }
+
+  async function markAllNotificationsRead() {
+    try {
+      await apiFetch("/notifications/mark-all-read", { method: "POST" });
+      loadGeneralNotifications();
+    } catch {
+      setFeedback({ type: "error", message: "تعذر تحديث الإشعارات" });
+    }
+  }
+
+  const totalNotificationCount = generalUnreadCount + (currentUser?.role === "it_staff" ? notificationCount : 0);
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-950" dir="rtl">
@@ -455,7 +525,7 @@ export function Layout({
               <h2 className="text-lg font-bold text-slate-950">{systemName}</h2>
             </div>
             <div className="relative flex items-center gap-2 self-start sm:self-auto">
-              {currentUser?.role === "it_staff" && (
+              {currentUser && (
                 <button
                   type="button"
                   onClick={() => setNotificationOpen((value) => !value)}
@@ -463,9 +533,9 @@ export function Layout({
                   aria-label="الإشعارات"
                 >
                   <Bell className="h-5 w-5" />
-                  {notificationCount > 0 && (
+                  {totalNotificationCount > 0 && (
                     <span className="absolute -left-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-red-600 px-1 text-[11px] font-bold text-white">
-                      {notificationCount > 9 ? "9+" : notificationCount}
+                      {totalNotificationCount > 9 ? "9+" : totalNotificationCount}
                     </span>
                   )}
                 </button>
@@ -485,7 +555,7 @@ export function Layout({
                   )}
                 </NavLink>
               )}
-              {canSeeScreen("messages") && browserNotificationPermission !== "granted" && (
+              {currentUser && browserNotificationPermission !== "granted" && (
                 <button
                   type="button"
                   onClick={requestBrowserNotifications}
@@ -507,11 +577,35 @@ export function Layout({
                 {theme === "dark" ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
               </button>
               {notificationOpen && (
-                <div className="absolute left-0 top-12 w-72 rounded-lg border border-slate-200 bg-white p-4 text-right shadow-xl">
-                  <p className="font-bold text-slate-950">الإشعارات</p>
-                  <p className="mt-2 text-sm text-slate-600">
-                    {notificationCount > 0 ? `لديك ${notificationCount} طلب جديد` : "لا توجد طلبات جديدة حالياً"}
-                  </p>
+                <div className="absolute left-0 top-12 z-30 w-80 rounded-lg border border-slate-200 bg-white p-4 text-right shadow-xl">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="font-bold text-slate-950">الإشعارات</p>
+                    {generalUnreadCount > 0 && (
+                      <button onClick={markAllNotificationsRead} className="text-xs font-bold text-bank-700 hover:text-bank-900">تعليم الكل كمقروء</button>
+                    )}
+                  </div>
+                  <div className="mt-3 max-h-96 space-y-2 overflow-y-auto">
+                    {currentUser?.role === "it_staff" && notificationCount > 0 && (
+                      <NavLink to="/requests" onClick={() => setNotificationOpen(false)} className="block rounded-md border border-amber-100 bg-amber-50 px-3 py-2 text-sm font-bold text-amber-900">
+                        لديك {notificationCount} طلب تنفيذ جديد
+                      </NavLink>
+                    )}
+                    {generalNotifications.map((notification) => (
+                      <button
+                        key={notification.id}
+                        type="button"
+                        onClick={() => markNotificationRead(notification)}
+                        className={`block w-full rounded-md border px-3 py-2 text-right text-sm transition ${notification.is_read ? "border-slate-100 bg-white text-slate-600" : "border-bank-100 bg-bank-50 text-slate-950"}`}
+                      >
+                        <span className="block font-black">{notification.title}</span>
+                        <span className="mt-1 block leading-6">{notification.body}</span>
+                        <span className="mt-1 block text-xs text-slate-400">{formatNotificationDate(notification.created_at)}</span>
+                      </button>
+                    ))}
+                    {!generalNotifications.length && !(currentUser?.role === "it_staff" && notificationCount > 0) && (
+                      <p className="rounded-md bg-slate-50 px-3 py-4 text-center text-sm text-slate-500">لا توجد إشعارات حالياً</p>
+                    )}
+                  </div>
                 </div>
               )}
               <div className="flex gap-2 lg:hidden">
@@ -602,6 +696,17 @@ type RealtimeMessagePayload = {
   message_uid?: string;
   sender_name?: string;
   preview?: string;
+  related_route?: string;
+  created_at?: string;
+};
+
+type SystemNotification = {
+  id: number;
+  title: string;
+  body: string;
+  channel?: string;
+  is_read: boolean;
+  created_at?: string;
 };
 
 function buildWebSocketUrl(path: string, token: string) {
@@ -630,7 +735,16 @@ async function showBrowserNotification(payload: RealtimeMessagePayload) {
   });
   notification.onclick = () => {
     window.focus();
-    window.location.assign("/messages");
+    window.location.assign(payload.related_route || (payload.type === "notification" ? "/" : "/messages"));
     notification.close();
   };
+}
+
+function formatNotificationDate(value?: string) {
+  if (!value) return "";
+  try {
+    return new Date(value).toLocaleString("ar-SA", { dateStyle: "medium", timeStyle: "short" });
+  } catch {
+    return value;
+  }
 }

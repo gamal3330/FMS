@@ -6,6 +6,9 @@ import { Approvals } from "./pages/Approvals";
 import { Dashboard } from "./pages/Dashboard";
 import { Login } from "./pages/Login";
 import MessagesPage from "./pages/MessagesPage";
+import DocumentCategoryPage from "./pages/documents/DocumentCategoryPage";
+import DocumentDetailsPage from "./pages/documents/DocumentDetailsPage";
+import DocumentsHomePage from "./pages/documents/DocumentsHomePage";
 import { ReportsPage } from "./pages/ReportsPage";
 import { RequestDetails } from "./pages/RequestDetails";
 import { Requests } from "./pages/Requests";
@@ -13,6 +16,7 @@ import SettingsPage from "./pages/SettingsPage.jsx";
 import AISettingsPage from "./pages/settings/AISettingsPage.jsx";
 import DatabaseSettingsPage from "./pages/settings/DatabaseSettingsPage.jsx";
 import DepartmentsPage from "./pages/settings/DepartmentsPage.jsx";
+import DocumentSettingsPage from "./pages/settings/DocumentSettingsPage";
 import HealthMonitoringPage from "./pages/settings/HealthMonitoringPage.jsx";
 import LocalUpdatePage from "./pages/settings/LocalUpdatePage.jsx";
 import MessagingSettingsPage from "./pages/settings/MessagingSettingsPage.jsx";
@@ -27,6 +31,7 @@ const SCREEN_ROUTES: Record<string, string> = {
   requests: "/requests",
   approvals: "/approvals",
   messages: "/messages",
+  documents: "/documents",
   reports: "/reports",
   settings: "/settings",
   request_types: "/settings/request-management",
@@ -35,7 +40,7 @@ const SCREEN_ROUTES: Record<string, string> = {
   specialized_sections: "/specialized-sections",
   health_monitoring: "/settings/health-monitoring"
 };
-const DEFAULT_SCREEN_ORDER = ["dashboard", "requests", "approvals", "messages", "reports", "settings", "request_types", "users", "departments", "specialized_sections", "health_monitoring"];
+const DEFAULT_SCREEN_ORDER = ["dashboard", "requests", "approvals", "messages", "documents", "reports", "settings", "request_types", "users", "departments", "specialized_sections", "health_monitoring"];
 
 function ProtectedApp() {
   const navigate = useNavigate();
@@ -122,6 +127,7 @@ function ProtectedApp() {
       "ai_settings",
       "database_settings",
       "update_management",
+      "document_settings",
       "health_monitoring"
     ].some(canAccessScreen);
   }
@@ -150,6 +156,9 @@ function ProtectedApp() {
         <Route path="/requests/:requestId" element={screenElement("requests", <RequestDetails />)} />
         <Route path="/approvals" element={screenElement("approvals", <Approvals />)} />
         <Route path="/messages/*" element={screenElement("messages", <MessagesPage />)} />
+        <Route path="/documents" element={screenElement("documents", <DocumentsHomePage />)} />
+        <Route path="/documents/categories/:categoryCode" element={screenElement("documents", <DocumentCategoryPage />)} />
+        <Route path="/documents/:documentId" element={screenElement("documents", <DocumentDetailsPage />)} />
         <Route
           path="/reports"
           element={canAccessScreen("reports") ? <ReportsPage /> : <Navigate to={defaultPath()} replace />}
@@ -165,6 +174,10 @@ function ProtectedApp() {
         <Route
           path="/settings/database"
           element={canAccessScreen("database_settings") ? <DatabaseSettingsPage /> : <Navigate to={defaultPath()} replace />}
+        />
+        <Route
+          path="/settings/documents"
+          element={canAccessScreen("document_settings") ? <DocumentSettingsPage /> : <Navigate to={defaultPath()} replace />}
         />
         <Route
           path="/settings/messaging"
@@ -220,6 +233,8 @@ function normalizeScreens(screens: string[], availableScreens?: { key: string; l
   const next = [...(screens || [])];
   const backendKnowsMessages = availableScreens?.some((screen) => screen.key === "messages");
   if (!backendKnowsMessages && !next.includes("messages")) next.push("messages");
+  const backendKnowsDocuments = availableScreens?.some((screen) => screen.key === "documents");
+  if (!backendKnowsDocuments && !next.includes("documents")) next.push("documents");
   return next;
 }
 

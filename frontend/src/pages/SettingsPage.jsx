@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { AlertTriangle, CheckCircle2, Download, FileText, History, LockKeyhole, Mail, PackageCheck, RefreshCw, Settings2, Sparkles, Upload } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Download, FileText, History, Info, LockKeyhole, Mail, PackageCheck, RefreshCw, Settings2, Sparkles, Upload } from "lucide-react";
 import { api, getErrorMessage } from "../lib/axios";
 import { Card } from "../components/ui/card";
 import { Button } from "../components/ui/button";
@@ -11,7 +11,8 @@ import { formatSystemDateTime } from "../lib/datetime";
 const tabs = [
   ["general", "الإعدادات العامة", Settings2],
   ["email", "البريد SMTP", Mail],
-  ["security", "إعدادات الأمان", LockKeyhole]
+  ["security", "إعدادات الأمان", LockKeyhole],
+  ["about", "حول", Info]
 ];
 
 export default function SettingsPage({ initialTab = "general" }) {
@@ -51,6 +52,7 @@ export default function SettingsPage({ initialTab = "general" }) {
           {active === "email" && <Panel title="إعدادات البريد SMTP"><EmailSettings notify={notify} /></Panel>}
           {active === "requestTypes" && <Panel title="أنواع الطلبات"><RequestTypesSettings notify={notify} /></Panel>}
           {active === "security" && <Panel title="إعدادات الأمان"><SecuritySettings notify={notify} /></Panel>}
+          {active === "about" && <Panel title="حول النظام"><AboutSystemPanel /></Panel>}
         </Card>
       </div>
     </section>
@@ -63,6 +65,49 @@ function isVisibleSettingsTab(tab) {
 
 function Panel({ title, children }) {
   return <div className="min-w-0"><h3 className="mb-5 text-xl font-bold text-slate-950">{title}</h3>{children}</div>;
+}
+
+function AboutSystemPanel() {
+  const systemYear = new Intl.NumberFormat("ar", { useGrouping: false }).format(new Date().getFullYear());
+
+  return (
+    <div className="space-y-5 text-right" dir="rtl">
+      <div className="rounded-lg border border-bank-100 bg-bank-50/70 p-5">
+        <div className="flex items-start gap-4">
+          <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-md bg-white text-bank-700">
+            <Info className="h-6 w-6" />
+          </span>
+          <div>
+            <p className="text-lg font-black text-slate-950">بوابة خدمات بنك القطيبي الإسلامي</p>
+            <p className="mt-2 max-w-3xl text-sm leading-7 text-slate-600">
+              منصة داخلية موحدة لاستقبال الطلبات، تتبع مراحل الاعتماد، إدارة المراسلات والوثائق، مراقبة مؤشرات الخدمة، وتوثيق الأثر التشغيلي داخل بيئة عمل مصرفية منظمة وآمنة.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid gap-3 md:grid-cols-2">
+        <AboutItem title="إدارة الطلبات والموافقات" text="إنشاء الطلبات، بناء مسارات الموافقة، متابعة حالة التنفيذ، وتوثيق سجل الحالة لكل طلب." />
+        <AboutItem title="المراسلات والوثائق" text="مراسلات داخلية مرتبطة بالطلبات، ومكتبة وثائق PDF للسياسات والتعاميم والنماذج مع صلاحيات وإقرارات اطلاع." />
+        <AboutItem title="الحوكمة والصلاحيات" text="إدارة المستخدمين، الأدوار، صلاحيات الشاشات، التفويضات، وسجلات التدقيق الحساسة." />
+        <AboutItem title="التشغيل والمراقبة" text="تقارير، نسخ احتياطي، مراقبة صحة النظام، وإعدادات تشغيل تساعد فرق الإدارة والدعم على المتابعة." />
+      </div>
+
+      <div className="rounded-lg border border-slate-200 bg-white p-5">
+        <p className="text-sm font-bold text-slate-500">الإصدار المؤسسي الداخلي</p>
+        <p className="mt-2 text-2xl font-black text-slate-950">بنك القطيبي الإسلامي {systemYear}</p>
+      </div>
+    </div>
+  );
+}
+
+function AboutItem({ title, text }) {
+  return (
+    <div className="rounded-lg border border-slate-200 bg-white p-4">
+      <p className="font-black text-slate-950">{title}</p>
+      <p className="mt-2 text-sm leading-6 text-slate-600">{text}</p>
+    </div>
+  );
 }
 
 function RequestTypesSettings({ notify }) {

@@ -44,6 +44,7 @@ SCREEN_DEFINITIONS = [
     {"key": "requests", "label": "الطلبات"},
     {"key": "approvals", "label": "الموافقات"},
     {"key": "messages", "label": "المراسلات الداخلية"},
+    {"key": "documents", "label": "مكتبة الوثائق"},
     {"key": "reports", "label": "التقارير"},
     {"key": "request_types", "label": "إدارة أنواع الطلبات"},
     {"key": "users", "label": "المستخدمون والصلاحيات"},
@@ -54,12 +55,13 @@ SCREEN_DEFINITIONS = [
     {"key": "database_settings", "label": "إعدادات قاعدة البيانات"},
     {"key": "update_management", "label": "إدارة التحديثات"},
     {"key": "health_monitoring", "label": "مراقبة صحة النظام"},
+    {"key": "document_settings", "label": "إعدادات الوثائق"},
     {"key": "settings", "label": "الإعدادات"},
 ]
 
 ALL_SCREEN_KEYS = {item["key"] for item in SCREEN_DEFINITIONS}
-MANAGEMENT_SCREEN_KEYS = {"dashboard", "requests", "approvals", "messages", "reports", "request_types", "users", "departments", "specialized_sections", "messaging_settings", "ai_settings", "database_settings", "update_management", "health_monitoring", "settings"}
-EMPLOYEE_SCREEN_KEYS = {"requests", "approvals", "messages", "reports"}
+MANAGEMENT_SCREEN_KEYS = {"dashboard", "requests", "approvals", "messages", "documents", "reports", "request_types", "users", "departments", "specialized_sections", "messaging_settings", "ai_settings", "database_settings", "update_management", "health_monitoring", "document_settings", "settings"}
+EMPLOYEE_SCREEN_KEYS = {"requests", "approvals", "messages", "documents", "reports"}
 DASHBOARD_SCREEN_ROLES = {UserRole.SUPER_ADMIN, UserRole.DEPARTMENT_MANAGER, UserRole.EXECUTIVE}
 ROLE_LABELS = {
     UserRole.EMPLOYEE.value: "موظف",
@@ -257,8 +259,12 @@ def read_user_screens(db: Session, user: User) -> list[str]:
         clean_screens = [screen for screen in clean_screens if screen != "dashboard"]
     if "messages_permission_initialized" not in value and "messages" in default_screens_for_role(user.role) and "messages" not in clean_screens:
         clean_screens.append("messages")
+    if "documents_permission_initialized" not in value and "documents" in default_screens_for_role(user.role) and "documents" not in clean_screens:
+        clean_screens.append("documents")
     if user.role in {UserRole.SUPER_ADMIN, UserRole.DEPARTMENT_MANAGER} and "settings" in clean_screens and "health_monitoring" not in clean_screens:
         clean_screens.append("health_monitoring")
+    if user.role in {UserRole.SUPER_ADMIN, UserRole.DEPARTMENT_MANAGER} and "settings" in clean_screens and "document_settings" not in clean_screens:
+        clean_screens.append("document_settings")
     return clean_screens
 
 
@@ -298,7 +304,7 @@ def save_user_screens(db: Session, user: User, screens: list[str], actor: User) 
     if not setting:
         setting = PortalSetting(category="screen_permissions", setting_key=str(user.id), setting_value={})
         db.add(setting)
-    setting.setting_value = {"screens": clean_screens, "messages_permission_initialized": True}
+    setting.setting_value = {"screens": clean_screens, "messages_permission_initialized": True, "documents_permission_initialized": True}
     setting.updated_by_id = actor.id
 
 
