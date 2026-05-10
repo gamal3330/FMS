@@ -12,7 +12,6 @@ const primaryStepTypes = [
 ];
 
 const advancedStepTypes = [
-  ["it_manager", "مدير إدارة"],
   ["executive_management", "الإدارة التنفيذية"],
   ["implementation_engineer", "مختص تنفيذ"],
   ["specific_role", "دور محدد"],
@@ -36,7 +35,6 @@ const englishStepNames = {
   department_specialist: "Department Specialist",
   specific_department_manager: "Specific Department Manager",
   information_security: "Information Security",
-  it_manager: "Department Manager",
   executive_management: "Executive Management",
   implementation_engineer: "Implementation Specialist",
   specific_role: "Specific Role",

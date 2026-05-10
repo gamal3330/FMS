@@ -71,7 +71,7 @@ from app.services.messaging_settings_service import (
 
 router = APIRouter(prefix="/settings/messaging", tags=["Messaging Settings"])
 
-ViewActor = Depends(require_roles(UserRole.IT_MANAGER))
+ViewActor = Depends(require_roles(UserRole.DEPARTMENT_MANAGER))
 EditActor = Depends(require_roles(UserRole.SUPER_ADMIN))
 
 

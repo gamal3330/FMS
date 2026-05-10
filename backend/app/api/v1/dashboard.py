@@ -15,7 +15,7 @@ from app.services.workflow import IMPLEMENTATION_STEP_ROLES
 from app.api.v1.users import read_user_screens
 
 router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
-MANAGEMENT_STATS_ROLES = {UserRole.IT_MANAGER, UserRole.EXECUTIVE, UserRole.SUPER_ADMIN}
+MANAGEMENT_STATS_ROLES = {UserRole.EXECUTIVE, UserRole.SUPER_ADMIN}
 SECTION_KEYWORDS = {
     "servers": ["server", "servers", "srv", "سيرفر", "خوادم"],
     "networks": ["network", "networks", "net", "شبكة", "شبكات"],
@@ -63,7 +63,7 @@ def user_administrative_section(user: User) -> str | None:
 def scoped_request_ids(current_user: User):
     stmt = select(ServiceRequest.id)
 
-    if current_user.role in {UserRole.SUPER_ADMIN, UserRole.IT_MANAGER, UserRole.EXECUTIVE}:
+    if current_user.role in {UserRole.SUPER_ADMIN, UserRole.EXECUTIVE}:
         return stmt
 
     own_request = ServiceRequest.requester_id == current_user.id
@@ -74,6 +74,10 @@ def scoped_request_ids(current_user: User):
     if current_user.role == UserRole.DIRECT_MANAGER:
         team_members = select(User.id).where(User.manager_id == current_user.id)
         return stmt.where(or_(own_request, ServiceRequest.requester_id.in_(team_members)))
+
+    if current_user.role == UserRole.DEPARTMENT_MANAGER:
+        managed_departments = select(Department.id).where(Department.manager_id == current_user.id, Department.is_active == True)
+        return stmt.where(or_(own_request, ServiceRequest.department_id.in_(managed_departments)))
 
     approval_requests = select(ApprovalStep.request_id).where(ApprovalStep.role == current_user.role)
     if current_user.role == UserRole.IT_STAFF:

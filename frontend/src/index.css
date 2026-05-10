@@ -114,7 +114,7 @@ th, td {
   border-color: var(--app-border) !important;
 }
 
-:root[data-theme="dark"] :where(.bg-white, .bg-white\/95, .bg-white\/90, .bg-white\/80) {
+:root[data-theme="dark"] :where(.bg-white, .bg-white\/95, .bg-white\/90, .bg-white\/80, .bg-white\/70, .bg-white\/60, .bg-white\/50, .bg-white\/40) {
   background-color: rgb(16 24 22 / var(--tw-bg-opacity, 1)) !important;
 }
 
@@ -130,20 +130,44 @@ th, td {
   background-color: rgb(24 66 44 / 0.36) !important;
 }
 
+:root[data-theme="dark"] :where(.bg-bank-50\/70, .bg-bank-50\/60, .bg-bank-50\/50, .bg-bank-50\/40, .bg-bank-100\/70, .bg-bank-100\/60, .bg-bank-100\/50, .bg-bank-100\/40) {
+  background-color: rgb(18 31 27 / 0.94) !important;
+}
+
+:root[data-theme="dark"] :where(.border-bank-100, .border-bank-200, .border-bank-300) {
+  border-color: var(--app-border-strong) !important;
+}
+
 :root[data-theme="dark"] :where(.bg-emerald-50, .bg-emerald-100, .bg-green-50, .bg-green-100) {
   background-color: rgb(6 78 59 / 0.34) !important;
+}
+
+:root[data-theme="dark"] :where(.bg-emerald-50\/70, .bg-emerald-50\/60, .bg-emerald-50\/50, .bg-emerald-50\/40, .bg-green-50\/70, .bg-green-50\/60, .bg-green-50\/50, .bg-green-50\/40) {
+  background-color: rgb(6 78 59 / 0.24) !important;
 }
 
 :root[data-theme="dark"] :where(.bg-amber-50, .bg-amber-100, .bg-yellow-50, .bg-yellow-100) {
   background-color: rgb(120 78 18 / 0.28) !important;
 }
 
+:root[data-theme="dark"] :where(.bg-amber-50\/70, .bg-amber-50\/60, .bg-amber-50\/50, .bg-amber-50\/40, .bg-yellow-50\/70, .bg-yellow-50\/60, .bg-yellow-50\/50, .bg-yellow-50\/40) {
+  background-color: rgb(92 62 20 / 0.28) !important;
+}
+
 :root[data-theme="dark"] :where(.bg-red-50, .bg-red-100, .bg-rose-50, .bg-rose-100) {
   background-color: rgb(127 29 29 / 0.28) !important;
 }
 
+:root[data-theme="dark"] :where(.bg-red-50\/70, .bg-red-50\/60, .bg-red-50\/50, .bg-red-50\/40, .bg-rose-50\/70, .bg-rose-50\/60, .bg-rose-50\/50, .bg-rose-50\/40) {
+  background-color: rgb(99 24 24 / 0.28) !important;
+}
+
 :root[data-theme="dark"] :where(.bg-blue-50, .bg-blue-100, .bg-indigo-50, .bg-indigo-100) {
   background-color: rgb(30 64 75 / 0.34) !important;
+}
+
+:root[data-theme="dark"] :where(.bg-blue-50\/70, .bg-blue-50\/60, .bg-blue-50\/50, .bg-blue-50\/40, .bg-indigo-50\/70, .bg-indigo-50\/60, .bg-indigo-50\/50, .bg-indigo-50\/40) {
+  background-color: rgb(30 64 75 / 0.28) !important;
 }
 
 :root[data-theme="dark"] :where(.text-slate-950, .text-slate-900, .text-slate-800, .text-slate-700, .text-gray-950, .text-gray-900, .text-gray-800, .text-gray-700) {
@@ -162,24 +186,40 @@ th, td {
   color: #9af0bd !important;
 }
 
-:root[data-theme="dark"] :where(.text-emerald-700, .text-green-700) {
+:root[data-theme="dark"] :where(.text-emerald-700, .text-emerald-800, .text-emerald-900, .text-green-700, .text-green-800, .text-green-900) {
   color: #86efac !important;
 }
 
-:root[data-theme="dark"] :where(.text-amber-700, .text-yellow-700) {
+:root[data-theme="dark"] :where(.text-amber-700, .text-amber-800, .text-amber-900, .text-yellow-700, .text-yellow-800, .text-yellow-900) {
   color: #facc15 !important;
 }
 
-:root[data-theme="dark"] :where(.text-red-700, .text-rose-700) {
+:root[data-theme="dark"] :where(.text-red-700, .text-red-800, .text-red-900, .text-red-950, .text-rose-700, .text-rose-800, .text-rose-900, .text-rose-950) {
   color: #fca5a5 !important;
 }
 
-:root[data-theme="dark"] :where(.text-blue-700, .text-indigo-700) {
+:root[data-theme="dark"] :where(.text-blue-700, .text-blue-800, .text-blue-900, .text-indigo-700, .text-indigo-800, .text-indigo-900) {
   color: #93c5fd !important;
 }
 
 :root[data-theme="dark"] :where(.border-slate-50, .border-slate-100, .border-slate-200, .border-slate-300, .border-gray-100, .border-gray-200, .border-gray-300) {
   border-color: var(--app-border) !important;
+}
+
+:root[data-theme="dark"] :where(.border-amber-100, .border-amber-200, .border-amber-300, .border-yellow-100, .border-yellow-200, .border-yellow-300) {
+  border-color: rgb(180 120 30 / 0.46) !important;
+}
+
+:root[data-theme="dark"] :where(.border-red-100, .border-red-200, .border-red-300, .border-rose-100, .border-rose-200, .border-rose-300) {
+  border-color: rgb(248 113 113 / 0.38) !important;
+}
+
+:root[data-theme="dark"] :where(.border-emerald-100, .border-emerald-200, .border-emerald-300, .border-green-100, .border-green-200, .border-green-300) {
+  border-color: rgb(74 222 128 / 0.36) !important;
+}
+
+:root[data-theme="dark"] :where(.border-blue-100, .border-blue-200, .border-blue-300, .border-indigo-100, .border-indigo-200, .border-indigo-300, .border-white, .border-white\/80) {
+  border-color: var(--app-border-strong) !important;
 }
 
 :root[data-theme="dark"] :where(.divide-slate-100 > :not([hidden]) ~ :not([hidden]), .divide-slate-200 > :not([hidden]) ~ :not([hidden])) {

@@ -44,7 +44,7 @@ SCREEN_PERMISSION_ORDER = {
 
 
 def request_types_screen_level(db: Session, user: User) -> str:
-    if user.role in {UserRole.SUPER_ADMIN, UserRole.IT_MANAGER}:
+    if user.role in {UserRole.SUPER_ADMIN, UserRole.DEPARTMENT_MANAGER}:
         return "manage"
 
     user_permission = db.scalar(
@@ -98,7 +98,7 @@ WORKFLOW_STEP_LABELS = {
     "department_specialist": "مختص الإدارة المختصة",
     "specific_department_manager": "مدير إدارة محددة",
     "information_security": "أمن المعلومات (مرحلة قديمة)",
-    "it_manager": "مدير إدارة",
+    "administration_manager": "مدير إدارة",
     "it_staff": "مختص تنفيذ",
     "executive_management": "الإدارة التنفيذية",
     "implementation_engineer": "مختص تنفيذ",
@@ -1384,10 +1384,10 @@ def resolve_assigned_user_id(db: Session, request_type_config: dict, assigned_se
         return stmt.order_by(User.id)
 
     if strategy == "section_manager":
-        manager = db.scalar(section_user_stmt(UserRole.IT_MANAGER).limit(1))
+        manager = db.scalar(section_user_stmt(UserRole.DEPARTMENT_MANAGER).limit(1))
         if manager:
             return manager.id
-        fallback_manager = db.scalar(select(User).where(User.is_active == True, User.role == UserRole.IT_MANAGER).order_by(User.id).limit(1))
+        fallback_manager = db.scalar(select(User).where(User.is_active == True, User.role == UserRole.DEPARTMENT_MANAGER).order_by(User.id).limit(1))
         return fallback_manager.id if fallback_manager else None
 
     candidates = db.scalars(section_user_stmt(UserRole.IT_STAFF)).all()

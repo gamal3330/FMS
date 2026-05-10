@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import require_roles
@@ -14,7 +14,7 @@ from app.db.session import get_db
 from app.models.enums import UserRole
 from app.models.request import ServiceRequest
 from app.models.settings import SettingsGeneral
-from app.models.user import User
+from app.models.user import Department, User
 from app.services.audit import write_audit
 from app.services.pdf_fonts import register_arabic_pdf_font
 from app.services.pdf_template import (
@@ -30,7 +30,7 @@ from app.services.pdf_template import (
 
 router = APIRouter(prefix="/reports", tags=["Reports"])
 
-REPORT_ROLES = (UserRole.IT_MANAGER, UserRole.SUPER_ADMIN, UserRole.EXECUTIVE)
+REPORT_ROLES = (UserRole.DEPARTMENT_MANAGER, UserRole.SUPER_ADMIN, UserRole.EXECUTIVE)
 STATUS_LABELS = {
     "draft": "مسودة",
     "submitted": "مرسل",
@@ -80,6 +80,15 @@ def filtered_requests_stmt(
     if request_type:
         stmt = stmt.where(ServiceRequest.request_type == request_type)
     return stmt
+
+
+def scoped_report_requests_stmt(stmt, actor: User):
+    if actor.role in {UserRole.SUPER_ADMIN, UserRole.EXECUTIVE}:
+        return stmt
+    if actor.role == UserRole.DEPARTMENT_MANAGER:
+        managed_departments = select(Department.id).where(Department.manager_id == actor.id, Department.is_active == True)
+        return stmt.where(or_(ServiceRequest.requester_id == actor.id, ServiceRequest.department_id.in_(managed_departments)))
+    return stmt.where(ServiceRequest.requester_id == actor.id)
 
 
 def request_type_label(item: ServiceRequest) -> str:
@@ -230,7 +239,8 @@ def export_excel(
     request_type: str | None = Query(default=None),
     request_type_id: int | None = Query(default=None),
 ):
-    items = db.scalars(filtered_requests_stmt(from_date, to_date, employee_id, request_type, request_type_id)).all()
+    stmt = scoped_report_requests_stmt(filtered_requests_stmt(from_date, to_date, employee_id, request_type, request_type_id), actor)
+    items = db.scalars(stmt).all()
     stream = build_excel_report(items)
     write_audit(db, "report_exported_excel", "report", actor=actor)
     db.commit()
@@ -251,7 +261,8 @@ def export_pdf(
     request_type: str | None = Query(default=None),
     request_type_id: int | None = Query(default=None),
 ):
-    items = db.scalars(filtered_requests_stmt(from_date, to_date, employee_id, request_type, request_type_id).limit(80)).all()
+    stmt = scoped_report_requests_stmt(filtered_requests_stmt(from_date, to_date, employee_id, request_type, request_type_id), actor)
+    items = db.scalars(stmt.limit(80)).all()
     stream = build_pdf_report(items, db, actor)
     write_audit(db, "report_exported_pdf", "report", actor=actor)
     db.commit()

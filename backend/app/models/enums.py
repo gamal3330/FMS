@@ -5,10 +5,18 @@ class UserRole(StrEnum):
     EMPLOYEE = "employee"
     DIRECT_MANAGER = "direct_manager"
     IT_STAFF = "it_staff"
-    IT_MANAGER = "it_manager"
+    DEPARTMENT_MANAGER = "administration_manager"
+    IT_MANAGER = "administration_manager"
+    LEGACY_IT_MANAGER = "it_manager"
     INFOSEC = "information_security"
     EXECUTIVE = "executive_management"
     SUPER_ADMIN = "super_admin"
+
+    @classmethod
+    def _missing_(cls, value):
+        if value in {"it_manager", "department_manager"}:
+            return cls.DEPARTMENT_MANAGER
+        return None
 
 
 class RequestStatus(StrEnum):

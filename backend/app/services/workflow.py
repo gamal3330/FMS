@@ -105,6 +105,9 @@ def _user_matches_step(db: Session, request: ServiceRequest, user: User, step: A
         return False
 
     if step_type == "specific_role":
+        if user.role == UserRole.DEPARTMENT_MANAGER and _role_id_matches(db, user, int(approver_role_id) if approver_role_id else None):
+            department = _request_department(db, request)
+            return bool(department and department.manager_id == user.id)
         return _role_id_matches(db, user, int(approver_role_id) if approver_role_id else None)
 
     if step_type == "specific_department_manager":
@@ -130,10 +133,13 @@ def _user_matches_step(db: Session, request: ServiceRequest, user: User, step: A
             and user.id != department.manager_id
         )
 
-    if step_type in IMPLEMENTATION_STEP_ROLES and user.role in {UserRole.IT_STAFF, UserRole.IT_MANAGER}:
+    if step_type in IMPLEMENTATION_STEP_ROLES and user.role == UserRole.IT_STAFF:
         return True
 
     if step_type == str(user.role):
+        if user.role == UserRole.DEPARTMENT_MANAGER:
+            department = _request_department(db, request)
+            return bool(department and department.manager_id == user.id)
         return True
 
     return False

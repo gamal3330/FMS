@@ -40,7 +40,7 @@ from app.services.audit import write_audit
 
 router = APIRouter(prefix="/settings/ai", tags=["AI Settings"])
 
-AIViewActor = Depends(require_roles(UserRole.IT_MANAGER))
+AIViewActor = Depends(require_roles(UserRole.DEPARTMENT_MANAGER))
 AIEditActor = Depends(require_roles(UserRole.SUPER_ADMIN))
 
 

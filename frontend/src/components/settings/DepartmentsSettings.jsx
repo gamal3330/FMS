@@ -35,7 +35,7 @@ export default function DepartmentsSettings({ notify }) {
 
   const usersById = useMemo(() => new Map(users.map((user) => [Number(user.id), user])), [users]);
   const managerCandidates = useMemo(() => {
-    const managerRoles = new Set(["direct_manager", "it_manager", "executive_management", "super_admin"]);
+    const managerRoles = new Set(["direct_manager", "administration_manager", "executive_management", "super_admin"]);
     return users
       .filter((user) => user.is_active && !user.is_locked && managerRoles.has(user.role))
       .sort((first, second) => String(first.full_name_ar || "").localeCompare(String(second.full_name_ar || ""), "ar"));
@@ -186,8 +186,7 @@ function roleLabel(role) {
     employee: "موظف",
     direct_manager: "مدير مباشر",
     it_staff: "مختص تنفيذ",
-    it_manager: "مدير إدارة",
-    information_security: "أمن المعلومات (دور قديم)",
+    administration_manager: "مدير إدارة",
     executive_management: "الإدارة التنفيذية",
     super_admin: "مدير النظام"
   }[role] || role || "-";

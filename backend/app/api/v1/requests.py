@@ -80,7 +80,7 @@ ROLE_LABELS = {
     "department_manager": "مدير الإدارة المختصة",
     "department_specialist": "مختص الإدارة المختصة",
     "information_security": "أمن المعلومات (مرحلة قديمة)",
-    "it_manager": "مدير إدارة",
+    "administration_manager": "مدير إدارة",
     "it_staff": "مختص تنفيذ",
     "executive_management": "الإدارة التنفيذية",
     "implementation_engineer": "مختص تنفيذ",
@@ -93,7 +93,7 @@ MESSAGE_DEFAULT_ROLES = {
     UserRole.EMPLOYEE,
     UserRole.DIRECT_MANAGER,
     UserRole.IT_STAFF,
-    UserRole.IT_MANAGER,
+    UserRole.DEPARTMENT_MANAGER,
     UserRole.INFOSEC,
     UserRole.EXECUTIVE,
     UserRole.SUPER_ADMIN,
@@ -213,7 +213,12 @@ def delegated_approval_filter(db: Session, current_user: User):
         team_members = select(User.id).where(User.manager_id.in_(direct_manager_ids))
         direct_manager_pending = select(ApprovalStep.request_id).where(ApprovalStep.role == UserRole.DIRECT_MANAGER, ApprovalStep.action == ApprovalAction.PENDING)
         filters.append(and_(ServiceRequest.requester_id.in_(team_members), ServiceRequest.id.in_(direct_manager_pending)))
-    delegated_roles = [user.role for user in delegators if user.role != UserRole.DIRECT_MANAGER]
+    department_manager_ids = [user.id for user in delegators if user.role == UserRole.DEPARTMENT_MANAGER]
+    if department_manager_ids:
+        managed_departments = select(Department.id).where(Department.manager_id.in_(department_manager_ids), Department.is_active == True)
+        manager_pending = select(ApprovalStep.request_id).where(ApprovalStep.role == UserRole.DEPARTMENT_MANAGER, ApprovalStep.action == ApprovalAction.PENDING)
+        filters.append(and_(ServiceRequest.department_id.in_(managed_departments), ServiceRequest.id.in_(manager_pending)))
+    delegated_roles = [user.role for user in delegators if user.role not in {UserRole.DIRECT_MANAGER, UserRole.DEPARTMENT_MANAGER}]
     if delegated_roles:
         delegated_pending = select(ApprovalStep.request_id).where(ApprovalStep.role.in_(delegated_roles), ApprovalStep.action == ApprovalAction.PENDING)
         filters.append(ServiceRequest.id.in_(delegated_pending))
@@ -222,7 +227,7 @@ def delegated_approval_filter(db: Session, current_user: User):
 
 def approval_visibility_conditions(db: Session, current_user: User, *, include_role: bool = True):
     conditions = []
-    if include_role:
+    if include_role and current_user.role != UserRole.DEPARTMENT_MANAGER:
         role_pending = select(ApprovalStep.request_id).where(ApprovalStep.role == str(current_user.role))
         conditions.append(ServiceRequest.id.in_(role_pending))
 
@@ -231,7 +236,11 @@ def approval_visibility_conditions(db: Session, current_user: User, *, include_r
 
     if current_user.role_id:
         specific_role_requests = select(RequestApprovalStep.request_id).where(RequestApprovalStep.approver_role_id == current_user.role_id)
-        conditions.append(ServiceRequest.id.in_(specific_role_requests))
+        if current_user.role == UserRole.DEPARTMENT_MANAGER:
+            managed_departments = select(Department.id).where(Department.manager_id == current_user.id, Department.is_active == True)
+            conditions.append(and_(ServiceRequest.department_id.in_(managed_departments), ServiceRequest.id.in_(specific_role_requests)))
+        else:
+            conditions.append(ServiceRequest.id.in_(specific_role_requests))
 
     managed_departments = select(Department.id).where(Department.manager_id == current_user.id, Department.is_active == True)
     department_manager_requests = select(ApprovalStep.request_id).where(ApprovalStep.role == "department_manager")
@@ -297,27 +306,32 @@ def first_request_notification_recipients(db: Session, service_request: ServiceR
             recipient_ids.update(user.id for user in db.scalars(stmt).all())
     elif role_value == "specific_role" and first_snapshot and first_snapshot.approver_role_id:
         role = db.get(Role, first_snapshot.approver_role_id)
-        stmt = select(User).where(User.is_active == True)
-        if role and role.code:
-            stmt = stmt.where(or_(User.role_id == role.id, User.role == role.code))
+        if role and role.code == UserRole.DEPARTMENT_MANAGER.value:
+            department = service_request.department or (db.get(Department, service_request.department_id) if service_request.department_id else None)
+            if department and department.manager_id:
+                recipient_ids.add(department.manager_id)
+        elif role and role.code:
+            stmt = select(User).where(User.is_active == True, or_(User.role_id == role.id, User.role == role.code))
+            recipient_ids.update(user.id for user in db.scalars(stmt).all())
         else:
+            stmt = select(User).where(User.is_active == True)
             stmt = stmt.where(User.role_id == first_snapshot.approver_role_id)
-        recipient_ids.update(user.id for user in db.scalars(stmt).all())
+            recipient_ids.update(user.id for user in db.scalars(stmt).all())
     elif role_value in {"specific_user", "specific_role"}:
         pass
     elif role_value in IMPLEMENTATION_STEP_ROLES:
         form_data = service_request.form_data or {}
         request_section = form_data.get("assigned_section") or form_data.get("administrative_section")
-        stmt = select(User).where(User.is_active == True, User.role.in_([UserRole.IT_STAFF, UserRole.IT_MANAGER]))
+        stmt = select(User).where(User.is_active == True, User.role == UserRole.IT_STAFF)
         if request_section:
-            stmt = stmt.where(or_(User.role == UserRole.IT_MANAGER, User.administrative_section == request_section))
+            stmt = stmt.where(User.administrative_section == request_section)
         recipient_ids.update(user.id for user in db.scalars(stmt).all())
     elif role_value:
         try:
             role = UserRole(role_value)
             recipient_ids.update(user.id for user in db.scalars(select(User).where(User.is_active == True, User.role == role)).all())
         except ValueError:
-            recipient_ids.update(user.id for user in db.scalars(select(User).where(User.is_active == True, User.role == UserRole.IT_MANAGER)).all())
+            pass
 
     if not recipient_ids and actor.manager_id:
         recipient_ids.add(actor.manager_id)
@@ -388,7 +402,7 @@ def request_query():
 
 
 def requests_screen_level(db: Session, user: User) -> str:
-    if user.role in {UserRole.SUPER_ADMIN, UserRole.IT_MANAGER}:
+    if user.role == UserRole.SUPER_ADMIN:
         return "manage"
 
     user_permission = db.scalar(
@@ -422,7 +436,7 @@ def requests_screen_level(db: Session, user: User) -> str:
 
 
 def can_view_all_requests(db: Session | None, user: User) -> bool:
-    if user.role in {UserRole.SUPER_ADMIN, UserRole.IT_MANAGER}:
+    if user.role == UserRole.SUPER_ADMIN:
         return True
     if not db:
         return False
@@ -436,11 +450,13 @@ def ensure_request_access(service_request: ServiceRequest, current_user: User, d
         return
     if current_user.role == UserRole.DIRECT_MANAGER and service_request.requester and service_request.requester.manager_id == current_user.id:
         return
+    if current_user.role == UserRole.DEPARTMENT_MANAGER and service_request.department and service_request.department.manager_id == current_user.id:
+        return
     if db:
         pending_step = next((step for step in sorted(service_request.approvals or [], key=lambda item: item.step_order) if step.action == ApprovalAction.PENDING), None)
         if pending_step and workflow_user_can_act(db, service_request, current_user, pending_step):
             return
-    if current_user.role != UserRole.IT_STAFF and any(step.role == current_user.role for step in service_request.approvals):
+    if current_user.role not in {UserRole.IT_STAFF, UserRole.DEPARTMENT_MANAGER} and any(step.role == current_user.role for step in service_request.approvals):
         return
     if current_user.role == UserRole.IT_STAFF and any(step.role in IMPLEMENTATION_STEP_ROLES for step in service_request.approvals):
         if request_matches_it_staff_section(service_request, current_user) or (db and unassigned_it_staff_can_cover_request(db, service_request, current_user)):
@@ -467,13 +483,15 @@ def can_view_request_linked_message(message: InternalMessage, service_request: S
         return True
     if service_request.requester_id == current_user.id:
         return bool(message_settings.get("allow_request_owner_to_view_messages", False))
-    if current_user.role in {UserRole.SUPER_ADMIN, UserRole.IT_MANAGER}:
+    if current_user.role == UserRole.SUPER_ADMIN:
         return bool(message_settings.get("allow_approvers_to_view_request_messages", True))
     if current_user.role == UserRole.DIRECT_MANAGER and service_request.requester and service_request.requester.manager_id == current_user.id:
         return bool(message_settings.get("allow_approvers_to_view_request_messages", True))
-    if any(step.role == current_user.role for step in service_request.approvals or []):
+    if current_user.role != UserRole.DEPARTMENT_MANAGER and any(step.role == current_user.role for step in service_request.approvals or []):
         return bool(message_settings.get("allow_approvers_to_view_request_messages", True))
     approval_roles = {str(step.role) for step in service_request.approvals or []}
+    if UserRole.DEPARTMENT_MANAGER.value in approval_roles and service_request.department and service_request.department.manager_id == current_user.id:
+        return bool(message_settings.get("allow_approvers_to_view_request_messages", True))
     if "department_manager" in approval_roles and service_request.department and service_request.department.manager_id == current_user.id:
         return bool(message_settings.get("allow_approvers_to_view_request_messages", True))
     if DEPARTMENT_SPECIALIST_STEP in approval_roles and service_request.department_id and current_user.department_id == service_request.department_id:
@@ -873,7 +891,7 @@ def scoped_requests_stmt(stmt, current_user: User, db: Session | None = None):
 
     own_request = ServiceRequest.requester_id == current_user.id
     delegated_filter = delegated_approval_filter(db, current_user) if db else None
-    dynamic_conditions = approval_visibility_conditions(db, current_user, include_role=current_user.role != UserRole.IT_STAFF) if db else []
+    dynamic_conditions = approval_visibility_conditions(db, current_user, include_role=current_user.role not in {UserRole.IT_STAFF, UserRole.DEPARTMENT_MANAGER}) if db else []
 
     if current_user.role == UserRole.EMPLOYEE:
         conditions = [own_request, *dynamic_conditions]
@@ -911,6 +929,13 @@ def scoped_requests_stmt(stmt, current_user: User, db: Session | None = None):
             .scalar_subquery()
         )
         conditions = [own_request, *dynamic_conditions, and_(ServiceRequest.id.in_(approval_requests), request_section.is_not(None), section_has_staff == 0)]
+        if delegated_filter is not None:
+            conditions.append(delegated_filter)
+        return stmt.where(or_(*conditions))
+
+    if current_user.role == UserRole.DEPARTMENT_MANAGER:
+        managed_departments = select(Department.id).where(Department.manager_id == current_user.id, Department.is_active == True)
+        conditions = [own_request, *dynamic_conditions, ServiceRequest.department_id.in_(managed_departments)]
         if delegated_filter is not None:
             conditions.append(delegated_filter)
         return stmt.where(or_(*conditions))

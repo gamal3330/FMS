@@ -100,7 +100,7 @@ const roleLabels: Record<string, string> = {
   department_manager: "مدير الإدارة المختصة",
   department_specialist: "مختص الإدارة المختصة",
   information_security: "أمن المعلومات (مرحلة قديمة)",
-  it_manager: "مدير إدارة",
+  administration_manager: "مدير إدارة",
   it_staff: "مختص تنفيذ",
   executive_management: "الإدارة التنفيذية",
   implementation_engineer: "مختص تنفيذ",

@@ -8,8 +8,7 @@ export type UserRole =
   | "employee"
   | "direct_manager"
   | "it_staff"
-  | "it_manager"
-  | "information_security"
+  | "administration_manager"
   | "executive_management"
   | "super_admin";
 

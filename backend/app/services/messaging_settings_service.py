@@ -226,6 +226,7 @@ def sync_legacy_message_settings(db: Session) -> None:
         "message_upload_path": attachments.message_upload_path or "uploads/messages",
         "log_attachment_downloads": bool(attachments.log_attachment_downloads),
         "block_executable_files": bool(attachments.block_executable_files),
+        "enable_virus_scan": bool(attachments.enable_virus_scan),
         "department_recipient_behavior": str(recipient_value.get("department_recipient_behavior") or "selected_department_users"),
         "allowed_user_ids": [],
         "blocked_user_ids": [],
@@ -250,6 +251,7 @@ def sync_legacy_message_settings(db: Session) -> None:
         "enable_attachments": bool(attachments.allow_message_attachments),
         "max_attachment_mb": effective_attachment_max_mb,
         "max_attachments_per_message": int(attachments.max_attachments_per_message or 10),
+        "enable_virus_scan": bool(attachments.enable_virus_scan),
         "max_recipients": int(general.max_recipients or 10),
     }
     type_items = []

@@ -8,7 +8,7 @@ const roles = [
   ["direct_manager", "المدير المباشر"],
   ["department_manager", "مدير الإدارة المختصة"],
   ["department_specialist", "مختص الإدارة المختصة"],
-  ["it_manager", "مدير إدارة"],
+  ["administration_manager", "مدير إدارة"],
   ["it_staff", "مختص تنفيذ"],
   ["executive_management", "الإدارة التنفيذية"],
   ["implementation", "مختص تنفيذ"],
@@ -85,7 +85,7 @@ export default function WorkflowSettings({ notify }) {
           </div>
         ))}
         <div className="flex gap-3">
-          <button type="button" onClick={() => setSteps((current) => [...current, { approver_role: "it_manager", step_order: current.length + 1, is_mandatory: true, sla_hours: 8 }])} className="h-10 rounded-md border px-4 text-sm font-semibold">Add Step</button>
+          <button type="button" onClick={() => setSteps((current) => [...current, { approver_role: "department_manager", step_order: current.length + 1, is_mandatory: true, sla_hours: 8 }])} className="h-10 rounded-md border px-4 text-sm font-semibold">Add Step</button>
           <Button type="submit">Save Flow</Button>
         </div>
       </form>

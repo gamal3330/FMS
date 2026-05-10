@@ -115,6 +115,7 @@ class MessageSettingsRead(BaseModel):
     default_message_type: str = "internal_correspondence"
     allowed_extensions: list[str] = Field(default_factory=lambda: ["pdf", "png", "jpg", "jpeg"])
     block_executable_files: bool = True
+    enable_virus_scan: bool = False
     department_recipient_behavior: str = "selected_department_users"
     allowed_user_ids: list[int] = Field(default_factory=list)
     blocked_user_ids: list[int] = Field(default_factory=list)

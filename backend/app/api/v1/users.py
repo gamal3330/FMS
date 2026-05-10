@@ -60,30 +60,46 @@ SCREEN_DEFINITIONS = [
 ALL_SCREEN_KEYS = {item["key"] for item in SCREEN_DEFINITIONS}
 MANAGEMENT_SCREEN_KEYS = {"dashboard", "requests", "approvals", "messages", "reports", "request_types", "users", "departments", "specialized_sections", "messaging_settings", "ai_settings", "database_settings", "update_management", "health_monitoring", "settings"}
 EMPLOYEE_SCREEN_KEYS = {"requests", "approvals", "messages"}
-DASHBOARD_SCREEN_ROLES = {UserRole.SUPER_ADMIN, UserRole.IT_MANAGER, UserRole.EXECUTIVE}
+DASHBOARD_SCREEN_ROLES = {UserRole.SUPER_ADMIN, UserRole.DEPARTMENT_MANAGER, UserRole.EXECUTIVE}
 ROLE_LABELS = {
     UserRole.EMPLOYEE.value: "موظف",
     UserRole.DIRECT_MANAGER.value: "مدير مباشر",
     UserRole.IT_STAFF.value: "مختص تنفيذ",
-    UserRole.IT_MANAGER.value: "مدير إدارة",
+    UserRole.DEPARTMENT_MANAGER.value: "مدير إدارة",
     UserRole.INFOSEC.value: "أمن المعلومات (دور قديم)",
     UserRole.EXECUTIVE.value: "الإدارة التنفيذية",
     UserRole.SUPER_ADMIN.value: "مدير النظام",
 }
 
-HIDDEN_LEGACY_ROLE_PREFIXES = ("information_security",)
+ACTIVE_USER_ROLES = [
+    UserRole.EMPLOYEE,
+    UserRole.DIRECT_MANAGER,
+    UserRole.IT_STAFF,
+    UserRole.DEPARTMENT_MANAGER,
+    UserRole.EXECUTIVE,
+    UserRole.SUPER_ADMIN,
+]
+HIDDEN_LEGACY_ROLE_CODES = {"information_security", "it_manager", "department_manager"}
+HIDDEN_LEGACY_ROLE_PREFIXES = (
+    "information_security_copy",
+    "information_security_legacy",
+    "it_manager_copy",
+    "it_manager_legacy",
+    "department_manager_copy",
+    "department_manager_legacy",
+)
 
 
 def is_hidden_legacy_role(role: Role | None) -> bool:
     if not role:
         return False
     code = str(role.code or role.name or "")
-    return any(code == prefix or code.startswith(f"{prefix}_copy") for prefix in HIDDEN_LEGACY_ROLE_PREFIXES)
+    return code in HIDDEN_LEGACY_ROLE_CODES or any(code.startswith(prefix) for prefix in HIDDEN_LEGACY_ROLE_PREFIXES)
 
 
 def is_hidden_legacy_role_code(code: str | None) -> bool:
     value = str(code or "")
-    return any(value == prefix or value.startswith(f"{prefix}_copy") for prefix in HIDDEN_LEGACY_ROLE_PREFIXES)
+    return value in HIDDEN_LEGACY_ROLE_CODES or any(value.startswith(prefix) for prefix in HIDDEN_LEGACY_ROLE_PREFIXES)
 
 PERMISSION_LEVELS = ["no_access", "view", "create", "edit", "delete", "export", "manage"]
 ACTION_DEFINITIONS = [
@@ -211,7 +227,7 @@ def import_error(row: int, field: str, message: str) -> dict[str, str | int]:
 
 
 def default_screens_for_role(role: UserRole) -> list[str]:
-    if role in {UserRole.SUPER_ADMIN, UserRole.IT_MANAGER}:
+    if role in {UserRole.SUPER_ADMIN, UserRole.DEPARTMENT_MANAGER}:
         return sorted(MANAGEMENT_SCREEN_KEYS)
     if role == UserRole.EXECUTIVE:
         return ["dashboard", "requests", "approvals", "messages", "reports"]
@@ -241,7 +257,7 @@ def read_user_screens(db: Session, user: User) -> list[str]:
         clean_screens = [screen for screen in clean_screens if screen != "dashboard"]
     if "messages_permission_initialized" not in value and "messages" in default_screens_for_role(user.role) and "messages" not in clean_screens:
         clean_screens.append("messages")
-    if user.role in {UserRole.SUPER_ADMIN, UserRole.IT_MANAGER} and "settings" in clean_screens and "health_monitoring" not in clean_screens:
+    if user.role in {UserRole.SUPER_ADMIN, UserRole.DEPARTMENT_MANAGER} and "settings" in clean_screens and "health_monitoring" not in clean_screens:
         clean_screens.append("health_monitoring")
     return clean_screens
 
@@ -295,7 +311,7 @@ def validate_user_links(db: Session, payload: UserCreate | UserUpdate, user_id: 
         manager = db.get(User, payload.manager_id)
         if not manager or not manager.is_active:
             raise HTTPException(status_code=400, detail="Direct manager not found or inactive")
-        if manager.role not in {UserRole.DIRECT_MANAGER, UserRole.IT_MANAGER, UserRole.SUPER_ADMIN, UserRole.EXECUTIVE}:
+        if manager.role not in {UserRole.DIRECT_MANAGER, UserRole.DEPARTMENT_MANAGER, UserRole.SUPER_ADMIN, UserRole.EXECUTIVE}:
             raise HTTPException(status_code=400, detail="Direct manager must have a manager-level role")
         if payload.department_id and manager.role == UserRole.DIRECT_MANAGER and manager.department_id != payload.department_id:
             raise HTTPException(status_code=400, detail="Direct manager must belong to the same department")
@@ -308,8 +324,8 @@ def validate_user_links(db: Session, payload: UserCreate | UserUpdate, user_id: 
 
 
 def ensure_role_assignment_allowed(actor: User, role: UserRole) -> None:
-    if role == UserRole.INFOSEC:
-        raise HTTPException(status_code=422, detail="دور أمن المعلومات قديم وغير متاح للاستخدام. استخدم إدارة أو قسمًا مختصًا بدلًا منه.")
+    if role not in ACTIVE_USER_ROLES:
+        raise HTTPException(status_code=422, detail="هذا الدور قديم وغير متاح للاستخدام. استخدم الأدوار المعتمدة الحالية.")
     if actor.role != UserRole.SUPER_ADMIN and role == UserRole.SUPER_ADMIN:
         raise HTTPException(status_code=403, detail="Only Super Admin can assign Super Admin role")
 
@@ -490,7 +506,7 @@ def role_record_for_user(db: Session, user: User) -> Role | None:
 def effective_screen_permission_level(db: Session, user: User, screen_code: str) -> str:
     if screen_code not in ALL_SCREEN_KEYS:
         return "no_access"
-    if user.role in {UserRole.SUPER_ADMIN, UserRole.IT_MANAGER}:
+    if user.role in {UserRole.SUPER_ADMIN, UserRole.DEPARTMENT_MANAGER}:
         return "manage"
 
     user_permission = db.scalar(
@@ -593,7 +609,7 @@ def set_action_permissions(db: Session, permissions: dict[str, bool], actor: Use
 
 
 @router.get("/import-template")
-def download_users_import_template(db: Session = Depends(get_db), _: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.IT_MANAGER))):
+def download_users_import_template(db: Session = Depends(get_db), _: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.DEPARTMENT_MANAGER))):
     from openpyxl import Workbook
 
     default_password = temporary_password_from_policy(security_policy(db))
@@ -627,7 +643,7 @@ def download_users_import_template(db: Session = Depends(get_db), _: User = Depe
 
     roles_sheet = workbook.create_sheet("roles")
     roles_sheet.append(["role"])
-    for role in UserRole:
+    for role in ACTIVE_USER_ROLES:
         roles_sheet.append([role.value])
 
     departments_sheet = workbook.create_sheet("departments")
@@ -651,7 +667,7 @@ def download_users_import_template(db: Session = Depends(get_db), _: User = Depe
 
 
 @router.post("/import")
-async def import_users_from_excel(file: UploadFile = File(...), db: Session = Depends(get_db), actor: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.IT_MANAGER))):
+async def import_users_from_excel(file: UploadFile = File(...), db: Session = Depends(get_db), actor: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.DEPARTMENT_MANAGER))):
     if not file.filename or not file.filename.lower().endswith((".xlsx", ".xlsm")):
         raise HTTPException(status_code=400, detail="يرجى رفع ملف Excel بصيغة .xlsx")
 
@@ -922,7 +938,7 @@ def parse_import_workbook(workbook, db: Session, actor: User) -> tuple[list[dict
 
 
 @router.post("/import/validate")
-async def validate_users_import(file: UploadFile = File(...), db: Session = Depends(get_db), actor: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.IT_MANAGER))):
+async def validate_users_import(file: UploadFile = File(...), db: Session = Depends(get_db), actor: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.DEPARTMENT_MANAGER))):
     if not file.filename or not file.filename.lower().endswith((".xlsx", ".xlsm")):
         raise HTTPException(status_code=400, detail="يرجى رفع ملف Excel بصيغة .xlsx")
     from openpyxl import load_workbook
@@ -949,7 +965,7 @@ async def validate_users_import(file: UploadFile = File(...), db: Session = Depe
 
 
 @router.post("/import/confirm")
-def confirm_users_import(payload: ImportConfirmPayload, db: Session = Depends(get_db), actor: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.IT_MANAGER))):
+def confirm_users_import(payload: ImportConfirmPayload, db: Session = Depends(get_db), actor: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.DEPARTMENT_MANAGER))):
     batch = db.get(UserImportBatch, payload.batch_id)
     if not batch:
         raise HTTPException(status_code=404, detail="دفعة الاستيراد غير موجودة")
@@ -999,7 +1015,7 @@ def confirm_users_import(payload: ImportConfirmPayload, db: Session = Depends(ge
 
 
 @router.get("/import/batches")
-def import_batches(db: Session = Depends(get_db), _: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.IT_MANAGER))):
+def import_batches(db: Session = Depends(get_db), _: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.DEPARTMENT_MANAGER))):
     rows = db.scalars(select(UserImportBatch).options(selectinload(UserImportBatch.uploader)).order_by(UserImportBatch.uploaded_at.desc()).limit(100)).all()
     return [
         {
@@ -1019,7 +1035,7 @@ def import_batches(db: Session = Depends(get_db), _: User = Depends(require_role
 
 
 @router.get("/import/batches/{batch_id}")
-def import_batch_details(batch_id: int, db: Session = Depends(get_db), _: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.IT_MANAGER))):
+def import_batch_details(batch_id: int, db: Session = Depends(get_db), _: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.DEPARTMENT_MANAGER))):
     batch = db.get(UserImportBatch, batch_id)
     if not batch:
         raise HTTPException(status_code=404, detail="دفعة الاستيراد غير موجودة")
@@ -1041,7 +1057,7 @@ def users_overview(db: Session = Depends(get_db), actor: User = Depends(require_
     users = db.scalars(stmt).all()
     departments = db.scalars(select(Department)).all()
     now = datetime.now(timezone.utc)
-    admin_roles = {UserRole.SUPER_ADMIN, UserRole.IT_MANAGER, UserRole.EXECUTIVE}
+    admin_roles = {UserRole.SUPER_ADMIN, UserRole.DEPARTMENT_MANAGER, UserRole.EXECUTIVE}
     last_import = db.scalar(select(UserImportBatch).order_by(UserImportBatch.uploaded_at.desc()).limit(1))
     last_permission = db.scalar(
         select(AuditLog).where(AuditLog.action.in_(["user_screen_permissions_updated", "screen_permission_changed", "action_permission_changed", "role_assigned"])).order_by(AuditLog.created_at.desc()).limit(1)
@@ -1059,7 +1075,7 @@ def users_overview(db: Session = Depends(get_db), actor: User = Depends(require_
         "last_permission_change_at": last_permission.created_at if last_permission else None,
         "active_sessions": active_sessions,
         "users_by_department": [{"label": department.name_ar, "value": len([user for user in users if user.department_id == department.id])} for department in departments],
-        "users_by_role": [{"label": role_label(role.value), "value": len([user for user in users if user.role == role])} for role in UserRole],
+        "users_by_role": [{"label": role_label(role.value), "value": len([user for user in users if user.role == role])} for role in ACTIVE_USER_ROLES],
         "active_vs_inactive": [
             {"label": "نشط", "value": len([user for user in users if user.is_active and not locked_now(user)])},
             {"label": "غير نشط", "value": len([user for user in users if not user.is_active])},
@@ -1100,7 +1116,7 @@ def users_audit_logs(
 
 
 @router.get("/sessions")
-def user_sessions(db: Session = Depends(get_db), _: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.IT_MANAGER))):
+def user_sessions(db: Session = Depends(get_db), _: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.DEPARTMENT_MANAGER))):
     rows = db.scalars(select(UserSession).options(selectinload(UserSession.user)).order_by(UserSession.login_at.desc()).limit(300)).all()
     return [
         {
@@ -1119,7 +1135,7 @@ def user_sessions(db: Session = Depends(get_db), _: User = Depends(require_roles
 
 
 @router.get("/login-attempts")
-def user_login_attempts(db: Session = Depends(get_db), _: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.IT_MANAGER))):
+def user_login_attempts(db: Session = Depends(get_db), _: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.DEPARTMENT_MANAGER))):
     rows = db.scalars(select(UserLoginAttempt).options(selectinload(UserLoginAttempt.user)).order_by(UserLoginAttempt.created_at.desc()).limit(300)).all()
     return [
         {
@@ -1138,7 +1154,7 @@ def user_login_attempts(db: Session = Depends(get_db), _: User = Depends(require
 
 
 @router.post("/sessions/{session_id}/revoke")
-def revoke_session(session_id: int, request: Request, db: Session = Depends(get_db), actor: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.IT_MANAGER))):
+def revoke_session(session_id: int, request: Request, db: Session = Depends(get_db), actor: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.DEPARTMENT_MANAGER))):
     session = db.get(UserSession, session_id)
     if not session:
         raise HTTPException(status_code=404, detail="الجلسة غير موجودة")
@@ -1195,13 +1211,13 @@ def organization_issues(db: Session = Depends(get_db), _: User = Depends(require
         if user.manager_id == user.id:
             issues.append({"type": "circular_manager", "severity": "critical", "user": user_display(user), "message": "المستخدم لا يمكن أن يكون مدير نفسه"})
     manager_ids = {user.manager_id for user in users if user.manager_id}
-    for manager in [user for user in users if user.role in {UserRole.DIRECT_MANAGER, UserRole.IT_MANAGER} and user.id not in manager_ids]:
+    for manager in [user for user in users if user.role in {UserRole.DIRECT_MANAGER, UserRole.DEPARTMENT_MANAGER} and user.id not in manager_ids]:
         issues.append({"type": "manager_without_employees", "severity": "info", "user": user_display(manager), "message": "مدير بدون موظفين"})
     return issues
 
 
 @router.post("/bulk-assign-department")
-def bulk_assign_department(payload: BulkAssignDepartmentPayload, request: Request, db: Session = Depends(get_db), actor: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.IT_MANAGER))):
+def bulk_assign_department(payload: BulkAssignDepartmentPayload, request: Request, db: Session = Depends(get_db), actor: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.DEPARTMENT_MANAGER))):
     department = db.get(Department, payload.department_id)
     if not department or not department.is_active:
         raise HTTPException(status_code=404, detail="الإدارة غير موجودة أو غير نشطة")
@@ -1215,7 +1231,7 @@ def bulk_assign_department(payload: BulkAssignDepartmentPayload, request: Reques
 
 
 @router.post("/bulk-assign-manager")
-def bulk_assign_manager(payload: BulkAssignManagerPayload, request: Request, db: Session = Depends(get_db), actor: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.IT_MANAGER))):
+def bulk_assign_manager(payload: BulkAssignManagerPayload, request: Request, db: Session = Depends(get_db), actor: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.DEPARTMENT_MANAGER))):
     manager = db.get(User, payload.manager_id)
     if not manager or not manager.is_active:
         raise HTTPException(status_code=404, detail="المدير غير موجود أو غير نشط")
@@ -1231,7 +1247,7 @@ def bulk_assign_manager(payload: BulkAssignManagerPayload, request: Request, db:
 
 
 @router.get("/delegations")
-def list_delegations(db: Session = Depends(get_db), _: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.IT_MANAGER))):
+def list_delegations(db: Session = Depends(get_db), _: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.DEPARTMENT_MANAGER))):
     rows = db.scalars(select(UserDelegation).options(selectinload(UserDelegation.delegator), selectinload(UserDelegation.delegate)).order_by(UserDelegation.created_at.desc())).all()
     return [
         {
@@ -1283,7 +1299,7 @@ def my_active_delegations(db: Session = Depends(get_db), current_user: User = De
 
 
 @router.post("/delegations")
-def create_delegation(payload: DelegationPayload, request: Request, db: Session = Depends(get_db), actor: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.IT_MANAGER))):
+def create_delegation(payload: DelegationPayload, request: Request, db: Session = Depends(get_db), actor: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.DEPARTMENT_MANAGER))):
     delegator = db.get(User, payload.delegator_user_id)
     delegate = db.get(User, payload.delegate_user_id)
     if not delegator or not delegate or not delegate.is_active:
@@ -1314,7 +1330,7 @@ def create_delegation(payload: DelegationPayload, request: Request, db: Session 
 
 
 @router.put("/delegations/{delegation_id}")
-def update_delegation(delegation_id: int, payload: DelegationPayload, request: Request, db: Session = Depends(get_db), actor: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.IT_MANAGER))):
+def update_delegation(delegation_id: int, payload: DelegationPayload, request: Request, db: Session = Depends(get_db), actor: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.DEPARTMENT_MANAGER))):
     row = db.get(UserDelegation, delegation_id)
     if not row:
         raise HTTPException(status_code=404, detail="التفويض غير موجود")
@@ -1331,7 +1347,7 @@ def update_delegation(delegation_id: int, payload: DelegationPayload, request: R
 
 
 @router.delete("/delegations/{delegation_id}")
-def delete_delegation(delegation_id: int, request: Request, db: Session = Depends(get_db), actor: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.IT_MANAGER))):
+def delete_delegation(delegation_id: int, request: Request, db: Session = Depends(get_db), actor: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.DEPARTMENT_MANAGER))):
     row = db.get(UserDelegation, delegation_id)
     if not row:
         raise HTTPException(status_code=404, detail="التفويض غير موجود")
@@ -1415,7 +1431,7 @@ def get_access_review(db: Session = Depends(get_db), _: User = Depends(require_u
 
 
 @router.post("/access-review")
-def create_access_review(request: Request, db: Session = Depends(get_db), actor: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.IT_MANAGER))):
+def create_access_review(request: Request, db: Session = Depends(get_db), actor: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.DEPARTMENT_MANAGER))):
     review = AccessReview(review_name=f"مراجعة صلاحيات {datetime.now().strftime('%Y-%m-%d')}", status="pending", created_by=actor.id)
     db.add(review)
     db.flush()
@@ -1429,7 +1445,7 @@ def create_access_review(request: Request, db: Session = Depends(get_db), actor:
 
 
 @router.post("/access-review/{review_id}/complete")
-def complete_access_review(review_id: int, request: Request, db: Session = Depends(get_db), actor: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.IT_MANAGER))):
+def complete_access_review(review_id: int, request: Request, db: Session = Depends(get_db), actor: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.DEPARTMENT_MANAGER))):
     review = db.get(AccessReview, review_id)
     if not review:
         raise HTTPException(status_code=404, detail="المراجعة غير موجودة")
@@ -1441,7 +1457,7 @@ def complete_access_review(review_id: int, request: Request, db: Session = Depen
 
 
 @router.post("/access-review/items/{item_id}/mark-reviewed")
-def mark_access_review_item(item_id: int, request: Request, db: Session = Depends(get_db), actor: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.IT_MANAGER))):
+def mark_access_review_item(item_id: int, request: Request, db: Session = Depends(get_db), actor: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.DEPARTMENT_MANAGER))):
     item = db.get(AccessReviewItem, item_id)
     if not item:
         raise HTTPException(status_code=404, detail="البند غير موجود")
@@ -1495,7 +1511,7 @@ def get_user_details(user_id: int, db: Session = Depends(get_db), actor: User = 
 
 
 @router.get("/{user_id}/audit-logs")
-def get_user_audit_logs(user_id: int, db: Session = Depends(get_db), _: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.IT_MANAGER))):
+def get_user_audit_logs(user_id: int, db: Session = Depends(get_db), _: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.DEPARTMENT_MANAGER))):
     rows = db.scalars(select(AuditLog).options(selectinload(AuditLog.actor)).where(AuditLog.entity_type == "user", AuditLog.entity_id == str(user_id)).order_by(AuditLog.created_at.desc()).limit(200)).all()
     return [
         {"id": row.id, "action": row.action, "performed_by": row.actor.full_name_ar if row.actor else "-", "created_at": row.created_at, "ip_address": row.ip_address, "details": row.metadata_json or {}}
@@ -1504,7 +1520,7 @@ def get_user_audit_logs(user_id: int, db: Session = Depends(get_db), _: User = D
 
 
 @router.get("/{user_id}/screen-permissions", response_model=ScreenPermissionsRead)
-def get_user_screen_permissions(user_id: int, db: Session = Depends(get_db), _: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.IT_MANAGER))):
+def get_user_screen_permissions(user_id: int, db: Session = Depends(get_db), _: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.DEPARTMENT_MANAGER))):
     user = db.get(User, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -1512,7 +1528,7 @@ def get_user_screen_permissions(user_id: int, db: Session = Depends(get_db), _: 
 
 
 @router.put("/{user_id}/screen-permissions", response_model=ScreenPermissionsRead)
-def update_user_screen_permissions(user_id: int, payload: ScreenPermissionsPayload, db: Session = Depends(get_db), actor: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.IT_MANAGER))):
+def update_user_screen_permissions(user_id: int, payload: ScreenPermissionsPayload, db: Session = Depends(get_db), actor: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.DEPARTMENT_MANAGER))):
     user = db.get(User, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -1527,12 +1543,14 @@ def update_user_screen_permissions(user_id: int, payload: ScreenPermissionsPaylo
 @router.post("", response_model=UserRead)
 def create_user(payload: UserCreate, request: Request, db: Session = Depends(get_db), actor: User = Depends(require_users_screen_create)):
     actor_can_manage_users = permission_level_allows(effective_screen_permission_level(db, actor, "users"), "manage")
-    if actor.role not in {UserRole.SUPER_ADMIN, UserRole.IT_MANAGER} and not actor_can_manage_users and payload.role != UserRole.EMPLOYEE:
+    if actor.role not in {UserRole.SUPER_ADMIN, UserRole.DEPARTMENT_MANAGER} and not actor_can_manage_users and payload.role != UserRole.EMPLOYEE:
         raise HTTPException(status_code=403, detail="صلاحية إضافة المستخدمين لا تسمح بإنشاء أدوار إدارية")
     ensure_role_assignment_allowed(actor, payload.role)
     validate_user_links(db, payload)
     ensure_user_unique(db, payload)
-    validate_password_policy(payload.password, security_policy(db))
+    policy = security_policy(db)
+    password = payload.password or temporary_password_from_policy(policy)
+    validate_password_policy(password, policy)
     user = User(
         employee_id=payload.employee_id,
         username=payload.username,
@@ -1541,7 +1559,7 @@ def create_user(payload: UserCreate, request: Request, db: Session = Depends(get
         email=str(payload.email),
         mobile=payload.mobile,
         job_title=payload.job_title,
-        hashed_password=get_password_hash(payload.password),
+        hashed_password=get_password_hash(password),
         password_changed_at=datetime.now(timezone.utc),
         role=payload.role,
         role_id=payload.role_id,
@@ -1571,8 +1589,8 @@ def update_user(user_id: int, payload: UserUpdate, request: Request, db: Session
     if actor.role != UserRole.SUPER_ADMIN and user.role == UserRole.SUPER_ADMIN:
         raise HTTPException(status_code=403, detail="Only Super Admin can update Super Admin users")
     actor_can_manage_users = permission_level_allows(effective_screen_permission_level(db, actor, "users"), "manage")
-    if actor.role not in {UserRole.SUPER_ADMIN, UserRole.IT_MANAGER} and not actor_can_manage_users:
-        if user.role == UserRole.IT_MANAGER:
+    if actor.role not in {UserRole.SUPER_ADMIN, UserRole.DEPARTMENT_MANAGER} and not actor_can_manage_users:
+        if user.role == UserRole.DEPARTMENT_MANAGER:
             raise HTTPException(status_code=403, detail="لا يمكن تعديل مستخدم إداري بهذه الصلاحية")
         if payload.role != user.role:
             raise HTTPException(status_code=403, detail="تغيير دور المستخدم يتطلب صلاحية إدارة المستخدمين")
@@ -1596,7 +1614,7 @@ def update_user(user_id: int, payload: UserUpdate, request: Request, db: Session
 
 
 @router.post("/{user_id}/disable", response_model=UserRead)
-def disable_user(user_id: int, request: Request, db: Session = Depends(get_db), actor: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.IT_MANAGER))):
+def disable_user(user_id: int, request: Request, db: Session = Depends(get_db), actor: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.DEPARTMENT_MANAGER))):
     user = db.get(User, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -1611,7 +1629,7 @@ def disable_user(user_id: int, request: Request, db: Session = Depends(get_db), 
 
 
 @router.post("/{user_id}/enable", response_model=UserRead)
-def enable_user(user_id: int, request: Request, db: Session = Depends(get_db), actor: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.IT_MANAGER))):
+def enable_user(user_id: int, request: Request, db: Session = Depends(get_db), actor: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.DEPARTMENT_MANAGER))):
     user = db.get(User, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -1623,7 +1641,7 @@ def enable_user(user_id: int, request: Request, db: Session = Depends(get_db), a
 
 
 @router.post("/{user_id}/lock", response_model=UserRead)
-def lock_user(user_id: int, request: Request, db: Session = Depends(get_db), actor: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.IT_MANAGER))):
+def lock_user(user_id: int, request: Request, db: Session = Depends(get_db), actor: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.DEPARTMENT_MANAGER))):
     user = db.get(User, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -1638,7 +1656,7 @@ def lock_user(user_id: int, request: Request, db: Session = Depends(get_db), act
 
 
 @router.post("/{user_id}/unlock", response_model=UserRead)
-def unlock_user(user_id: int, request: Request, db: Session = Depends(get_db), actor: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.IT_MANAGER))):
+def unlock_user(user_id: int, request: Request, db: Session = Depends(get_db), actor: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.DEPARTMENT_MANAGER))):
     user = db.get(User, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -1652,7 +1670,7 @@ def unlock_user(user_id: int, request: Request, db: Session = Depends(get_db), a
 
 
 @router.post("/{user_id}/terminate-sessions")
-def terminate_user_sessions(user_id: int, payload: PasswordConfirmPayload, request: Request, db: Session = Depends(get_db), actor: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.IT_MANAGER))):
+def terminate_user_sessions(user_id: int, payload: PasswordConfirmPayload, request: Request, db: Session = Depends(get_db), actor: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.DEPARTMENT_MANAGER))):
     user = db.get(User, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -1668,7 +1686,7 @@ def terminate_user_sessions(user_id: int, payload: PasswordConfirmPayload, reque
 
 
 @router.post("/{user_id}/reset-password", status_code=status.HTTP_204_NO_CONTENT)
-def reset_user_password(user_id: int, payload: PasswordReset, request: Request, db: Session = Depends(get_db), actor: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.IT_MANAGER))):
+def reset_user_password(user_id: int, payload: PasswordReset, request: Request, db: Session = Depends(get_db), actor: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.DEPARTMENT_MANAGER))):
     user = db.get(User, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -1897,7 +1915,7 @@ def update_role_screen_permissions(role_id: int, payload: PermissionLevelPayload
 
 
 @permissions_router.put("/screens/user/{user_id}")
-def update_user_screen_permission_matrix(user_id: int, payload: PermissionLevelPayload, request: Request, db: Session = Depends(get_db), actor: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.IT_MANAGER))):
+def update_user_screen_permission_matrix(user_id: int, payload: PermissionLevelPayload, request: Request, db: Session = Depends(get_db), actor: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.DEPARTMENT_MANAGER))):
     user = db.get(User, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="المستخدم غير موجود")
@@ -1911,7 +1929,7 @@ def update_user_screen_permission_matrix(user_id: int, payload: PermissionLevelP
 
 
 @permissions_router.post("/screens/copy")
-def copy_screen_permissions(payload: dict, request: Request, db: Session = Depends(get_db), actor: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.IT_MANAGER))):
+def copy_screen_permissions(payload: dict, request: Request, db: Session = Depends(get_db), actor: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.DEPARTMENT_MANAGER))):
     source_user = db.get(User, payload.get("source_user_id")) if payload.get("source_user_id") else None
     target_user = db.get(User, payload.get("target_user_id")) if payload.get("target_user_id") else None
     if not source_user or not target_user:
@@ -1994,7 +2012,7 @@ def list_departments(db: Session = Depends(get_db), _: User = Depends(require_us
 
 
 @departments_router.post("", response_model=DepartmentRead, status_code=status.HTTP_201_CREATED)
-def create_department(payload: SettingsDepartmentCreate, db: Session = Depends(get_db), actor: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.IT_MANAGER))):
+def create_department(payload: SettingsDepartmentCreate, db: Session = Depends(get_db), actor: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.DEPARTMENT_MANAGER))):
     validate_department_manager(db, payload.manager_id)
     department = Department(
         name_ar=payload.name_ar,
@@ -2012,7 +2030,7 @@ def create_department(payload: SettingsDepartmentCreate, db: Session = Depends(g
 
 
 @departments_router.put("/{department_id}", response_model=DepartmentRead)
-def update_department(department_id: int, payload: SettingsDepartmentCreate, db: Session = Depends(get_db), actor: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.IT_MANAGER))):
+def update_department(department_id: int, payload: SettingsDepartmentCreate, db: Session = Depends(get_db), actor: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.DEPARTMENT_MANAGER))):
     department = db.get(Department, department_id)
     if not department:
         raise HTTPException(status_code=404, detail="Department not found")
@@ -2026,7 +2044,7 @@ def update_department(department_id: int, payload: SettingsDepartmentCreate, db:
 
 
 @departments_router.delete("/{department_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_department(department_id: int, db: Session = Depends(get_db), actor: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.IT_MANAGER))):
+def delete_department(department_id: int, db: Session = Depends(get_db), actor: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.DEPARTMENT_MANAGER))):
     department = db.get(Department, department_id)
     if not department:
         raise HTTPException(status_code=404, detail="Department not found")
@@ -2041,5 +2059,5 @@ def validate_department_manager(db: Session, manager_id: int | None) -> None:
     manager = db.get(User, manager_id)
     if not manager or not manager.is_active or manager.is_locked:
         raise HTTPException(status_code=422, detail="مدير الإدارة المحدد غير موجود أو غير نشط")
-    if manager.role not in {UserRole.DIRECT_MANAGER, UserRole.IT_MANAGER, UserRole.EXECUTIVE, UserRole.SUPER_ADMIN}:
+    if manager.role not in {UserRole.DIRECT_MANAGER, UserRole.DEPARTMENT_MANAGER, UserRole.EXECUTIVE, UserRole.SUPER_ADMIN}:
         raise HTTPException(status_code=422, detail="مدير الإدارة يجب أن يكون مستخدماً بصلاحية إدارية أو مدير مباشر")

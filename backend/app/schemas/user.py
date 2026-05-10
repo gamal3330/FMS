@@ -53,7 +53,7 @@ class UserCreate(BaseModel):
     full_name_ar: str
     full_name_en: str
     email: EmailStr
-    password: str
+    password: str | None = None
     role: UserRole
     administrative_section: str | None = None
     department_id: int | None = None
@@ -92,5 +92,5 @@ class UserUpdate(BaseModel):
 
 
 class PasswordReset(BaseModel):
-    password: str
+    password: str | None = None
     admin_password: str | None = None

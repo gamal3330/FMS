@@ -43,7 +43,7 @@ const roleLabels: Record<string, string> = {
   department_manager: "مدير الإدارة المختصة",
   department_specialist: "مختص الإدارة المختصة",
   information_security: "أمن المعلومات (مرحلة قديمة)",
-  it_manager: "مدير إدارة",
+  administration_manager: "مدير إدارة",
   it_staff: "مختص تنفيذ",
   executive_management: "الإدارة التنفيذية",
   implementation_engineer: "مختص تنفيذ",
@@ -160,7 +160,7 @@ function isActionableForUser(step: ApprovalStep | null, user: CurrentUser | null
   if (typeof step.can_act === "boolean") return step.can_act;
   if (user.role === "super_admin") return true;
   if (step.role === user.role) return true;
-  if (["implementation", "execution", "implementation_engineer", "close_request"].includes(step.role) && ["it_staff", "it_manager"].includes(user.role)) {
+  if (["implementation", "execution", "implementation_engineer", "close_request"].includes(step.role) && ["it_staff", "administration_manager"].includes(user.role)) {
     return true;
   }
   return delegations.some(

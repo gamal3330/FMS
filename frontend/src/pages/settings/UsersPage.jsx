@@ -53,13 +53,12 @@ const roleOptions = [
   ["employee", "موظف"],
   ["direct_manager", "مدير مباشر"],
   ["it_staff", "مختص تنفيذ"],
-  ["it_manager", "مدير إدارة"],
+  ["administration_manager", "مدير إدارة"],
   ["executive_management", "الإدارة التنفيذية"],
   ["super_admin", "مدير النظام"]
 ];
 
-const legacyRoleOptions = [["information_security", "أمن المعلومات (دور قديم)"]];
-const roleLabel = new Map([...roleOptions, ...legacyRoleOptions]);
+const roleLabel = new Map(roleOptions);
 const relationOptions = [
   ["employee", "موظف"],
   ["direct_manager", "مدير مباشر"],
@@ -89,7 +88,7 @@ const emptyUserForm = {
   relationship_type: "employee",
   role: "employee",
   administrative_section: "",
-  password: "Change@12345",
+  password: "",
   force_password_change: true,
   password_expires_at: "",
   allowed_login_from_ip: "",
@@ -124,6 +123,7 @@ function initialData() {
     roles: [],
     screenMatrix: null,
     actionMatrix: null,
+    securityPolicy: null,
     orgTree: [],
     orgIssues: [],
     importBatches: [],
@@ -180,6 +180,7 @@ export default function UsersPage() {
       roles,
       screenMatrix,
       actionMatrix,
+      securityPolicy,
       orgTree,
       orgIssues,
       importBatches,
@@ -196,6 +197,7 @@ export default function UsersPage() {
       safeGet("/roles", []),
       safeGet("/permissions/screens", null),
       safeGet("/permissions/actions", null),
+      safeGet("/settings/security", null),
       safeGet("/users/organization/tree", []),
       safeGet("/users/organization/issues", []),
       safeGet("/users/import/batches", []),
@@ -205,7 +207,7 @@ export default function UsersPage() {
       safeGet("/users/access-review", null),
       safeGet("/users/audit-logs", [])
     ]);
-    setData({ overview, users, departments, specializedSections, roles, screenMatrix, actionMatrix, orgTree, orgIssues, importBatches, sessions, attempts, delegations, accessReview, auditLogs });
+    setData({ overview, users, departments, specializedSections, roles, screenMatrix, actionMatrix, securityPolicy, orgTree, orgIssues, importBatches, sessions, attempts, delegations, accessReview, auditLogs });
     setLoading(false);
   }
 
@@ -229,6 +231,7 @@ export default function UsersPage() {
 
   const usersById = useMemo(() => new Map(data.users.map((user) => [user.id, user])), [data.users]);
   const departmentsById = useMemo(() => new Map(data.departments.map((department) => [department.id, department])), [data.departments]);
+  const configuredTemporaryPassword = data.securityPolicy?.temporary_password || "";
   const filteredUsers = useMemo(() => {
     const q = filters.q.trim().toLowerCase();
     return data.users.filter((user) => {
@@ -300,7 +303,7 @@ export default function UsersPage() {
       allowed_login_from_ip: form.allowed_login_from_ip || null,
       notes: form.notes || null
     };
-    if (userModal.mode === "edit") {
+    if (userModal.mode === "edit" || !payload.password || payload.password === configuredTemporaryPassword) {
       delete payload.password;
     }
     await runAction("save-user", async () => {
@@ -444,16 +447,22 @@ export default function UsersPage() {
                   setFilters={setFilters}
                   selectedUsers={selectedUsers}
                   setSelectedUsers={setSelectedUsers}
-                  onAdd={() => setUserModal({ mode: "create", form: emptyUserForm })}
+                  onAdd={() => setUserModal({ mode: "create", form: { ...emptyUserForm, password: configuredTemporaryPassword } })}
                   onEdit={(user) => setUserModal({ mode: "edit", user, form: userToForm(user) })}
                   onDetails={openDetails}
                   onExport={exportUsersCsv}
                   onToggleActive={(user) => runAction("toggle-user", async () => api.post(`/users/${user.id}/${user.is_active ? "disable" : "enable"}`))}
                   onLock={(user) => runAction("lock-user", async () => api.post(`/users/${user.id}/${user.is_locked ? "unlock" : "lock"}`))}
                   onResetPassword={(user) => {
-                    const password = window.prompt("أدخل كلمة المرور المؤقتة الجديدة", "Change@12345");
-                    const admin_password = password ? window.prompt("أدخل كلمة مرورك الحالية لتأكيد العملية") : null;
-                    if (password && admin_password) runAction("reset-password", async () => api.post(`/users/${user.id}/reset-password`, { password, admin_password }));
+                    const password = window.prompt("أدخل كلمة المرور المؤقتة الجديدة، أو اتركها فارغة لاستخدام إعداد النظام", configuredTemporaryPassword);
+                    if (password === null) return;
+                    const admin_password = window.prompt("أدخل كلمة مرورك الحالية لتأكيد العملية");
+                    if (admin_password) {
+                      const normalizedPassword = password.trim();
+                      const payload = { admin_password };
+                      if (normalizedPassword && normalizedPassword !== configuredTemporaryPassword) payload.password = normalizedPassword;
+                      runAction("reset-password", async () => api.post(`/users/${user.id}/reset-password`, payload));
+                    }
                   }}
                   onTerminate={(user) => {
                     const admin_password = window.prompt("أدخل كلمة مرورك الحالية لإنهاء جلسات المستخدم");
@@ -514,7 +523,7 @@ export default function UsersPage() {
         </div>
       </Card>
 
-      {userModal && <UserFormModal modal={userModal} setModal={setUserModal} users={data.users} departments={data.departments} specializedSections={data.specializedSections} onSubmit={saveUser} />}
+      {userModal && <UserFormModal modal={userModal} setModal={setUserModal} users={data.users} departments={data.departments} specializedSections={data.specializedSections} temporaryPassword={configuredTemporaryPassword} onSubmit={saveUser} />}
       {roleModal && <RoleFormModal modal={roleModal} setModal={setRoleModal} onSubmit={saveRole} />}
       {details && <UserDetailsDrawer details={details} usersById={usersById} departmentsById={departmentsById} onClose={() => setDetails(null)} />}
     </section>
@@ -869,11 +878,10 @@ function AuditLogsTab({ logs }) {
   return <DataTable headers={["الإجراء", "المستخدم المتأثر", "بواسطة", "التاريخ", "IP", "النتيجة"]} rows={logs.map((log) => [auditLabel(log.action), log.affected_user_id || "-", log.performed_by, formatSystemDateTime(log.created_at), log.ip_address || "-", log.result || "success"])} />;
 }
 
-function UserFormModal({ modal, setModal, users, departments, specializedSections, onSubmit }) {
+function UserFormModal({ modal, setModal, users, departments, specializedSections, temporaryPassword, onSubmit }) {
   const form = modal.form;
   const setForm = (patch) => setModal({ ...modal, form: { ...form, ...patch } });
   const currentSectionExists = specializedSections.some((section) => section.code === form.administrative_section);
-  const selectableRoleOptions = form.role === "information_security" ? [...roleOptions, ...legacyRoleOptions] : roleOptions;
   return (
     <Modal title={modal.mode === "edit" ? "تعديل مستخدم" : "إضافة مستخدم"} onClose={() => setModal(null)}>
       <form onSubmit={onSubmit} className="space-y-4">
@@ -888,7 +896,7 @@ function UserFormModal({ modal, setModal, users, departments, specializedSection
           <Field label="الإدارة"><Select value={form.department_id || ""} onChange={(event) => setForm({ department_id: event.target.value })}><option value="">اختر الإدارة</option>{departments.map((department) => <option key={department.id} value={department.id}>{department.name_ar}</option>)}</Select></Field>
           <Field label="المدير المباشر"><Select value={form.manager_id || ""} onChange={(event) => setForm({ manager_id: event.target.value })}><option value="">بدون مدير</option>{users.map((user) => <option key={user.id} value={user.id}>{user.full_name_ar}</option>)}</Select></Field>
           <Field label="نوع العلاقة"><Select value={form.relationship_type || "employee"} onChange={(event) => setForm({ relationship_type: event.target.value })}>{relationOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</Select></Field>
-          <Field label="الدور"><Select value={form.role} onChange={(event) => setForm({ role: event.target.value, administrative_section: event.target.value === "it_staff" ? form.administrative_section : "" })}>{selectableRoleOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</Select></Field>
+          <Field label="الدور"><Select value={form.role} onChange={(event) => setForm({ role: event.target.value, administrative_section: event.target.value === "it_staff" ? form.administrative_section : "" })}>{roleOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</Select></Field>
           <Field label="القسم المختص">
             <Select
               value={form.administrative_section || ""}
@@ -902,7 +910,12 @@ function UserFormModal({ modal, setModal, users, departments, specializedSection
               ))}
             </Select>
           </Field>
-          {modal.mode !== "edit" && <Field label="كلمة المرور المؤقتة"><Input required value={form.password} onChange={(event) => setForm({ password: event.target.value })} /></Field>}
+          {modal.mode !== "edit" && (
+            <Field label="كلمة المرور المؤقتة">
+              <Input value={form.password} onChange={(event) => setForm({ password: event.target.value })} placeholder={temporaryPassword ? "مقروءة من إعدادات الأمان" : "اتركها فارغة لاستخدام إعداد النظام"} />
+              <p className="mt-1 text-xs text-slate-500">اترك الحقل فارغًا ليستخدم النظام كلمة المرور المؤقتة من إعدادات الأمان.</p>
+            </Field>
+          )}
           <Field label="انتهاء كلمة المرور"><Input type="datetime-local" value={form.password_expires_at || ""} onChange={(event) => setForm({ password_expires_at: event.target.value })} /></Field>
           <Field label="IP مسموح"><Input value={form.allowed_login_from_ip || ""} onChange={(event) => setForm({ allowed_login_from_ip: event.target.value })} /></Field>
         </div>

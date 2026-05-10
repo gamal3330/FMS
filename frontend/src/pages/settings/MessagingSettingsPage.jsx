@@ -511,6 +511,9 @@ export default function MessagingSettingsPage() {
               <WarningBox>
                 الحد الأقصى العام لرفع الملفات هو {data.generalProfile?.upload_max_file_size_mb ?? "-"} MB. حد مرفقات المراسلات لا يمكن أن يتجاوزه، والرفع سيستخدم الحد الأقل بينهما.
               </WarningBox>
+              <WarningBox>
+                عند تفعيل فحص الفيروسات يجب تثبيت ClamAV على الخادم. إذا لم يكن محرك الفحص متوفراً سيتم رفض رفع المرفقات لحماية النظام.
+              </WarningBox>
               <div className="rounded-lg border border-bank-100 bg-bank-50 p-3 text-sm font-bold text-bank-900">
                 الحد الفعلي المستخدم حالياً في المراسلات: {effectiveMessageMaxMb} MB.
               </div>

@@ -12,7 +12,7 @@ MESSAGE_DEFAULT_ROLES = {
     UserRole.EMPLOYEE,
     UserRole.DIRECT_MANAGER,
     UserRole.IT_STAFF,
-    UserRole.IT_MANAGER,
+    UserRole.DEPARTMENT_MANAGER,
     UserRole.INFOSEC,
     UserRole.EXECUTIVE,
     UserRole.SUPER_ADMIN,
@@ -110,16 +110,16 @@ def step_notification_recipients(
     elif role_value in IMPLEMENTATION_STEP_ROLES:
         form_data = service_request.form_data or {}
         request_section = form_data.get("assigned_section") or form_data.get("administrative_section")
-        stmt = select(User).where(User.is_active == True, User.role.in_([UserRole.IT_STAFF, UserRole.IT_MANAGER]))
+        stmt = select(User).where(User.is_active == True, User.role.in_([UserRole.IT_STAFF, UserRole.DEPARTMENT_MANAGER]))
         if request_section:
-            stmt = stmt.where(or_(User.role == UserRole.IT_MANAGER, User.administrative_section == request_section))
+            stmt = stmt.where(or_(User.role == UserRole.DEPARTMENT_MANAGER, User.administrative_section == request_section))
         recipient_ids.update(user.id for user in db.scalars(stmt).all())
     elif role_value:
         try:
             role = UserRole(role_value)
             recipient_ids.update(user.id for user in db.scalars(select(User).where(User.is_active == True, User.role == role)).all())
         except ValueError:
-            recipient_ids.update(user.id for user in db.scalars(select(User).where(User.is_active == True, User.role == UserRole.IT_MANAGER)).all())
+            recipient_ids.update(user.id for user in db.scalars(select(User).where(User.is_active == True, User.role == UserRole.DEPARTMENT_MANAGER)).all())
 
     if not recipient_ids and actor.manager_id:
         recipient_ids.add(actor.manager_id)
@@ -275,7 +275,7 @@ def create_request_workflow_message(db: Session, service_request: ServiceRequest
             "department_manager": "مدير الإدارة المختصة",
             DEPARTMENT_SPECIALIST_STEP: "مختص الإدارة المختصة",
             UserRole.INFOSEC.value: "أمن المعلومات (مرحلة قديمة)",
-            UserRole.IT_MANAGER.value: "مدير إدارة",
+            UserRole.DEPARTMENT_MANAGER.value: "مدير إدارة",
             UserRole.IT_STAFF.value: "مختص تنفيذ",
         }.get(next_role, next_role or "المرحلة التالية")
     )

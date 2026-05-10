@@ -32,6 +32,7 @@ from app.schemas.message import InternalMessageCreate, InternalMessageDraftUpser
 from app.services.audit import write_audit
 from app.services.messaging_settings_service import get_effective_message_attachment_max_mb
 from app.services.realtime import message_notification_payload, notification_manager
+from app.services.virus_scan import scan_file_or_raise
 
 router = APIRouter(prefix="/messages", tags=["Internal Messages"])
 settings = get_settings()
@@ -91,6 +92,7 @@ MESSAGE_SETTINGS_DEFAULTS = {
     "default_message_type": DEFAULT_MESSAGE_TYPE,
     "allowed_extensions": ["pdf", "png", "jpg", "jpeg"],
     "block_executable_files": True,
+    "enable_virus_scan": False,
     "log_attachment_downloads": True,
     "department_recipient_behavior": "selected_department_users",
     "allowed_user_ids": [],
@@ -202,7 +204,7 @@ MESSAGE_DEFAULT_ROLES = {
     UserRole.EMPLOYEE,
     UserRole.DIRECT_MANAGER,
     UserRole.IT_STAFF,
-    UserRole.IT_MANAGER,
+    UserRole.DEPARTMENT_MANAGER,
     UserRole.INFOSEC,
     UserRole.EXECUTIVE,
     UserRole.SUPER_ADMIN,
@@ -254,7 +256,7 @@ def user_has_messages_screen(db: Session, user: User) -> bool:
 
 
 def can_manage_message_templates(user: User) -> bool:
-    return user.role in {UserRole.SUPER_ADMIN, UserRole.IT_MANAGER}
+    return user.role in {UserRole.SUPER_ADMIN, UserRole.DEPARTMENT_MANAGER}
 
 
 def message_settings_setting(db: Session) -> PortalSetting | None:
@@ -296,6 +298,7 @@ def load_message_settings(db: Session) -> dict:
         loaded["message_upload_path"] = attachments.message_upload_path or "uploads/messages"
         loaded["log_attachment_downloads"] = bool(attachments.log_attachment_downloads)
         loaded["block_executable_files"] = bool(attachments.block_executable_files)
+        loaded["enable_virus_scan"] = bool(attachments.enable_virus_scan)
     if integration is not None:
         loaded["enable_linked_requests"] = bool(integration.allow_link_to_request)
         loaded["allow_send_message_from_request"] = bool(integration.allow_send_message_from_request)
@@ -719,7 +722,16 @@ async def save_message_attachments(db: Session, message: InternalMessage, files:
         if len(content) > max_attachment_bytes:
             raise HTTPException(status_code=413, detail=f"حجم المرفق أكبر من الحد المسموح {message_settings.get('max_attachment_mb')}MB")
         stored_name = f"{uuid4().hex}{Path(file.filename).suffix.lower()[:20]}"
-        (target_dir / stored_name).write_bytes(content)
+        destination = target_dir / stored_name
+        temp_destination = target_dir / f".{stored_name}.scan"
+        try:
+            temp_destination.write_bytes(content)
+            scan_file_or_raise(temp_destination, enabled=bool(message_settings.get("enable_virus_scan", False)))
+            temp_destination.replace(destination)
+        except Exception:
+            temp_destination.unlink(missing_ok=True)
+            destination.unlink(missing_ok=True)
+            raise
         db.add(
             InternalMessageAttachment(
                 message_id=message.id,

@@ -36,6 +36,8 @@ def get_current_user(request: Request, token: str = Depends(oauth2_scheme), db: 
     user = db.get(User, user_id_int) if user_id_int else None
     if not user or not user.is_active:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Inactive or missing user")
+    if str(user.role) in {"it_manager", "department_manager"}:
+        user.role = UserRole.DEPARTMENT_MANAGER
     token_id = payload.get("jti")
     if not token_id:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session is not valid")

@@ -8,14 +8,14 @@ const roles = [
   ["employee", "موظف"],
   ["direct_manager", "مدير مباشر"],
   ["it_staff", "مختص تنفيذ"],
-  ["it_manager", "مدير إدارة"],
+  ["administration_manager", "مدير إدارة"],
   ["executive_management", "الإدارة التنفيذية"],
   ["super_admin", "مدير النظام"]
 ];
 
 const relationRoles = new Set(["employee", "direct_manager"]);
-const managerRoleKeys = new Set(["direct_manager", "it_manager", "executive_management", "super_admin"]);
-const seniorManagerRoles = new Set(["it_manager", "executive_management", "super_admin"]);
+const managerRoleKeys = new Set(["direct_manager", "administration_manager", "executive_management", "super_admin"]);
+const seniorManagerRoles = new Set(["administration_manager", "executive_management", "super_admin"]);
 const DEFAULT_TEMPORARY_PASSWORD = "Change@12345";
 
 function isTemporarilyLocked(user) {
@@ -45,7 +45,7 @@ const empty = {
   manager_id: "",
   administrative_section: "",
   role: "employee",
-  password: DEFAULT_TEMPORARY_PASSWORD,
+  password: "",
   is_active: true
 };
 
@@ -249,7 +249,9 @@ export default function UserSettings({ notify }) {
         await api.put(`/users/${editingId}`, payload);
         notify("تم تحديث بيانات المستخدم");
       } else {
-        await api.post("/users", { ...payload, password: form.password || resolvedTemporaryPassword });
+        const createPayload = { ...payload };
+        if (form.password && form.password !== resolvedTemporaryPassword) createPayload.password = form.password;
+        await api.post("/users", createPayload);
         notify("تم إنشاء المستخدم وربطه بالإدارة والمدير المباشر");
       }
       resetForm();
@@ -278,8 +280,10 @@ export default function UserSettings({ notify }) {
 
   async function resetPassword(id) {
     if (!window.confirm(`سيتم تعيين كلمة المرور المؤقتة إلى ${resolvedTemporaryPassword}. هل تريد المتابعة؟`)) return;
+    const admin_password = window.prompt("أدخل كلمة مرورك الحالية لتأكيد العملية");
+    if (!admin_password) return;
     try {
-      await api.post(`/users/${id}/reset-password`, { password: resolvedTemporaryPassword });
+      await api.post(`/users/${id}/reset-password`, { admin_password });
       notify(`تمت إعادة تعيين كلمة المرور إلى ${resolvedTemporaryPassword}`);
       await load();
     } catch (error) {
@@ -531,7 +535,11 @@ export default function UserSettings({ notify }) {
               {roles.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
             </Select>
           </Field>
-          {!editingId && <Field label="كلمة المرور المؤقتة"><Input type="text" value={form.password} onChange={(event) => updateField("password", event.target.value)} required /></Field>}
+          {!editingId && (
+            <Field label="كلمة المرور المؤقتة">
+              <Input type="text" value={form.password} onChange={(event) => updateField("password", event.target.value)} placeholder="اتركها فارغة لاستخدام إعداد النظام" />
+            </Field>
+          )}
           <label className="flex h-10 items-center gap-2 self-end rounded-md border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700">
             <input type="checkbox" checked={form.is_active} onChange={(event) => updateField("is_active", event.target.checked)} />
             حساب نشط

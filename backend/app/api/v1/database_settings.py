@@ -51,7 +51,7 @@ from app.services.database_restore_service import confirm_restore, validate_rest
 from app.services.database_status_service import database_status, database_tables
 
 router = APIRouter(prefix="/settings/database", tags=["Database Control Center"])
-DatabaseViewer = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.IT_MANAGER))
+DatabaseViewer = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.DEPARTMENT_MANAGER))
 DatabaseAdmin = Depends(require_roles(UserRole.SUPER_ADMIN))
 
 DATABASE_AUDIT_ACTIONS = {

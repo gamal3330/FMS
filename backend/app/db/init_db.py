@@ -24,8 +24,7 @@ DEFAULT_ROLES = [
     ("employee", "موظف"),
     ("direct_manager", "مدير مباشر"),
     ("it_staff", "مختص تنفيذ"),
-    ("it_manager", "مدير إدارة"),
-    ("information_security", "أمن المعلومات (دور قديم)"),
+    ("administration_manager", "مدير إدارة"),
     ("executive_management", "الإدارة التنفيذية"),
     ("super_admin", "مدير النظام"),
 ]
@@ -253,6 +252,7 @@ def ensure_runtime_columns(db: Session) -> None:
             if column not in user_columns:
                 db.execute(text(f"ALTER TABLE users ADD COLUMN {column} {definition}"))
         db.execute(text("UPDATE users SET relationship_type = COALESCE(NULLIF(relationship_type, ''), CASE WHEN role = 'direct_manager' THEN 'direct_manager' ELSE 'employee' END)"))
+        db.execute(text("UPDATE users SET role = 'administration_manager' WHERE role IN ('it_manager', 'department_manager')"))
         db.commit()
     if "specialized_sections" in table_names:
         section_columns = {column["name"] for column in inspector.get_columns("specialized_sections")}
@@ -273,7 +273,42 @@ def ensure_runtime_columns(db: Session) -> None:
             if column not in role_columns:
                 db.execute(text(f"ALTER TABLE roles ADD COLUMN {column} {definition}"))
         db.execute(text("UPDATE roles SET code = COALESCE(NULLIF(code, ''), name), name_ar = COALESCE(NULLIF(name_ar, ''), label_ar), name_en = COALESCE(NULLIF(name_en, ''), name), is_system_role = COALESCE(is_system_role, :true_value)"), {"true_value": True})
+        legacy_role = (
+            db.scalar(select(Role).where(Role.code == "it_manager"))
+            or db.scalar(select(Role).where(Role.name == "it_manager"))
+            or db.scalar(select(Role).where(Role.code == "department_manager"))
+            or db.scalar(select(Role).where(Role.name == "department_manager"))
+        )
+        department_manager_role = db.scalar(select(Role).where(Role.code == "administration_manager")) or db.scalar(select(Role).where(Role.name == "administration_manager"))
+        if legacy_role and not department_manager_role:
+            legacy_role.name = "administration_manager"
+            legacy_role.code = "administration_manager"
+            legacy_role.label_ar = "مدير إدارة"
+            legacy_role.name_ar = "مدير إدارة"
+            legacy_role.name_en = "Department Manager"
+            legacy_role.is_system_role = True
+            legacy_role.is_active = True
+        elif legacy_role and department_manager_role and legacy_role.id != department_manager_role.id:
+            db.execute(text("UPDATE users SET role_id = :new_id WHERE role_id = :old_id"), {"new_id": department_manager_role.id, "old_id": legacy_role.id})
+            legacy_role.name = f"it_manager_legacy_{legacy_role.id}"
+            legacy_role.code = f"it_manager_legacy_{legacy_role.id}"
+            legacy_role.label_ar = "مدير إدارة (قديم)"
+            legacy_role.name_ar = "مدير إدارة (قديم)"
+            legacy_role.name_en = "Legacy IT Manager"
+            legacy_role.is_system_role = False
+            legacy_role.is_active = False
         db.commit()
+    legacy_role_columns = [
+        ("workflow_approval_configs", "approver_role"),
+        ("workflow_steps", "approver_role"),
+        ("approval_steps", "role"),
+    ]
+    for table_name, column_name in legacy_role_columns:
+        if table_name in table_names:
+            columns = {column["name"] for column in inspector.get_columns(table_name)}
+            if column_name in columns:
+                db.execute(text(f"UPDATE {table_name} SET {column_name} = 'administration_manager' WHERE {column_name} = 'it_manager'"))
+    db.commit()
     workflow_columns = {column["name"] for column in inspector.get_columns("workflow_template_steps")}
     if "return_to_step_order" not in workflow_columns:
         db.execute(text("ALTER TABLE workflow_template_steps ADD COLUMN return_to_step_order INTEGER"))
@@ -641,17 +676,14 @@ def seed_database(db: Session) -> None:
 
     for name, label_ar in DEFAULT_ROLES:
         role = db.scalar(select(Role).where(Role.name == name))
-        is_legacy_hidden_role = name == "information_security"
         if not role:
-            db.add(Role(name=name, label_ar=label_ar, name_ar=label_ar, name_en=name.replace("_", " ").title(), code=name, is_system_role=True, is_active=not is_legacy_hidden_role))
+            db.add(Role(name=name, label_ar=label_ar, name_ar=label_ar, name_en=name.replace("_", " ").title(), code=name, is_system_role=True, is_active=True))
         else:
             role.label_ar = label_ar
             role.name_ar = label_ar if role.is_system_role or role.name == name or role.code == name else role.name_ar or label_ar
             role.name_en = role.name_en or name.replace("_", " ").title()
             role.code = role.code or name
             role.is_system_role = True
-            if is_legacy_hidden_role:
-                role.is_active = False
     db.flush()
 
     admin = db.scalar(select(User).where(User.email == settings.seed_admin_email))

@@ -196,7 +196,7 @@ function stepTypeLabel(value, step = {}, roles = [], departments = []) {
     department_specialist: "مختص الإدارة المختصة",
     specific_department_manager: "مدير إدارة محددة",
     information_security: "أمن المعلومات (مرحلة قديمة)",
-    it_manager: "مدير إدارة",
+    administration_manager: "مدير إدارة",
     executive_management: "الإدارة التنفيذية",
     implementation_engineer: "مختص تنفيذ",
     specific_role: "دور محدد",

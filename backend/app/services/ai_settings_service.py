@@ -26,7 +26,7 @@ ROLE_DEFAULTS = {
     UserRole.EMPLOYEE: {"draft_message", "improve_message", "formalize_message", "shorten_message", "detect_missing_info"},
     UserRole.DIRECT_MANAGER: {"draft_message", "improve_message", "formalize_message", "shorten_message", "suggest_reply", "summarize_message", "detect_missing_info"},
     UserRole.IT_STAFF: {"draft_message", "improve_message", "formalize_message", "shorten_message", "suggest_reply", "summarize_message", "summarize_request_messages", "detect_missing_info"},
-    UserRole.IT_MANAGER: set(AI_FEATURE_CODES),
+    UserRole.DEPARTMENT_MANAGER: set(AI_FEATURE_CODES),
     UserRole.INFOSEC: {"draft_message", "improve_message", "formalize_message", "shorten_message", "suggest_reply", "summarize_message", "detect_missing_info"},
     UserRole.EXECUTIVE: {"improve_message", "formalize_message", "shorten_message", "suggest_reply", "summarize_message", "summarize_request_messages"},
     UserRole.SUPER_ADMIN: set(AI_FEATURE_CODES),
@@ -73,8 +73,8 @@ def ensure_ai_feature_permissions(db: Session) -> list[AIFeaturePermission]:
                 role_id=role.id,
                 feature_code=feature_code,
                 is_enabled=feature_code in defaults,
-                daily_limit=50 if role.name in {"it_manager", "super_admin"} else 20,
-                monthly_limit=1500 if role.name in {"it_manager", "super_admin"} else 500,
+                daily_limit=50 if role.name in {"administration_manager", "super_admin"} else 20,
+                monthly_limit=1500 if role.name in {"administration_manager", "super_admin"} else 500,
             )
             db.add(permission)
             created.append(permission)

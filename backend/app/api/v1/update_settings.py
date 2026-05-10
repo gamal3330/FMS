@@ -28,7 +28,7 @@ from app.services.update_settings_service import (
 
 router = APIRouter(prefix="/settings/updates", tags=["Update Management"])
 
-ViewActor = Depends(require_roles(UserRole.IT_MANAGER))
+ViewActor = Depends(require_roles(UserRole.DEPARTMENT_MANAGER))
 EditActor = Depends(require_roles(UserRole.SUPER_ADMIN))
 
 

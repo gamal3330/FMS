@@ -42,7 +42,7 @@ def login_activity_read(log: AuditLog) -> LoginActivityRead:
 @router.get("/login-activity", response_model=list[LoginActivityRead])
 def list_login_activity(
     db: Session = Depends(get_db),
-    _: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.IT_MANAGER)),
+    _: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.DEPARTMENT_MANAGER)),
     limit: int = Query(default=80, ge=1, le=300),
 ):
     stmt = (
@@ -58,7 +58,7 @@ def list_login_activity(
 @router.get("", response_model=list[AuditLogRead])
 def list_audit_logs(
     db: Session = Depends(get_db),
-    _: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.IT_MANAGER)),
+    _: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.DEPARTMENT_MANAGER)),
     action: str | None = None,
     entity_type: str | None = None,
     limit: int = Query(default=100, ge=1, le=500),

@@ -74,7 +74,7 @@ router = APIRouter(prefix="/settings", tags=["Settings"])
 workflows_router = APIRouter(prefix="/workflows", tags=["Workflow Settings"])
 request_types_router = APIRouter(prefix="/request-types", tags=["Request Type Settings"])
 sla_rules_router = APIRouter(prefix="/sla-rules", tags=["SLA Settings"])
-SettingsActor = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.IT_MANAGER))
+SettingsActor = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.DEPARTMENT_MANAGER))
 AISettingsActor = Depends(require_roles(UserRole.SUPER_ADMIN))
 settings = get_settings()
 BACKUP_SETTINGS_CATEGORY = "database"
@@ -92,6 +92,7 @@ LOCAL_UPDATE_PRESERVE_NAMES = {
     "updates": {"releases"},
 }
 LOCAL_UPDATE_ROOT_FILES = {"version.txt", "update-manifest.json", "README.md", "INSTALL.md", "docker-compose.yml"}
+LEGACY_LOCAL_UPDATE_DETAIL = "مسار التحديث المحلي القديم مغلق. استخدم شاشة التحديث المحلي الجديدة عبر /api/v1/settings/updates/local."
 
 
 def require_super_admin_token(token: str = Depends(oauth2_scheme)) -> dict:
@@ -102,6 +103,10 @@ def require_super_admin_token(token: str = Depends(oauth2_scheme)) -> dict:
     if payload.get("role") != UserRole.SUPER_ADMIN:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only Super Admin can run database maintenance")
     return payload
+
+
+def legacy_local_updates_closed():
+    raise HTTPException(status_code=status.HTTP_410_GONE, detail=LEGACY_LOCAL_UPDATE_DETAIL)
 
 
 def sqlite_database_path() -> Path:
@@ -862,148 +867,10 @@ def get_database_status(db: Session = Depends(get_db), _: User = SettingsActor):
     }
 
 
-@router.get("/local-updates/status")
-def get_local_updates_status(_: User = Depends(require_roles(UserRole.SUPER_ADMIN))):
-    return {
-        "required_roots": sorted(LOCAL_UPDATE_REQUIRED_ROOTS),
-        "max_size_bytes": LOCAL_UPDATE_MAX_BYTES,
-        "packages": list_local_update_packages(),
-    }
-
-
-@router.post("/local-updates/upload")
-async def upload_local_update_package(file: UploadFile = File(...), db: Session = Depends(get_db), actor: User = Depends(require_roles(UserRole.SUPER_ADMIN))):
-    filename = Path(file.filename or "").name
-    if not filename.lower().endswith(".zip"):
-        raise HTTPException(status_code=400, detail="يجب رفع ملف تحديث بصيغة ZIP")
-
-    update_dir = local_updates_dir()
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    package_id = f"{timestamp}-{uuid4().hex[:8]}"
-    package_path = update_dir / f"{package_id}.zip"
-    temp_path = update_dir / f"{package_id}.tmp"
-
-    size = 0
-    try:
-        with temp_path.open("wb") as buffer:
-            while chunk := await file.read(1024 * 1024):
-                size += len(chunk)
-                if size > LOCAL_UPDATE_MAX_BYTES:
-                    raise HTTPException(status_code=400, detail="ملف التحديث أكبر من الحد المسموح")
-                buffer.write(chunk)
-
-        analysis = analyze_local_update_zip(temp_path)
-        if not analysis["valid"]:
-            missing = "، ".join(analysis["missing_roots"])
-            raise HTTPException(status_code=400, detail=f"ملف التحديث غير مكتمل. المجلدات الناقصة: {missing}")
-        if analysis["version"] == "غير محدد":
-            raise HTTPException(status_code=400, detail="يجب تحديد رقم الإصدار داخل version.txt أو update-manifest.json")
-        current_version = ensure_current_version(db).version
-        if version_key(analysis["version"]) <= version_key(current_version):
-            raise HTTPException(status_code=409, detail=f"رقم إصدار الحزمة {analysis['version']} ليس أحدث من الإصدار الحالي {current_version}")
-
-        temp_path.rename(package_path)
-        metadata = {
-            "id": package_id,
-            "original_filename": filename,
-            "stored_filename": package_path.name,
-            "uploaded_at": datetime.now().isoformat(),
-            "uploaded_by": actor.full_name_ar or actor.email,
-            "status": "جاهز للفحص النهائي",
-            **analysis,
-        }
-        local_update_metadata_path(package_path).write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
-        write_audit(db, "local_update_uploaded", "system_update", actor=actor, metadata={"package_id": package_id, "filename": filename, "version": metadata["version"]})
-        db.commit()
-        return metadata
-    finally:
-        temp_path.unlink(missing_ok=True)
-
-
-@router.post("/local-updates/{package_id}/preflight")
-def preflight_local_update_package(package_id: str, db: Session = Depends(get_db), actor: User = Depends(require_roles(UserRole.SUPER_ADMIN))):
-    package_path = local_update_package_path(package_id)
-    result = run_local_update_preflight(package_path, db)
-
-    metadata_path = local_update_metadata_path(package_path)
-    if metadata_path.exists():
-        try:
-            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            metadata = {"id": package_id, "stored_filename": package_path.name}
-    else:
-        metadata = {"id": package_id, "stored_filename": package_path.name}
-
-    metadata["last_preflight"] = result
-    metadata["status"] = "جاهز للتطبيق" if result["ready"] else "يحتاج معالجة قبل التطبيق"
-    metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
-
-    write_audit(
-        db,
-        "local_update_preflight_checked",
-        "system_update",
-        actor=actor,
-        metadata={"package_id": package_id, "ready": result["ready"], "summary": result["summary"]},
-    )
-    db.commit()
-    return result
-
-
-@router.post("/local-updates/{package_id}/apply")
-def apply_local_update(package_id: str, db: Session = Depends(get_db), actor: User = Depends(require_roles(UserRole.SUPER_ADMIN))):
-    package_path = local_update_package_path(package_id)
-    result = apply_local_update_package(package_path)
-
-    metadata_path = local_update_metadata_path(package_path)
-    if metadata_path.exists():
-        try:
-            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            metadata = {"id": package_id, "stored_filename": package_path.name}
-    else:
-        metadata = {"id": package_id, "stored_filename": package_path.name}
-
-    metadata["last_apply"] = result
-    metadata["status"] = "تم التطبيق - بانتظار إعادة التشغيل"
-    metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
-
-    write_audit(
-        db,
-        "local_update_applied",
-        "system_update",
-        actor=actor,
-        metadata={"package_id": package_id, "version": result["version"], "rollback_path": result["rollback_path"]},
-    )
-    db.commit()
-    return result
-
-
-@router.post("/local-updates/restart")
-def restart_local_backend(db: Session = Depends(get_db), actor: User = Depends(require_roles(UserRole.SUPER_ADMIN))):
-    script_path = restart_backend_script_path()
-    if not script_path.exists():
-        raise HTTPException(status_code=409, detail="سكريبت إعادة التشغيل غير موجود على هذا الخادم")
-
-    env = os.environ.copy()
-    env["PROJECT_ROOT"] = str(PROJECT_ROOT)
-    env["CURRENT_BACKEND_PID"] = str(os.getpid())
-    env.setdefault("BACKEND_PORT", "8000")
-
-    try:
-        subprocess.Popen(
-            ["bash", str(script_path)],
-            cwd=str(PROJECT_ROOT),
-            env=env,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-        )
-    except OSError as exc:
-        raise HTTPException(status_code=500, detail="تعذر تشغيل سكريبت إعادة التشغيل") from exc
-
-    write_audit(db, "local_update_restart_requested", "system_update", actor=actor, metadata={"script": str(script_path)})
-    db.commit()
-    return {"message": "تم إرسال أمر إعادة التشغيل. انتظر عدة ثوان ثم حدّث الصفحة.", "restart_requested": True}
+@router.api_route("/local-updates", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
+@router.api_route("/local-updates/{legacy_path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
+def closed_legacy_local_updates(_: User = Depends(require_roles(UserRole.SUPER_ADMIN))):
+    legacy_local_updates_closed()
 
 
 @router.get("/database/backup-settings", response_model=BackupSettingsRead)

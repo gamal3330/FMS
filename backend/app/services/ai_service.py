@@ -195,7 +195,7 @@ ROLE_LABELS = {
     UserRole.EMPLOYEE: "موظف",
     UserRole.DIRECT_MANAGER: "مدير مباشر",
     UserRole.IT_STAFF: "مختص تنفيذ",
-    UserRole.IT_MANAGER: "مدير إدارة",
+    UserRole.DEPARTMENT_MANAGER: "مدير إدارة",
     UserRole.INFOSEC: "أمن المعلومات (دور قديم)",
     UserRole.EXECUTIVE: "الإدارة التنفيذية",
     UserRole.SUPER_ADMIN: "مدير النظام",
@@ -448,13 +448,15 @@ def unassigned_it_staff_can_cover_request(db: Session, service_request: ServiceR
 
 
 def ensure_request_access(db: Session, service_request: ServiceRequest, current_user: User) -> None:
-    if current_user.role in {UserRole.SUPER_ADMIN, UserRole.IT_MANAGER}:
+    if current_user.role == UserRole.SUPER_ADMIN:
         return
     if service_request.requester_id == current_user.id:
         return
     if current_user.role == UserRole.DIRECT_MANAGER and service_request.requester and service_request.requester.manager_id == current_user.id:
         return
-    if current_user.role != UserRole.IT_STAFF and any(step.role == current_user.role for step in service_request.approvals):
+    if current_user.role == UserRole.DEPARTMENT_MANAGER and service_request.department and service_request.department.manager_id == current_user.id:
+        return
+    if current_user.role not in {UserRole.IT_STAFF, UserRole.DEPARTMENT_MANAGER} and any(step.role == current_user.role for step in service_request.approvals):
         return
     if current_user.role == UserRole.IT_STAFF and any(step.role in IMPLEMENTATION_STEP_ROLES for step in service_request.approvals):
         if request_matches_it_staff_section(service_request, current_user) or unassigned_it_staff_can_cover_request(db, service_request, current_user):

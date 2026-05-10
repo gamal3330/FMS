@@ -23,7 +23,7 @@ from app.services.update_manager import ensure_current_version
 
 router = APIRouter(prefix="/health", tags=["Health Monitoring"])
 settings = get_settings()
-HealthActor = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.IT_MANAGER))
+HealthActor = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.DEPARTMENT_MANAGER))
 
 
 def now_local() -> datetime:
