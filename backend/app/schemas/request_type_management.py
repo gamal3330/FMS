@@ -74,6 +74,7 @@ class WorkflowStepPayload(BaseModel):
     step_type: str
     approver_role_id: int | None = None
     approver_user_id: int | None = None
+    target_department_id: int | None = None
     is_mandatory: bool = True
     can_reject: bool = True
     can_return_for_edit: bool = False

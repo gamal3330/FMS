@@ -149,7 +149,7 @@ function ProtectedApp() {
         <Route path="/requests/new" element={screenElement("requests", <Requests />)} />
         <Route path="/requests/:requestId" element={screenElement("requests", <RequestDetails />)} />
         <Route path="/approvals" element={screenElement("approvals", <Approvals />)} />
-        <Route path="/messages" element={screenElement("messages", <MessagesPage />)} />
+        <Route path="/messages/*" element={screenElement("messages", <MessagesPage />)} />
         <Route
           path="/reports"
           element={currentUser?.role !== "employee" && canAccessScreen("reports") ? <ReportsPage /> : <Navigate to={defaultPath()} replace />}

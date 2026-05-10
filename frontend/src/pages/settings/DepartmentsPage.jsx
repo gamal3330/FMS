@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { Building2 } from "lucide-react";
-import { Card } from "../../components/ui/card";
 import FeedbackDialog from "../../components/ui/FeedbackDialog";
 import DepartmentsSettings from "../../components/settings/DepartmentsSettings";
 
@@ -30,9 +29,7 @@ export default function DepartmentsPage() {
         </div>
       </div>
 
-      <Card className="p-5">
-        <DepartmentsSettings notify={notify} />
-      </Card>
+      <DepartmentsSettings notify={notify} />
     </section>
   );
 }

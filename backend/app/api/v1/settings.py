@@ -40,7 +40,7 @@ from app.models.settings import (
     WorkflowStep,
     WorkflowTemplate,
 )
-from app.models.user import User
+from app.models.user import Department, User
 from app.schemas.settings import (
     BackupSettingsPayload,
     BackupSettingsRead,
@@ -633,11 +633,22 @@ def list_specialized_sections(db: Session = Depends(get_db), _: User = SettingsA
     return db.scalars(stmt).all()
 
 
+def validate_specialized_section_department(db: Session, department_id: int | None) -> None:
+    if department_id is None:
+        return
+    department = db.get(Department, department_id)
+    if not department:
+        raise HTTPException(status_code=404, detail="الإدارة المرتبطة غير موجودة")
+    if not department.is_active:
+        raise HTTPException(status_code=422, detail="لا يمكن ربط القسم المختص بإدارة غير نشطة")
+
+
 @router.post("/specialized-sections", response_model=SpecializedSectionRead, status_code=status.HTTP_201_CREATED)
 def create_specialized_section(payload: SpecializedSectionPayload, db: Session = Depends(get_db), actor: User = SettingsActor):
     exists = db.scalar(select(SpecializedSection).where(SpecializedSection.code == payload.code))
     if exists:
         raise HTTPException(status_code=409, detail="رمز القسم المختص مستخدم من قبل")
+    validate_specialized_section_department(db, payload.department_id)
     item = SpecializedSection(**payload.model_dump())
     db.add(item)
     db.flush()
@@ -655,6 +666,7 @@ def update_specialized_section(section_id: int, payload: SpecializedSectionPaylo
     duplicate = db.scalar(select(SpecializedSection).where(SpecializedSection.code == payload.code, SpecializedSection.id != section_id))
     if duplicate:
         raise HTTPException(status_code=409, detail="رمز القسم المختص مستخدم من قبل")
+    validate_specialized_section_department(db, payload.department_id)
     for field, value in payload.model_dump().items():
         setattr(item, field, value)
     write_audit(db, "specialized_section_updated", "specialized_section", actor=actor, entity_id=str(item.id), metadata={"code": item.code})

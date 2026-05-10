@@ -25,7 +25,7 @@ class SettingsGeneral(Base):
     __tablename__ = "settings_general"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    system_name: Mapped[str] = mapped_column(String(160), default="QIB IT Service Portal")
+    system_name: Mapped[str] = mapped_column(String(160), default="QIB Service Portal")
     login_intro_text: Mapped[str] = mapped_column(
         Text,
         default="منصة داخلية موحدة لاستقبال الطلبات، تتبع مراحل الاعتماد، مراقبة مؤشرات الخدمة، وتوثيق الأثر التشغيلي.",
@@ -63,10 +63,13 @@ class SpecializedSection(Base):
     name_ar: Mapped[str] = mapped_column(String(120), index=True)
     name_en: Mapped[str | None] = mapped_column(String(120), index=True)
     code: Mapped[str] = mapped_column(String(40), index=True)
+    department_id: Mapped[int | None] = mapped_column(ForeignKey("departments.id"), index=True)
     description: Mapped[str | None] = mapped_column(Text)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    department = relationship("Department")
 
 
 class WorkflowApprovalConfig(Base):
@@ -214,6 +217,7 @@ class WorkflowTemplateStep(Base):
     step_type: Mapped[str] = mapped_column(String(80))
     approver_role_id: Mapped[int | None] = mapped_column(ForeignKey("roles.id"))
     approver_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    target_department_id: Mapped[int | None] = mapped_column(ForeignKey("departments.id"))
     is_mandatory: Mapped[bool] = mapped_column(Boolean, default=True)
     can_reject: Mapped[bool] = mapped_column(Boolean, default=True)
     can_return_for_edit: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -224,6 +228,7 @@ class WorkflowTemplateStep(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
     template = relationship("WorkflowTemplate")
+    target_department = relationship("Department")
 
 
 class NotificationSettings(Base):

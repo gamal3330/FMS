@@ -5,8 +5,8 @@ from app.models.enums import ApprovalAction, Priority, RequestStatus, UserRole
 from app.models.message import InternalMessage, InternalMessageRecipient
 from app.models.request import ApprovalStep, RequestApprovalStep, ServiceRequest
 from app.models.settings import PortalSetting
-from app.models.user import User
-from app.services.workflow import IMPLEMENTATION_STEP_ROLES
+from app.models.user import Department, Role, User
+from app.services.workflow import DEPARTMENT_SPECIALIST_STEP, IMPLEMENTATION_STEP_ROLES
 
 MESSAGE_DEFAULT_ROLES = {
     UserRole.EMPLOYEE,
@@ -86,6 +86,27 @@ def step_notification_recipients(
         manager_id = actor.manager_id or (service_request.requester.manager_id if service_request.requester else None)
         if manager_id:
             recipient_ids.add(manager_id)
+    elif role_value == "department_manager":
+        department = service_request.department or (db.get(Department, service_request.department_id) if service_request.department_id else None)
+        if department and department.manager_id:
+            recipient_ids.add(department.manager_id)
+    elif role_value == DEPARTMENT_SPECIALIST_STEP:
+        department = service_request.department or (db.get(Department, service_request.department_id) if service_request.department_id else None)
+        if department:
+            stmt = select(User).where(User.is_active == True, User.department_id == department.id)
+            if department.manager_id:
+                stmt = stmt.where(User.id != department.manager_id)
+            recipient_ids.update(user.id for user in db.scalars(stmt).all())
+    elif role_value == "specific_user" and snapshot_step and snapshot_step.approver_user_id:
+        recipient_ids.add(snapshot_step.approver_user_id)
+    elif role_value == "specific_role" and snapshot_step and snapshot_step.approver_role_id:
+        role = db.get(Role, snapshot_step.approver_role_id)
+        stmt = select(User).where(User.is_active == True)
+        if role and role.code:
+            stmt = stmt.where(or_(User.role_id == role.id, User.role == role.code))
+        else:
+            stmt = stmt.where(User.role_id == snapshot_step.approver_role_id)
+        recipient_ids.update(user.id for user in db.scalars(stmt).all())
     elif role_value in IMPLEMENTATION_STEP_ROLES:
         form_data = service_request.form_data or {}
         request_section = form_data.get("assigned_section") or form_data.get("administrative_section")
@@ -246,16 +267,28 @@ def create_request_workflow_message(db: Session, service_request: ServiceRequest
         return
 
     next_role = str(next_snapshot.step_type if next_snapshot else next_approval.role if next_approval else "")
-    if next_role in {UserRole.INFOSEC.value, UserRole.IT_MANAGER.value, UserRole.IT_STAFF.value, *IMPLEMENTATION_STEP_ROLES}:
-        recipients = step_notification_recipients(db, service_request, actor, next_snapshot, next_approval)
-        subject = f"انتقال طلب للمتابعة: {request_number}"
-        body = "\n".join(
-            [
-                "انتقل الطلب إلى مرحلتك في مسار الموافقات.",
-                "",
-                f"رقم الطلب: {request_number}",
-                f"عنوان الطلب: {service_request.title}",
-                f"الإجراء السابق بواسطة: {actor_name}",
-            ]
-        )
-        send_request_message(db, service_request, actor, recipients, "notification", subject, body)
+    next_step_label = (
+        next_snapshot.step_name_ar
+        if next_snapshot and next_snapshot.step_name_ar
+        else {
+            UserRole.DIRECT_MANAGER.value: "المدير المباشر",
+            "department_manager": "مدير الإدارة المختصة",
+            DEPARTMENT_SPECIALIST_STEP: "مختص الإدارة المختصة",
+            UserRole.INFOSEC.value: "أمن المعلومات (مرحلة قديمة)",
+            UserRole.IT_MANAGER.value: "مدير إدارة",
+            UserRole.IT_STAFF.value: "مختص تنفيذ",
+        }.get(next_role, next_role or "المرحلة التالية")
+    )
+    recipients = step_notification_recipients(db, service_request, actor, next_snapshot, next_approval)
+    subject = f"انتقال طلب للمتابعة: {request_number} - {next_step_label}"
+    body = "\n".join(
+        [
+            "انتقل الطلب إلى مرحلتك في مسار الموافقات.",
+            "",
+            f"رقم الطلب: {request_number}",
+            f"عنوان الطلب: {service_request.title}",
+            f"المرحلة الحالية: {next_step_label}",
+            f"الإجراء السابق بواسطة: {actor_name}",
+        ]
+    )
+    send_request_message(db, service_request, actor, recipients, "notification", subject, body)

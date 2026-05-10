@@ -14,6 +14,8 @@ class InternalMessage(Base):
     thread_id: Mapped[int | None] = mapped_column(Integer, index=True)
     sender_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     message_type: Mapped[str] = mapped_column(String(40), default="internal_correspondence", index=True)
+    priority: Mapped[str] = mapped_column(String(20), default="normal", index=True)
+    classification_code: Mapped[str] = mapped_column(String(80), default="internal", index=True)
     subject: Mapped[str] = mapped_column(String(180))
     body: Mapped[str] = mapped_column(Text)
     related_request_id: Mapped[int | None] = mapped_column(ForeignKey("service_requests.id"), index=True)

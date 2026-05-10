@@ -17,9 +17,9 @@ const baseNav = [
 const roleLabels: Record<string, string> = {
   employee: "موظف",
   direct_manager: "مدير مباشر",
-  it_staff: "موظف تنفيذ",
-  it_manager: "مدير تقنية المعلومات",
-  information_security: "أمن المعلومات",
+  it_staff: "مختص تنفيذ",
+  it_manager: "مدير إدارة",
+  information_security: "أمن المعلومات (دور قديم)",
   executive_management: "الإدارة التنفيذية",
   super_admin: "مدير النظام"
 };
@@ -53,7 +53,11 @@ export function Layout({
   const [notificationOpen, setNotificationOpen] = useState(false);
   const [allowedScreens, setAllowedScreens] = useState<Set<string> | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem("qib_sidebar_collapsed") === "true");
-  const [theme, setTheme] = useState<"light" | "dark">(() => (localStorage.getItem("qib_theme") === "dark" ? "dark" : "light"));
+  const [theme, setTheme] = useState<"light" | "dark">(() => {
+    const storedTheme = localStorage.getItem("qib_theme");
+    if (storedTheme === "dark" || storedTheme === "light") return storedTheme;
+    return window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  });
   const [browserNotificationPermission, setBrowserNotificationPermission] = useState<NotificationPermission | "unsupported">(() => {
     if (typeof window === "undefined" || !("Notification" in window)) return "unsupported";
     return Notification.permission;

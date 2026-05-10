@@ -23,9 +23,9 @@ DEFAULT_DEPARTMENTS = [
 DEFAULT_ROLES = [
     ("employee", "موظف"),
     ("direct_manager", "مدير مباشر"),
-    ("it_staff", "موظف تنفيذ"),
-    ("it_manager", "مدير تقنية المعلومات"),
-    ("information_security", "أمن المعلومات"),
+    ("it_staff", "مختص تنفيذ"),
+    ("it_manager", "مدير إدارة"),
+    ("information_security", "أمن المعلومات (دور قديم)"),
     ("executive_management", "الإدارة التنفيذية"),
     ("super_admin", "مدير النظام"),
 ]
@@ -38,14 +38,14 @@ DEFAULT_SPECIALIZED_SECTIONS = [
 ]
 
 DEFAULT_REQUEST_TYPES = [
-    ("طلب إيميل", "Email Request", "EMAIL", "accounts", "إدارة طلبات البريد الإلكتروني", 4, 8, ["target_user", "email_action", "reason"], ["Direct Manager", "IT Manager", "Implementation Engineer"]),
-    ("طلب دومين", "Domain Request", "DOMAIN", "accounts", "إدارة مستخدمي الدومين", 4, 8, ["target_user", "domain_action", "reason"], ["Direct Manager", "IT Manager", "Implementation Engineer"]),
-    ("طلب VPN", "VPN Request", "VPN", "access", "طلب وصول آمن عن بعد", 8, 24, ["employee_name", "employee_id", "department", "access_needed", "reason", "start_date", "end_date"], ["Direct Manager", "Information Security", "IT Manager", "Implementation Engineer"]),
-    ("طلب وصول إنترنت", "Internet Access", "INTERNET", "access", "طلب صلاحيات تصفح الإنترنت", 8, 24, ["target_user", "access_level", "reason"], ["Direct Manager", "Information Security", "IT Manager"]),
-    ("طلب نسخ بيانات", "Data Copy", "DATA_COPY", "security", "طلب نسخ بيانات إلى وسيط خارجي أو بريد", 8, 48, ["copy_method", "source_location", "destination", "reason"], ["Direct Manager", "Information Security", "IT Manager", "Executive Management", "Implementation Engineer"]),
-    ("طلب وصول عبر شبكة البنك", "Network Access", "NETWORK", "network", "فتح اتصال شبكي بين مصدر ووجهة", 8, 48, ["source_ip", "destination_ip", "destination_port", "nat_port", "reason"], ["Direct Manager", "Information Security", "IT Manager", "Implementation Engineer"]),
-    ("طلب تركيب / نقل جهاز كمبيوتر", "Computer Install/Move", "COMPUTER_MOVE", "hardware", "نقل أو تركيب جهاز كمبيوتر", 4, 24, ["asset_tag", "current_location", "new_location", "reason"], ["Direct Manager", "IT Manager", "Implementation Engineer"]),
-    ("طلب دعم فني", "Support Ticket", "SUPPORT", "support", "تذكرة دعم فني", 2, 8, ["affected_user", "category", "issue_description"], ["IT Staff", "Implementation Engineer"]),
+    ("طلب إيميل", "Email Request", "EMAIL", "accounts", "إدارة طلبات البريد الإلكتروني", 4, 8, ["target_user", "email_action", "reason"], ["Direct Manager", "Department Manager", "Department Specialist"]),
+    ("طلب دومين", "Domain Request", "DOMAIN", "accounts", "إدارة مستخدمي الدومين", 4, 8, ["target_user", "domain_action", "reason"], ["Direct Manager", "Department Manager", "Department Specialist"]),
+    ("طلب VPN", "VPN Request", "VPN", "access", "طلب وصول آمن عن بعد", 8, 24, ["employee_name", "employee_id", "department", "access_needed", "reason", "start_date", "end_date"], ["Direct Manager", "Information Security", "Department Manager", "Department Specialist"]),
+    ("طلب وصول إنترنت", "Internet Access", "INTERNET", "access", "طلب صلاحيات تصفح الإنترنت", 8, 24, ["target_user", "access_level", "reason"], ["Direct Manager", "Information Security", "Department Manager"]),
+    ("طلب نسخ بيانات", "Data Copy", "DATA_COPY", "security", "طلب نسخ بيانات إلى وسيط خارجي أو بريد", 8, 48, ["copy_method", "source_location", "destination", "reason"], ["Direct Manager", "Information Security", "Department Manager", "Executive Management", "Department Specialist"]),
+    ("طلب وصول عبر شبكة البنك", "Network Access", "NETWORK", "network", "فتح اتصال شبكي بين مصدر ووجهة", 8, 48, ["source_ip", "destination_ip", "destination_port", "nat_port", "reason"], ["Direct Manager", "Information Security", "Department Manager", "Department Specialist"]),
+    ("طلب تركيب / نقل جهاز كمبيوتر", "Computer Install/Move", "COMPUTER_MOVE", "hardware", "نقل أو تركيب جهاز كمبيوتر", 4, 24, ["asset_tag", "current_location", "new_location", "reason"], ["Direct Manager", "Department Manager", "Department Specialist"]),
+    ("طلب دعم فني", "Support Ticket", "SUPPORT", "support", "تذكرة دعم فني", 2, 8, ["affected_user", "category", "issue_description"], ["Department Specialist"]),
 ]
 
 
@@ -174,6 +174,9 @@ def ensure_sqlite_dev_columns(db: Session) -> None:
             "created_at": "DATETIME",
             "updated_at": "DATETIME",
         },
+        "specialized_sections": {
+            "department_id": "INTEGER",
+        },
     }
     db.execute(
         text(
@@ -183,6 +186,7 @@ def ensure_sqlite_dev_columns(db: Session) -> None:
                 name_ar VARCHAR(120) NOT NULL,
                 name_en VARCHAR(120),
                 code VARCHAR(40) NOT NULL UNIQUE,
+                department_id INTEGER,
                 description TEXT,
                 is_active BOOLEAN DEFAULT 1,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -250,6 +254,11 @@ def ensure_runtime_columns(db: Session) -> None:
                 db.execute(text(f"ALTER TABLE users ADD COLUMN {column} {definition}"))
         db.execute(text("UPDATE users SET relationship_type = COALESCE(NULLIF(relationship_type, ''), CASE WHEN role = 'direct_manager' THEN 'direct_manager' ELSE 'employee' END)"))
         db.commit()
+    if "specialized_sections" in table_names:
+        section_columns = {column["name"] for column in inspector.get_columns("specialized_sections")}
+        if "department_id" not in section_columns:
+            db.execute(text("ALTER TABLE specialized_sections ADD COLUMN department_id INTEGER"))
+            db.commit()
     if "roles" in table_names:
         role_columns = {column["name"] for column in inspector.get_columns("roles")}
         role_column_defs = {
@@ -269,6 +278,9 @@ def ensure_runtime_columns(db: Session) -> None:
     if "return_to_step_order" not in workflow_columns:
         db.execute(text("ALTER TABLE workflow_template_steps ADD COLUMN return_to_step_order INTEGER"))
         db.commit()
+    if "target_department_id" not in workflow_columns:
+        db.execute(text("ALTER TABLE workflow_template_steps ADD COLUMN target_department_id INTEGER"))
+        db.commit()
     if "internal_messages" in table_names:
         message_columns = {column["name"] for column in inspector.get_columns("internal_messages")}
         if "thread_id" not in message_columns:
@@ -277,6 +289,14 @@ def ensure_runtime_columns(db: Session) -> None:
         if "message_type" not in message_columns:
             db.execute(text("ALTER TABLE internal_messages ADD COLUMN message_type VARCHAR(40) DEFAULT 'internal_correspondence'"))
             db.execute(text("UPDATE internal_messages SET message_type = 'internal_correspondence' WHERE message_type IS NULL OR message_type = ''"))
+            db.commit()
+        if "priority" not in message_columns:
+            db.execute(text("ALTER TABLE internal_messages ADD COLUMN priority VARCHAR(20) DEFAULT 'normal'"))
+            db.execute(text("UPDATE internal_messages SET priority = 'normal' WHERE priority IS NULL OR priority = ''"))
+            db.commit()
+        if "classification_code" not in message_columns:
+            db.execute(text("ALTER TABLE internal_messages ADD COLUMN classification_code VARCHAR(80) DEFAULT 'internal'"))
+            db.execute(text("UPDATE internal_messages SET classification_code = 'internal' WHERE classification_code IS NULL OR classification_code = ''"))
             db.commit()
         if "is_sender_archived" not in message_columns:
             default_value = "0" if db.bind and db.bind.dialect.name == "sqlite" else "false"
@@ -300,6 +320,8 @@ def ensure_runtime_columns(db: Session) -> None:
             db.commit()
         ensure_message_tracking_ids(db)
         db.execute(text('CREATE UNIQUE INDEX IF NOT EXISTS "idx_internal_messages_message_uid" ON "internal_messages" (message_uid)'))
+        db.execute(text('CREATE INDEX IF NOT EXISTS "idx_internal_messages_priority_created" ON "internal_messages" (priority, created_at)'))
+        db.execute(text('CREATE INDEX IF NOT EXISTS "idx_internal_messages_classification_created" ON "internal_messages" (classification_code, created_at)'))
         db.commit()
     if "internal_message_recipients" in table_names:
         recipient_columns = {column["name"] for column in inspector.get_columns("internal_message_recipients")}
@@ -619,14 +641,17 @@ def seed_database(db: Session) -> None:
 
     for name, label_ar in DEFAULT_ROLES:
         role = db.scalar(select(Role).where(Role.name == name))
+        is_legacy_hidden_role = name == "information_security"
         if not role:
-            db.add(Role(name=name, label_ar=label_ar, name_ar=label_ar, name_en=name.replace("_", " ").title(), code=name, is_system_role=True, is_active=True))
+            db.add(Role(name=name, label_ar=label_ar, name_ar=label_ar, name_en=name.replace("_", " ").title(), code=name, is_system_role=True, is_active=not is_legacy_hidden_role))
         else:
             role.label_ar = label_ar
-            role.name_ar = role.name_ar or label_ar
+            role.name_ar = label_ar if role.is_system_role or role.name == name or role.code == name else role.name_ar or label_ar
             role.name_en = role.name_en or name.replace("_", " ").title()
             role.code = role.code or name
             role.is_system_role = True
+            if is_legacy_hidden_role:
+                role.is_active = False
     db.flush()
 
     admin = db.scalar(select(User).where(User.email == settings.seed_admin_email))

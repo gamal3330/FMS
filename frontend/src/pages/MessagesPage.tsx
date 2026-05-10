@@ -1,5 +1,5 @@
 import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import {
   AlignCenter,
   AlignLeft,
@@ -11,6 +11,8 @@ import {
   ChevronRight,
   Download,
   Eraser,
+  Eye,
+  EyeOff,
   Filter,
   FileText,
   ALargeSmall,
@@ -24,6 +26,7 @@ import {
   ListChecks,
   ListOrdered,
   Mail,
+  MailOpen,
   Minus,
   Paperclip,
   Quote,
@@ -66,6 +69,8 @@ type InternalMessage = {
   message_uid?: string | null;
   thread_id?: number | null;
   message_type: string;
+  priority?: "normal" | "high" | "urgent" | string;
+  classification_code?: string | null;
   subject: string;
   body: string;
   sender_id: number;
@@ -111,9 +116,32 @@ type MessageTypeOption = {
   value: string;
   label: string;
   is_system?: boolean;
+  color?: string | null;
+  icon?: string | null;
+  is_official?: boolean;
+  requires_request?: boolean;
+  requires_attachment?: boolean;
+  show_in_pdf?: boolean;
+  allow_reply?: boolean;
+};
+
+type MessageClassificationOption = {
+  code: string;
+  name_ar: string;
+  name_en?: string | null;
+  description?: string | null;
+  is_active?: boolean;
+  restricted_access?: boolean;
+  show_in_pdf?: boolean;
+  show_in_reports?: boolean;
+  allow_attachment_download?: boolean;
+  log_downloads?: boolean;
+  requires_special_permission?: boolean;
 };
 
 type MessageSettings = {
+  module_name_ar: string;
+  module_name_en: string;
   enabled: boolean;
   enable_attachments: boolean;
   enable_drafts: boolean;
@@ -140,9 +168,12 @@ type MessageSettings = {
   notify_on_new_message: boolean;
   notify_on_reply: boolean;
   notify_on_read: boolean;
+  notify_on_clarification_request: boolean;
+  notify_on_official_message: boolean;
   max_attachment_mb: number;
   max_attachments_per_message: number;
   max_recipients: number;
+  default_priority: string;
   default_message_type: string;
   allowed_extensions: string[];
   block_executable_files: boolean;
@@ -167,10 +198,24 @@ type AIStatus = {
   show_in_request_messages_tab?: boolean;
 };
 
-type Mailbox = "inbox" | "sent" | "drafts" | "archived" | "compose";
+type Mailbox = "inbox" | "sent" | "drafts" | "archived" | "unread" | "request-linked" | "official" | "clarifications" | "compose";
 const pageSize = 50;
 const defaultMessageType = "internal_correspondence";
+const defaultMessageClassification = "internal";
+const mailboxPaths: Record<Mailbox, string> = {
+  inbox: "/messages/inbox",
+  sent: "/messages/sent",
+  drafts: "/messages/drafts",
+  archived: "/messages/archived",
+  unread: "/messages/unread",
+  "request-linked": "/messages/request-linked",
+  official: "/messages/official",
+  clarifications: "/messages/clarifications",
+  compose: "/messages/new"
+};
 const defaultMessageSettings: MessageSettings = {
+  module_name_ar: "المراسلات الداخلية",
+  module_name_en: "Internal Messaging",
   enabled: true,
   enable_attachments: true,
   enable_drafts: true,
@@ -197,9 +242,12 @@ const defaultMessageSettings: MessageSettings = {
   notify_on_new_message: true,
   notify_on_reply: true,
   notify_on_read: false,
+  notify_on_clarification_request: true,
+  notify_on_official_message: true,
   max_attachment_mb: 25,
   max_attachments_per_message: 10,
   max_recipients: 200,
+  default_priority: "normal",
   allowed_extensions: ["pdf", "png", "jpg", "jpeg"],
   block_executable_files: true,
   department_recipient_behavior: "selected_department_users",
@@ -221,10 +269,22 @@ const defaultMessageTypeOptions = [
   { value: "notification", label: "إشعار" },
   { value: "circular", label: "تعميم" }
 ];
+const defaultMessageClassificationOptions: MessageClassificationOption[] = [
+  { code: "public", name_ar: "عام", allow_attachment_download: true },
+  { code: "internal", name_ar: "داخلي", allow_attachment_download: true },
+  { code: "confidential", name_ar: "سري", restricted_access: true, allow_attachment_download: true, log_downloads: true },
+  { code: "top_secret", name_ar: "سري للغاية", restricted_access: true, allow_attachment_download: false, log_downloads: true, requires_special_permission: true }
+];
 
 export default function MessagesPage() {
   const [searchParams] = useSearchParams();
-  const [mailbox, setMailbox] = useState<Mailbox>("inbox");
+  const navigate = useNavigate();
+  const location = useLocation();
+  const [mailbox, setMailbox] = useState<Mailbox>(() => {
+    const initial = mailboxFromPath(window.location.pathname);
+    if (initial) return initial;
+    return new URLSearchParams(window.location.search).get("compose") === "1" ? "compose" : "inbox";
+  });
   const [messages, setMessages] = useState<InternalMessage[]>([]);
   const [users, setUsers] = useState<MessageUser[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
@@ -244,13 +304,17 @@ export default function MessagesPage() {
   const [isUsersLoading, setIsUsersLoading] = useState(false);
   const [messageSettings, setMessageSettings] = useState<MessageSettings>(defaultMessageSettings);
   const [messageCapabilities, setMessageCapabilities] = useState<MessageCapabilities>(defaultMessageCapabilities);
+  const [messageCounters, setMessageCounters] = useState({ unread: 0 });
   const [messageTemplates, setMessageTemplates] = useState<MessageTemplate[]>([]);
   const [messageTypeOptions, setMessageTypeOptions] = useState<MessageTypeOption[]>(defaultMessageTypeOptions);
+  const [messageClassificationOptions, setMessageClassificationOptions] = useState<MessageClassificationOption[]>(defaultMessageClassificationOptions);
   const [selectedTemplateKey, setSelectedTemplateKey] = useState("");
   const [templatesOpen, setTemplatesOpen] = useState(false);
-  const [form, setForm] = useState({ recipient_ids: [] as number[], message_type: defaultMessageSettings.default_message_type, subject: "", body: "", related_request_id: "" });
+  const [form, setForm] = useState({ recipient_ids: [] as number[], message_type: defaultMessageSettings.default_message_type, priority: "normal", classification_code: defaultMessageClassification, subject: "", body: "", related_request_id: "" });
+  const [priorityFilter, setPriorityFilter] = useState("");
   const [selectedDepartmentIds, setSelectedDepartmentIds] = useState<number[]>([]);
   const [departmentRecipientIds, setDepartmentRecipientIds] = useState<number[]>([]);
+  const [departmentBroadcastOpen, setDepartmentBroadcastOpen] = useState(false);
   const [attachments, setAttachments] = useState<File[]>([]);
   const [recipientSearch, setRecipientSearch] = useState("");
   const [editingDraftId, setEditingDraftId] = useState<number | null>(null);
@@ -263,6 +327,7 @@ export default function MessagesPage() {
   const [hasMore, setHasMore] = useState(false);
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [mailPanelCollapsed, setMailPanelCollapsed] = useState(false);
+  const [composeAiOpen, setComposeAiOpen] = useState(false);
   const [selectedAiSuggestion, setSelectedAiSuggestion] = useState<{ type: "reply"; body: string } | null>(null);
   const [selectedAiLoading, setSelectedAiLoading] = useState("");
   const [selectedAiError, setSelectedAiError] = useState("");
@@ -271,7 +336,7 @@ export default function MessagesPage() {
   const queryComposeInitialized = useRef(false);
 
   const selected = useMemo(() => messages.find((message) => message.id === selectedId) || null, [messages, selectedId]);
-  const unreadCount = messageSettings.enable_unread_badge ? messages.filter((message) => !message.is_read).length : 0;
+  const unreadCount = messageSettings.enable_unread_badge ? messageCounters.unread : 0;
   const inboxStyleGroups = useMemo(() => {
     if (mailbox !== "inbox") return null;
     const unread = messages.filter((message) => !message.is_read).sort(sortByNewest);
@@ -297,9 +362,42 @@ export default function MessagesPage() {
     () => messageTypeOptions.filter((option) => option.value !== "circular" || messageCapabilities.can_send_circular),
     [messageTypeOptions, messageCapabilities.can_send_circular]
   );
+  const selectedFormMessageType = useMemo(
+    () => messageTypeOptions.find((option) => option.value === form.message_type) || null,
+    [messageTypeOptions, form.message_type]
+  );
+  const selectedMessageType = useMemo(
+    () => (selected ? messageTypeOptions.find((option) => option.value === selected.message_type) || null : null),
+    [messageTypeOptions, selected]
+  );
+  const selectedClassification = useMemo(
+    () => (selected ? messageClassificationOptions.find((option) => option.code === (selected.classification_code || defaultMessageClassification)) || null : null),
+    [messageClassificationOptions, selected]
+  );
+  const selectedFormClassification = useMemo(
+    () => messageClassificationOptions.find((option) => option.code === form.classification_code) || null,
+    [messageClassificationOptions, form.classification_code]
+  );
+  const selectedCanReply = Boolean(messageSettings.allow_replies && selectedMessageType?.allow_reply !== false);
+  const requestLinkingBlocked = Boolean(form.related_request_id.trim() && !messageSettings.enable_linked_requests);
+  const requestLinkRequired = Boolean(!messageSettings.allow_general_messages || selectedFormMessageType?.requires_request);
+  const attachmentRequired = Boolean(selectedFormMessageType?.requires_attachment);
   const canUseAiDrafting = Boolean(aiStatus.is_enabled && aiStatus.allow_message_drafting && aiStatus.show_in_compose_message !== false);
   const canUseAiSummaries = Boolean(aiStatus.is_enabled && aiStatus.allow_summarization && aiStatus.show_in_message_details !== false);
   const canUseAiReplies = Boolean(aiStatus.is_enabled && aiStatus.allow_reply_suggestion && aiStatus.show_in_message_details !== false);
+
+  function openMailbox(nextMailbox: Mailbox) {
+    setMailbox(nextMailbox);
+    navigate(mailboxPaths[nextMailbox]);
+  }
+
+  async function loadCounters() {
+    try {
+      setMessageCounters(await apiFetch<{ unread: number }>("/messages/counters"));
+    } catch {
+      setMessageCounters({ unread: 0 });
+    }
+  }
 
   async function loadUsers() {
     setIsUsersLoading(true);
@@ -320,17 +418,25 @@ export default function MessagesPage() {
     setError("");
     const query = new URLSearchParams();
     if (search) query.set("search", search);
-    if (typeFilter) query.set("message_type", typeFilter);
-    if (senderFilter && nextMailbox === "inbox") query.set("sender_id", senderFilter);
+    if (nextMailbox === "official") query.set("official_only", "true");
+    if (nextMailbox === "clarifications") query.set("clarification_only", "true");
+    if (nextMailbox !== "official" && nextMailbox !== "clarifications" && typeFilter) query.set("message_type", typeFilter);
+    if (priorityFilter) query.set("priority", priorityFilter);
+    if (senderFilter && ["inbox", "unread", "official", "clarifications"].includes(nextMailbox)) query.set("sender_id", senderFilter);
     if (relatedRequestFilter) query.set("related_request", relatedRequestFilter);
     if (dateFrom) query.set("date_from", dateFrom);
     if (dateTo) query.set("date_to", dateTo);
-    if (nextMailbox === "inbox" && unreadOnly) query.set("unread_only", "true");
+    if ((nextMailbox === "inbox" && unreadOnly) || nextMailbox === "unread") query.set("unread_only", "true");
     if (nextMailbox === "archived") query.set("archived", "true");
     query.set("limit", String(pageSize));
     query.set("offset", String(mode === "append" ? messages.length : 0));
     try {
-      const endpoint = nextMailbox === "archived" ? archiveView : nextMailbox;
+      const endpoint =
+        nextMailbox === "archived"
+          ? archiveView
+          : nextMailbox === "official" || nextMailbox === "clarifications" || nextMailbox === "unread"
+            ? "inbox"
+            : nextMailbox;
       const data = await apiFetch<InternalMessage[]>(`/messages/${endpoint}?${query.toString()}`);
       setHasMore(data.length === pageSize);
       if (mode === "append") {
@@ -348,6 +454,7 @@ export default function MessagesPage() {
       setError("تعذر تحميل المراسلات.");
     } finally {
       setIsLoading(false);
+      loadCounters();
     }
   }
 
@@ -355,11 +462,33 @@ export default function MessagesPage() {
     loadUsers();
     loadMessageSettings();
     loadMessageCapabilities();
+    loadCounters();
     loadSignature();
     loadTemplates();
     loadTypes();
+    loadClassifications();
     loadAiStatus();
   }, []);
+
+  useEffect(() => {
+    if (searchParams.get("compose") === "1") return;
+    const pathMessageId = messageIdFromPath(location.pathname);
+    if (pathMessageId) {
+      if (mailbox !== "inbox") setMailbox("inbox");
+      setSelectedId(pathMessageId);
+      return;
+    }
+    const nextMailbox = mailboxFromPath(location.pathname);
+    if (!nextMailbox) {
+      navigate(mailboxPaths.inbox, { replace: true });
+      return;
+    }
+    if (nextMailbox !== mailbox) {
+      setMailbox(nextMailbox);
+      setSelectedId(null);
+      setSelectedIds([]);
+    }
+  }, [location.pathname, navigate, searchParams]);
 
   useEffect(() => {
     if (queryComposeInitialized.current || searchParams.get("compose") !== "1") return;
@@ -373,21 +502,24 @@ export default function MessagesPage() {
     setForm({
       recipient_ids: [],
       message_type: searchParams.get("message_type") || storedAiDraft?.message_type || defaultMessageType,
+      priority: searchParams.get("priority") || messageSettings.default_priority || "normal",
+      classification_code: searchParams.get("classification_code") || defaultMessageClassification,
       subject: searchParams.get("subject") || storedAiDraft?.subject || "",
       body: storedAiDraft?.body || "",
       related_request_id: searchParams.get("related_request_id") || ""
     });
     setMailbox("compose");
+    navigate(mailboxPaths.compose, { replace: true });
     window.requestAnimationFrame(() => bodyRef.current?.focus());
   }, [searchParams]);
 
   useEffect(() => {
     loadMessages(mailbox);
-  }, [mailbox, unreadOnly, archiveView, typeFilter]);
+  }, [mailbox, unreadOnly, archiveView, typeFilter, priorityFilter]);
 
   useEffect(() => {
     if (!messageSettings.allow_archiving && mailbox === "archived") {
-      setMailbox("inbox");
+      openMailbox("inbox");
       setArchiveView("inbox");
     }
   }, [messageSettings.allow_archiving, mailbox]);
@@ -396,10 +528,11 @@ export default function MessagesPage() {
     if (mailbox === "compose") return;
     function refreshMessagesImmediately() {
       loadMessages(mailbox);
+      loadCounters();
     }
     window.addEventListener("qib-messages-updated", refreshMessagesImmediately);
     return () => window.removeEventListener("qib-messages-updated", refreshMessagesImmediately);
-  }, [mailbox, unreadOnly, search, archiveView, typeFilter, senderFilter, relatedRequestFilter, dateFrom, dateTo]);
+  }, [mailbox, unreadOnly, search, archiveView, typeFilter, priorityFilter, senderFilter, relatedRequestFilter, dateFrom, dateTo]);
 
   useEffect(() => {
     if (!selectedId || mailbox === "compose") return;
@@ -422,10 +555,33 @@ export default function MessagesPage() {
     }
   }, [form.message_type, messageCapabilities.can_send_circular, messageSettings.default_message_type]);
 
+  useEffect(() => {
+    if (messageTypeOptions.length === 0) return;
+    const fallbackType = messageTypeOptions.some((option) => option.value === messageSettings.default_message_type)
+      ? messageSettings.default_message_type
+      : messageTypeOptions[0].value;
+    setForm((current) => ({
+      ...current,
+      message_type: messageTypeOptions.some((option) => option.value === current.message_type) ? current.message_type : fallbackType,
+      priority: current.priority && current.priority !== "normal" ? current.priority : messageSettings.default_priority || "normal"
+    }));
+  }, [messageTypeOptions, messageSettings.default_message_type, messageSettings.default_priority]);
+
+  useEffect(() => {
+    if (messageClassificationOptions.length === 0) return;
+    setForm((current) => ({
+      ...current,
+      classification_code: messageClassificationOptions.some((option) => option.code === current.classification_code)
+        ? current.classification_code
+        : messageClassificationOptions.find((option) => option.code === defaultMessageClassification)?.code || messageClassificationOptions[0].code
+    }));
+  }, [messageClassificationOptions]);
+
   async function loadMessageDetails(messageId: number) {
     try {
       const details = await apiFetch<InternalMessage>(`/messages/${messageId}`);
-      setMessages((current) => current.map((item) => (item.id === details.id ? details : item)));
+      setMessages((current) => (current.some((item) => item.id === details.id) ? current.map((item) => (item.id === details.id ? details : item)) : [details, ...current]));
+      setSelectedId(details.id);
     } catch {
       undefined;
     }
@@ -440,6 +596,7 @@ export default function MessagesPage() {
     try {
       const updated = await apiFetch<InternalMessage>(`/messages/${message.id}/read`, { method: "POST" });
       setMessages((current) => current.map((item) => (item.id === updated.id ? updated : item)));
+      await loadCounters();
       window.dispatchEvent(new Event("qib-messages-updated"));
       await loadMessageDetails(message.id);
     } catch {
@@ -451,6 +608,22 @@ export default function MessagesPage() {
     event.preventDefault();
     setFeedback("");
     setError("");
+    if (!messageSettings.enabled) {
+      setError("نظام المراسلات غير مفعل من إعدادات المراسلات.");
+      return;
+    }
+    if (requestLinkingBlocked) {
+      setError("ربط المراسلات بالطلبات غير مفعل من إعدادات المراسلات.");
+      return;
+    }
+    if (requestLinkRequired && !form.related_request_id.trim()) {
+      setError(selectedFormMessageType?.requires_request ? "هذا النوع من الرسائل يتطلب ربط الرسالة بطلب." : "المراسلات العامة غير مفعلة. يجب إرسال الرسالة من داخل طلب أو ربطها بطلب.");
+      return;
+    }
+    if (attachmentRequired && attachments.length === 0 && !editingDraftId) {
+      setError("هذا النوع من الرسائل يتطلب إضافة مرفق.");
+      return;
+    }
     try {
       if (replySource) {
         if (!messageSettings.allow_replies) {
@@ -460,13 +633,15 @@ export default function MessagesPage() {
         if (attachments.length > 0) {
           const data = new FormData();
           data.append("message_type", form.message_type);
+          data.append("priority", form.priority);
+          data.append("classification_code", form.classification_code);
           data.append("body", form.body);
           attachments.forEach((file) => data.append("attachments", file));
           await apiFetch<InternalMessage>(`/messages/${replySource.id}/reply-with-attachments`, { method: "POST", body: data });
         } else {
           await apiFetch<InternalMessage>(`/messages/${replySource.id}/reply`, {
             method: "POST",
-            body: JSON.stringify({ body: form.body, message_type: form.message_type })
+            body: JSON.stringify({ body: form.body, message_type: form.message_type, priority: form.priority, classification_code: form.classification_code })
           });
         }
       } else if (forwardSource) {
@@ -476,7 +651,7 @@ export default function MessagesPage() {
         }
         await apiFetch<InternalMessage>(`/messages/${forwardSource.id}/forward`, {
           method: "POST",
-          body: JSON.stringify({ recipient_ids: form.recipient_ids, message_type: form.message_type, note: form.body.trim() || undefined })
+          body: JSON.stringify({ recipient_ids: form.recipient_ids, message_type: form.message_type, priority: form.priority, classification_code: form.classification_code, note: form.body.trim() || undefined })
         });
       } else if (editingDraftId) {
         await apiFetch<InternalMessage>(`/messages/drafts/${editingDraftId}/send`, {
@@ -488,6 +663,8 @@ export default function MessagesPage() {
         const data = new FormData();
         data.append("recipient_ids", form.recipient_ids.join(","));
         data.append("message_type", form.message_type);
+        data.append("priority", form.priority);
+        data.append("classification_code", form.classification_code);
         data.append("subject", form.subject);
         data.append("body", form.body);
         if (relatedRequestId) data.append("related_request_id", relatedRequestId);
@@ -500,7 +677,7 @@ export default function MessagesPage() {
           body: JSON.stringify({ ...form, related_request_id: relatedRequestId })
         });
       }
-      setForm({ recipient_ids: [], message_type: messageSettings.default_message_type || defaultMessageType, subject: "", body: "", related_request_id: "" });
+      setForm({ recipient_ids: [], message_type: messageSettings.default_message_type || defaultMessageType, priority: messageSettings.default_priority || "normal", classification_code: defaultMessageClassification, subject: "", body: "", related_request_id: "" });
       setSelectedDepartmentIds([]);
       setDepartmentRecipientIds([]);
       setAttachments([]);
@@ -508,7 +685,7 @@ export default function MessagesPage() {
       setForwardSource(null);
       setReplySource(null);
       setFeedback(replySource ? "تم إرسال الرد." : "تم إرسال الرسالة بنجاح.");
-      setMailbox("sent");
+      openMailbox("sent");
     } catch (error) {
       const detail = error instanceof Error ? extractApiError(error.message) : "";
       setError(detail || "تعذر إرسال الرسالة. تأكد من اختيار مستلم وكتابة العنوان والمحتوى.");
@@ -518,6 +695,14 @@ export default function MessagesPage() {
   async function saveDraft() {
     setFeedback("");
     setError("");
+    if (!messageSettings.enabled) {
+      setError("نظام المراسلات غير مفعل من إعدادات المراسلات.");
+      return;
+    }
+    if (!messageSettings.enable_drafts) {
+      setError("المسودات غير مفعلة من إعدادات المراسلات.");
+      return;
+    }
     if (replySource || forwardSource) {
       setError("حفظ المسودة متاح للرسائل الجديدة فقط حالياً.");
       return;
@@ -532,6 +717,8 @@ export default function MessagesPage() {
         const data = new FormData();
         data.append("recipient_ids", form.recipient_ids.join(","));
         data.append("message_type", form.message_type);
+        data.append("priority", form.priority);
+        data.append("classification_code", form.classification_code);
         data.append("subject", form.subject);
         data.append("body", form.body);
         if (form.related_request_id.trim()) data.append("related_request_id", form.related_request_id.trim());
@@ -557,6 +744,19 @@ export default function MessagesPage() {
     }
   }
 
+  function clearComposeForm() {
+    setForm({ recipient_ids: [], message_type: messageSettings.default_message_type || defaultMessageType, priority: messageSettings.default_priority || "normal", classification_code: defaultMessageClassification, subject: "", body: "", related_request_id: "" });
+    setSelectedDepartmentIds([]);
+    setDepartmentRecipientIds([]);
+    setAttachments([]);
+    setRecipientSearch("");
+    setEditingDraftId(null);
+    setForwardSource(null);
+    setReplySource(null);
+    setDepartmentBroadcastOpen(false);
+    if (bodyRef.current) bodyRef.current.innerHTML = "";
+  }
+
   async function archiveSelected() {
     if (!selected) return;
     if (!messageSettings.allow_archiving) {
@@ -571,6 +771,21 @@ export default function MessagesPage() {
       setFeedback("تمت أرشفة الرسالة.");
     } catch {
       setError("تعذر أرشفة الرسالة.");
+    }
+  }
+
+  async function markSelectedReadState(isRead: boolean) {
+    if (!selected) return;
+    try {
+      const endpoint = isRead ? "mark-read" : "mark-unread";
+      const updated = await apiFetch<InternalMessage>(`/messages/${selected.id}/${endpoint}`, { method: "POST" });
+      setMessages((current) => current.map((message) => (message.id === updated.id ? updated : message)));
+      setSelectedId(updated.id);
+      await loadCounters();
+      window.dispatchEvent(new Event("qib-messages-updated"));
+      setFeedback(isRead ? "تم تعليم الرسالة كمقروءة." : "تم تعليم الرسالة كغير مقروءة.");
+    } catch {
+      setError(isRead ? "تعذر تعليم الرسالة كمقروءة." : "تعذر تعليم الرسالة كغير مقروءة.");
     }
   }
 
@@ -650,6 +865,7 @@ export default function MessagesPage() {
       await apiFetch<void>("/messages/bulk/read", { method: "POST", body: JSON.stringify({ message_ids: selectedIds }) });
       setMessages((current) => current.map((message) => (selectedIds.includes(message.id) ? { ...message, is_read: true } : message)));
       setSelectedIds([]);
+      await loadCounters();
       window.dispatchEvent(new Event("qib-messages-updated"));
       setFeedback("تم تعليم الرسائل كمقروءة.");
     } catch {
@@ -725,7 +941,7 @@ export default function MessagesPage() {
     try {
       const data = await apiFetch<MessageSettings>("/messages/settings");
       setMessageSettings({ ...defaultMessageSettings, ...data });
-      setForm((current) => ({ ...current, message_type: current.message_type || data.default_message_type || defaultMessageType }));
+      setForm((current) => ({ ...current, message_type: current.message_type || data.default_message_type || defaultMessageType, priority: current.priority || data.default_priority || "normal" }));
     } catch {
       setMessageSettings(defaultMessageSettings);
     }
@@ -745,6 +961,15 @@ export default function MessagesPage() {
       setMessageTypeOptions(types.length ? types : defaultMessageTypeOptions);
     } catch {
       setMessageTypeOptions(defaultMessageTypeOptions);
+    }
+  }
+
+  async function loadClassifications() {
+    try {
+      const classifications = await apiFetch<MessageClassificationOption[]>("/messages/classifications");
+      setMessageClassificationOptions(classifications.length ? classifications : defaultMessageClassificationOptions);
+    } catch {
+      setMessageClassificationOptions(defaultMessageClassificationOptions);
     }
   }
 
@@ -807,27 +1032,37 @@ export default function MessagesPage() {
     setForm({
       recipient_ids: [],
       message_type: message.message_type || defaultMessageType,
+      priority: message.priority || "normal",
+      classification_code: message.classification_code || defaultMessageClassification,
       subject: message.subject.startsWith("تحويل:") ? message.subject : `تحويل: ${message.subject}`,
       body: "",
       related_request_id: message.related_request_number || (message.related_request_id ? String(message.related_request_id) : "")
     });
     setAttachments([]);
     setRecipientSearch("");
-    setMailbox("compose");
+    setComposeAiOpen(false);
+    setDepartmentBroadcastOpen(false);
+    openMailbox("compose");
     window.requestAnimationFrame(() => bodyRef.current?.focus());
   }
 
   function cancelForward() {
     setForwardSource(null);
-    setForm({ recipient_ids: [], message_type: messageSettings.default_message_type || defaultMessageType, subject: "", body: "", related_request_id: "" });
+    setForm({ recipient_ids: [], message_type: messageSettings.default_message_type || defaultMessageType, priority: messageSettings.default_priority || "normal", classification_code: defaultMessageClassification, subject: "", body: "", related_request_id: "" });
     setSelectedDepartmentIds([]);
     setDepartmentRecipientIds([]);
     setRecipientSearch("");
+    setDepartmentBroadcastOpen(false);
   }
 
   function beginReply(message: InternalMessage) {
     if (!messageSettings.allow_replies) {
       setError("الرد على الرسائل معطل من إعدادات المراسلات.");
+      return;
+    }
+    const typeConfig = messageTypeOptions.find((option) => option.value === message.message_type);
+    if (typeConfig?.allow_reply === false) {
+      setError("هذا النوع من الرسائل لا يسمح بالرد حسب إعدادات المراسلات.");
       return;
     }
     setReplySource(message);
@@ -837,28 +1072,37 @@ export default function MessagesPage() {
     setForm({
       recipient_ids: [],
       message_type: "reply_to_clarification",
+      priority: message.priority || "normal",
+      classification_code: message.classification_code || defaultMessageClassification,
       subject: message.subject.startsWith("رد:") ? message.subject : `رد: ${message.subject}`,
       body: "",
       related_request_id: message.related_request_number || (message.related_request_id ? String(message.related_request_id) : "")
     });
     setAttachments([]);
     setRecipientSearch("");
-    setMailbox("compose");
+    setComposeAiOpen(false);
+    setDepartmentBroadcastOpen(false);
+    openMailbox("compose");
     window.requestAnimationFrame(() => bodyRef.current?.focus());
   }
 
   function cancelReply() {
     setReplySource(null);
-    setForm({ recipient_ids: [], message_type: messageSettings.default_message_type || defaultMessageType, subject: "", body: "", related_request_id: "" });
+    setForm({ recipient_ids: [], message_type: messageSettings.default_message_type || defaultMessageType, priority: messageSettings.default_priority || "normal", classification_code: defaultMessageClassification, subject: "", body: "", related_request_id: "" });
     setSelectedDepartmentIds([]);
     setDepartmentRecipientIds([]);
     setRecipientSearch("");
+    setDepartmentBroadcastOpen(false);
   }
 
   function startNewMessage() {
+    if (!messageSettings.enabled) {
+      setError("نظام المراسلات غير مفعل من إعدادات المراسلات.");
+      return;
+    }
     setMailPanelCollapsed(true);
     window.dispatchEvent(new CustomEvent("qib-sidebar-collapse", { detail: { collapsed: true } }));
-    setForm({ recipient_ids: [], message_type: messageSettings.default_message_type || defaultMessageType, subject: "", body: "", related_request_id: "" });
+    setForm({ recipient_ids: [], message_type: messageSettings.default_message_type || defaultMessageType, priority: messageSettings.default_priority || "normal", classification_code: defaultMessageClassification, subject: "", body: "", related_request_id: "" });
     setSelectedTemplateKey("");
     setSelectedDepartmentIds([]);
     setDepartmentRecipientIds([]);
@@ -867,7 +1111,9 @@ export default function MessagesPage() {
     setEditingDraftId(null);
     setForwardSource(null);
     setReplySource(null);
-    setMailbox("compose");
+    setComposeAiOpen(false);
+    setDepartmentBroadcastOpen(false);
+    openMailbox("compose");
     window.requestAnimationFrame(() => bodyRef.current?.focus());
   }
 
@@ -881,13 +1127,17 @@ export default function MessagesPage() {
     setForm({
       recipient_ids: message.recipient_ids || [],
       message_type: message.message_type || defaultMessageType,
+      priority: message.priority || "normal",
+      classification_code: message.classification_code || defaultMessageClassification,
       subject: message.subject,
       body: message.body,
       related_request_id: message.related_request_number || (message.related_request_id ? String(message.related_request_id) : "")
     });
     setAttachments([]);
     setRecipientSearch("");
-    setMailbox("compose");
+    setComposeAiOpen(false);
+    setDepartmentBroadcastOpen(false);
+    openMailbox("compose");
     window.requestAnimationFrame(() => bodyRef.current?.focus());
   }
 
@@ -1151,6 +1401,87 @@ export default function MessagesPage() {
           {error || feedback}
         </div>
       )}
+      {!messageSettings.enabled && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm font-bold text-amber-900">
+          نظام المراسلات غير مفعل من إعدادات المراسلات. يمكنك مراجعة الإعدادات أو تفعيله من شاشة إعدادات المراسلات.
+        </div>
+      )}
+
+      <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+          <div>
+            <p className="text-sm font-black text-bank-700">{messageSettings.module_name_ar || "المراسلات الداخلية"}</p>
+            <h2 className="mt-1 text-2xl font-black text-slate-950">{mailboxTitle(mailbox)}</h2>
+          </div>
+          <div className="grid gap-2 md:grid-cols-[minmax(240px,1fr)_180px_150px_auto_auto] xl:w-[min(100%,62rem)]">
+            <div className="relative">
+              <Search className="pointer-events-none absolute right-3 top-3 h-4 w-4 text-slate-400" />
+              <input
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                onKeyDown={(event) => event.key === "Enter" && loadMessages(mailbox)}
+                placeholder="بحث في المراسلات"
+                className="h-11 w-full rounded-md border border-slate-300 bg-white pr-9 pl-3 text-sm outline-none focus:border-bank-600 focus:ring-2 focus:ring-bank-100"
+                disabled={mailbox === "compose"}
+              />
+            </div>
+            <select
+              value={typeFilter}
+              onChange={(event) => setTypeFilter(event.target.value)}
+              disabled={mailbox === "compose" || mailbox === "official" || mailbox === "clarifications"}
+              className="h-11 rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-bank-600 focus:ring-2 focus:ring-bank-100 disabled:opacity-60"
+              title="نوع الرسالة"
+            >
+              <option value="">نوع الرسالة</option>
+              {messageTypeOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+            <select
+              value={priorityFilter}
+              onChange={(event) => setPriorityFilter(event.target.value)}
+              disabled={mailbox === "compose"}
+              className="h-11 rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-bank-600 focus:ring-2 focus:ring-bank-100 disabled:opacity-60"
+              title="الأولوية"
+            >
+              <option value="">الأولوية</option>
+              <option value="normal">عادية</option>
+              <option value="high">مرتفعة</option>
+              <option value="urgent">عاجلة</option>
+            </select>
+            <button
+              type="button"
+              onClick={() => loadMessages(mailbox)}
+              disabled={isLoading || mailbox === "compose"}
+              className="inline-flex h-11 items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-4 text-sm font-bold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <RefreshCw className={`h-4 w-4 ${isLoading ? "animate-spin" : ""}`} />
+              تحديث
+            </button>
+            <button
+              type="button"
+              onClick={startNewMessage}
+              disabled={!messageSettings.enabled}
+              className="inline-flex h-11 items-center justify-center gap-2 rounded-md border-2 border-bank-700 bg-white px-4 text-sm font-black text-bank-700 hover:bg-bank-50 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <SendHorizonal className="h-4 w-4" />
+              رسالة جديدة
+            </button>
+          </div>
+        </div>
+        {messageSettings.enable_unread_badge && (
+          <div className="mt-3 flex flex-wrap items-center gap-2 text-xs font-bold text-slate-500">
+            <button type="button" onClick={() => openMailbox("unread")} className="rounded-full bg-bank-50 px-3 py-1 text-bank-800 hover:bg-bank-100">
+              غير المقروء: {unreadCount}
+            </button>
+            {typeFilter && mailbox !== "official" && mailbox !== "clarifications" && <span className="rounded-full bg-slate-100 px-3 py-1">فلتر التصنيف مفعل</span>}
+            {priorityFilter && <span className="rounded-full bg-slate-100 px-3 py-1">فلتر الأولوية مفعل</span>}
+          </div>
+        )}
+
+      </div>
 
       <section className={`grid gap-5 ${mailPanelCollapsed ? "xl:grid-cols-[84px_1fr]" : "xl:grid-cols-[380px_1fr]"}`}>
         <div className="space-y-4">
@@ -1164,17 +1495,21 @@ export default function MessagesPage() {
               {mailPanelCollapsed ? <ChevronLeft className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
               {!mailPanelCollapsed && "طي القائمة"}
             </button>
-            <Tab collapsed={mailPanelCollapsed} active={mailbox === "inbox"} onClick={() => setMailbox("inbox")} icon={Inbox} label={`الوارد${unreadCount ? ` (${unreadCount})` : ""}`} />
-            <Tab collapsed={mailPanelCollapsed} active={mailbox === "sent"} onClick={() => setMailbox("sent")} icon={Send} label="المرسل" />
-            {messageSettings.enable_drafts && <Tab collapsed={mailPanelCollapsed} active={mailbox === "drafts"} onClick={() => setMailbox("drafts")} icon={Save} label="المسودات" />}
-            <Tab collapsed={mailPanelCollapsed} active={mailbox === "compose"} onClick={startNewMessage} icon={SendHorizonal} label="رسالة جديدة" featured />
+            <Tab collapsed={mailPanelCollapsed} active={mailbox === "inbox"} onClick={() => openMailbox("inbox")} icon={Inbox} label="الوارد" />
+            <Tab collapsed={mailPanelCollapsed} active={mailbox === "sent"} onClick={() => openMailbox("sent")} icon={Send} label="الصادر" />
+            <Tab collapsed={mailPanelCollapsed} active={mailbox === "unread"} onClick={() => openMailbox("unread")} icon={MailOpen} label={`غير المقروءة${unreadCount ? ` (${unreadCount})` : ""}`} />
+            {messageSettings.enable_linked_requests && <Tab collapsed={mailPanelCollapsed} active={mailbox === "request-linked"} onClick={() => openMailbox("request-linked")} icon={Link} label="مرتبطة بالطلبات" />}
+            <Tab collapsed={mailPanelCollapsed} active={mailbox === "official"} onClick={() => openMailbox("official")} icon={FileText} label="الرسمية" />
+            <Tab collapsed={mailPanelCollapsed} active={mailbox === "clarifications"} onClick={() => openMailbox("clarifications")} icon={Quote} label="طلبات الاستيضاح" />
+            {messageSettings.enable_drafts && <Tab collapsed={mailPanelCollapsed} active={mailbox === "drafts"} onClick={() => openMailbox("drafts")} icon={Save} label="المسودات" />}
+            <Tab collapsed={mailPanelCollapsed} active={mailbox === "compose"} onClick={startNewMessage} icon={SendHorizonal} label="رسالة جديدة" featured disabled={!messageSettings.enabled} />
           </div>
           <button type="button" onClick={() => loadMessages(mailbox)} disabled={isLoading || mailbox === "compose"} className="flex h-10 w-full items-center justify-center gap-2 rounded-md border border-slate-200 bg-white text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60" title="تحديث">
             <RefreshCw className={`h-4 w-4 ${isLoading ? "animate-spin" : ""}`} />
             {!mailPanelCollapsed && "تحديث"}
           </button>
           {messageSettings.allow_archiving && (
-            <button type="button" onClick={() => setMailbox("archived")} className={`flex h-10 w-full items-center justify-center gap-2 rounded-md border text-sm font-semibold ${mailbox === "archived" ? "border-bank-200 bg-bank-50 text-bank-700" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`} title="الأرشيف">
+            <button type="button" onClick={() => openMailbox("archived")} className={`flex h-10 w-full items-center justify-center gap-2 rounded-md border text-sm font-semibold ${mailbox === "archived" ? "border-bank-200 bg-bank-50 text-bank-700" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`} title="الأرشيف">
               <Archive className="h-4 w-4" />
               {!mailPanelCollapsed && "الأرشيف"}
             </button>
@@ -1221,6 +1556,7 @@ export default function MessagesPage() {
                     <select
                       value={typeFilter}
                       onChange={(event) => setTypeFilter(event.target.value)}
+                      disabled={mailbox === "official" || mailbox === "clarifications"}
                       className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-bank-600 focus:ring-2 focus:ring-bank-100"
                     >
                       <option value="">كل التصنيفات</option>
@@ -1229,6 +1565,16 @@ export default function MessagesPage() {
                           {option.label}
                         </option>
                       ))}
+                    </select>
+                    <select
+                      value={priorityFilter}
+                      onChange={(event) => setPriorityFilter(event.target.value)}
+                      className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-bank-600 focus:ring-2 focus:ring-bank-100"
+                    >
+                      <option value="">كل الأولويات</option>
+                      <option value="normal">عادية</option>
+                      <option value="high">مرتفعة</option>
+                      <option value="urgent">عاجلة</option>
                     </select>
                     {mailbox === "inbox" && (
                   <select
@@ -1262,6 +1608,7 @@ export default function MessagesPage() {
                         onClick={() => {
                           setSearch("");
                           setTypeFilter("");
+                          setPriorityFilter("");
                           setSenderFilter("");
                           setRelatedRequestFilter("");
                           setDateFrom("");
@@ -1304,6 +1651,7 @@ export default function MessagesPage() {
                         count={inboxStyleGroups.unread.length}
                         messages={inboxStyleGroups.unread}
                         messageTypeOptions={messageTypeOptions}
+                        messageClassificationOptions={messageClassificationOptions}
                         selectedIds={selectedIds}
                         selectedId={selected?.id ?? null}
                         mailbox={mailbox}
@@ -1319,6 +1667,7 @@ export default function MessagesPage() {
                         count={inboxStyleGroups.read.length}
                         messages={inboxStyleGroups.read}
                         messageTypeOptions={messageTypeOptions}
+                        messageClassificationOptions={messageClassificationOptions}
                         selectedIds={selectedIds}
                         selectedId={selected?.id ?? null}
                         mailbox={mailbox}
@@ -1330,7 +1679,7 @@ export default function MessagesPage() {
                     )}
                   </>
                 ) : (
-                  messages.map((message) => <MessageListItem key={message.id} message={message} messageTypeOptions={messageTypeOptions} selectedIds={selectedIds} selectedId={selected?.id ?? null} mailbox={mailbox} archiveView={archiveView} showUnreadBadge={messageSettings.enable_unread_badge} onSelect={selectMessage} onToggleSelection={toggleMessageSelection} />)
+                  messages.map((message) => <MessageListItem key={message.id} message={message} messageTypeOptions={messageTypeOptions} messageClassificationOptions={messageClassificationOptions} selectedIds={selectedIds} selectedId={selected?.id ?? null} mailbox={mailbox} archiveView={archiveView} showUnreadBadge={messageSettings.enable_unread_badge} onSelect={selectMessage} onToggleSelection={toggleMessageSelection} />)
                 )}
                 {hasMore && (
                   <div className="p-4">
@@ -1346,41 +1695,12 @@ export default function MessagesPage() {
 
         {mailbox === "compose" ? (
           <form onSubmit={submit} className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
-            <div className="flex flex-col gap-3 border-b border-slate-200 bg-slate-50 px-5 py-4 lg:flex-row lg:items-center lg:justify-between">
+            <div className="border-b border-slate-200 bg-slate-50 px-5 py-4">
               <div>
                 <h3 className="text-lg font-bold text-slate-950">{replySource ? "رد على رسالة" : forwardSource ? "تحويل رسالة" : editingDraftId ? "تحرير مسودة" : "رسالة جديدة"}</h3>
                 <p className="mt-1 text-xs text-slate-500">
                   {replySource ? `اكتب ردك على: ${replySource.subject}` : forwardSource ? `سيتم تضمين الرسالة الأصلية: ${forwardSource.subject}` : editingDraftId ? "أكمل المسودة ثم احفظها أو أرسلها." : "اكتب رسالة داخلية مع مستلمين ومرفقات وربط اختياري بطلب."}
                 </p>
-              </div>
-              <div className="flex items-center gap-2">
-                {messageSettings.enable_drafts && !replySource && !forwardSource && (
-                  <button type="button" onClick={saveDraft} className="flex h-10 items-center gap-2 rounded-md border border-bank-200 bg-bank-50 px-3 text-sm font-bold text-bank-800 hover:bg-bank-100">
-                    <Save className="h-4 w-4" />
-                    حفظ مسودة
-                  </button>
-                )}
-                <Button type="submit" className="gap-2">
-                  <SendHorizonal className="h-4 w-4" />
-                  {replySource ? "إرسال الرد" : editingDraftId ? "إرسال المسودة" : "إرسال"}
-                </Button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setForm({ recipient_ids: [], message_type: messageSettings.default_message_type || defaultMessageType, subject: "", body: "", related_request_id: "" });
-                    setSelectedDepartmentIds([]);
-                    setDepartmentRecipientIds([]);
-                    setAttachments([]);
-                    setRecipientSearch("");
-                    setEditingDraftId(null);
-                    setForwardSource(null);
-                    setReplySource(null);
-                  }}
-                  className="flex h-10 items-center gap-2 rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50"
-                >
-                  <Eraser className="h-4 w-4" />
-                  تفريغ
-                </button>
               </div>
             </div>
 
@@ -1418,7 +1738,7 @@ export default function MessagesPage() {
               <div className="p-5">
                 <div className="grid gap-4">
                   <div className="space-y-3">
-                    <div className="grid gap-3 lg:grid-cols-[220px_1fr]">
+                    <div className="grid gap-3 lg:grid-cols-[220px_170px_190px_1fr]">
                       <label className="block space-y-2 text-sm font-bold text-slate-700">
                         تصنيف الرسالة
                         <select
@@ -1434,6 +1754,32 @@ export default function MessagesPage() {
                         </select>
                       </label>
                       <label className="block space-y-2 text-sm font-bold text-slate-700">
+                        الأولوية
+                        <select
+                          value={form.priority}
+                          onChange={(event) => setForm({ ...form, priority: event.target.value })}
+                          className="h-12 w-full rounded-md border border-slate-200 bg-white px-3 text-sm font-semibold outline-none focus:border-bank-600 focus:ring-2 focus:ring-bank-100"
+                        >
+                          <option value="normal">عادية</option>
+                          <option value="high">مرتفعة</option>
+                          <option value="urgent">عاجلة</option>
+                        </select>
+                      </label>
+                      <label className="block space-y-2 text-sm font-bold text-slate-700">
+                        تصنيف السرية
+                        <select
+                          value={form.classification_code}
+                          onChange={(event) => setForm({ ...form, classification_code: event.target.value })}
+                          className="h-12 w-full rounded-md border border-slate-200 bg-white px-3 text-sm font-semibold outline-none focus:border-bank-600 focus:ring-2 focus:ring-bank-100"
+                        >
+                          {messageClassificationOptions.map((option) => (
+                            <option key={option.code} value={option.code}>
+                              {option.name_ar}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="block space-y-2 text-sm font-bold text-slate-700">
                         الموضوع
                         <input
                           value={form.subject}
@@ -1444,6 +1790,24 @@ export default function MessagesPage() {
                         />
                       </label>
                     </div>
+                    {selectedFormClassification?.restricted_access && (
+                      <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-bold text-amber-900">
+                        تم اختيار تصنيف سري. ستظهر الرسالة فقط للأطراف المصرح لهم، وقد يتم تسجيل تنزيل المرفقات حسب إعدادات التصنيف.
+                      </div>
+                    )}
+                    {(requestLinkRequired || requestLinkingBlocked || attachmentRequired || form.related_request_id.trim()) && (
+                      <div className={`rounded-md border px-4 py-3 text-sm font-bold ${requestLinkingBlocked ? "border-red-200 bg-red-50 text-red-700" : "border-amber-200 bg-amber-50 text-amber-900"}`}>
+                        {requestLinkingBlocked ? (
+                          "ربط المراسلات بالطلبات غير مفعل حالياً، لذلك لا يمكن إرسال رسالة مرتبطة بطلب."
+                        ) : (
+                          <div className="space-y-1">
+                            {form.related_request_id.trim() && <p>الطلب المرتبط: {form.related_request_id}</p>}
+                            {requestLinkRequired && <p>{selectedFormMessageType?.requires_request ? "هذا التصنيف يتطلب طلباً مرتبطاً." : "المراسلات العامة غير مفعلة، لذلك يجب إرسال الرسالة من داخل طلب."}</p>}
+                            {attachmentRequired && <p>هذا التصنيف يتطلب مرفقاً قبل الإرسال.</p>}
+                          </div>
+                        )}
+                      </div>
+                    )}
                     {replySource ? (
                       <div className="rounded-md border border-sky-100 bg-sky-50 px-4 py-3 text-sm leading-6 text-sky-900">
                         <p className="font-bold">سيتم الرد على أطراف المحادثة تلقائياً</p>
@@ -1491,31 +1855,52 @@ export default function MessagesPage() {
                           </div>
                         )}
                       </div>}
-                      {messageSettings.allow_send_to_department && messageSettings.allow_multiple_recipients && messageSettings.enable_circulars && messageSettings.enable_department_broadcasts && messageCapabilities.can_send_department_broadcast && <div className="rounded-md border border-bank-100 bg-bank-50/60 p-3">
-                        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                          <span className="text-xs font-bold text-slate-600">تعميم حسب الإدارات</span>
-                          <button type="button" onClick={clearDepartmentRecipients} disabled={selectedDepartmentIds.length === 0} className="h-8 rounded-md border border-slate-200 bg-white px-3 text-xs font-bold text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50">
-                            مسح الإدارات
-                          </button>
+                      {messageSettings.allow_send_to_department && messageSettings.allow_multiple_recipients && messageSettings.enable_circulars && messageSettings.enable_department_broadcasts && messageCapabilities.can_send_department_broadcast && (
+                        <div className="rounded-md border border-bank-100 bg-bank-50/60 p-3">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setDepartmentBroadcastOpen((value) => !value)}
+                              className="inline-flex h-9 items-center gap-2 rounded-md border border-bank-100 bg-white px-3 text-xs font-bold text-bank-800 hover:bg-bank-50"
+                              aria-expanded={departmentBroadcastOpen}
+                            >
+                              {departmentBroadcastOpen ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
+                              تعميم حسب الإدارات
+                              {selectedDepartmentIds.length > 0 && (
+                                <span className="rounded-full bg-bank-100 px-2 py-0.5 text-[11px] text-bank-800">
+                                  {selectedDepartmentIds.length.toLocaleString("ar")} محددة
+                                </span>
+                              )}
+                            </button>
+                            {departmentBroadcastOpen && (
+                              <button type="button" onClick={clearDepartmentRecipients} disabled={selectedDepartmentIds.length === 0} className="h-8 rounded-md border border-slate-200 bg-white px-3 text-xs font-bold text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50">
+                                مسح الإدارات
+                              </button>
+                            )}
+                          </div>
+                          {departmentBroadcastOpen && (
+                            <>
+                              <div className="mt-3 grid max-h-40 gap-2 overflow-y-auto rounded-md border border-slate-200 bg-white p-2 sm:grid-cols-2">
+                                {departmentOptions.map((department) => (
+                                  <label key={department.id} className={`flex cursor-pointer items-center justify-between gap-3 rounded-md border px-3 py-2 text-sm font-bold ${selectedDepartmentIds.includes(department.id) ? "border-bank-200 bg-bank-50 text-bank-800" : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"}`}>
+                                    <span className="truncate">{department.name}</span>
+                                    <input
+                                      type="checkbox"
+                                      checked={selectedDepartmentIds.includes(department.id)}
+                                      onChange={() => toggleDepartmentRecipients(department.id)}
+                                      className="h-4 w-4 shrink-0"
+                                    />
+                                  </label>
+                                ))}
+                                {departmentOptions.length === 0 && <p className="p-2 text-xs text-slate-500">لا توجد إدارات متاحة ضمن قائمة المستلمين.</p>}
+                              </div>
+                              <p className="mt-2 text-xs leading-5 text-slate-500">
+                                {departmentRecipientBehaviorText()} يمكنك اختيار أكثر من إدارة، وسيتم إبقاء المستلمين الذين أضفتهم يدوياً.
+                              </p>
+                            </>
+                          )}
                         </div>
-                        <div className="grid max-h-40 gap-2 overflow-y-auto rounded-md border border-slate-200 bg-white p-2 sm:grid-cols-2">
-                          {departmentOptions.map((department) => (
-                            <label key={department.id} className={`flex cursor-pointer items-center justify-between gap-3 rounded-md border px-3 py-2 text-sm font-bold ${selectedDepartmentIds.includes(department.id) ? "border-bank-200 bg-bank-50 text-bank-800" : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"}`}>
-                              <span className="truncate">{department.name}</span>
-                              <input
-                                type="checkbox"
-                                checked={selectedDepartmentIds.includes(department.id)}
-                                onChange={() => toggleDepartmentRecipients(department.id)}
-                                className="h-4 w-4 shrink-0"
-                              />
-                            </label>
-                          ))}
-                          {departmentOptions.length === 0 && <p className="p-2 text-xs text-slate-500">لا توجد إدارات متاحة ضمن قائمة المستلمين.</p>}
-                        </div>
-                        <p className="mt-2 text-xs leading-5 text-slate-500">
-                          {departmentRecipientBehaviorText()} يمكنك اختيار أكثر من إدارة، وسيتم إبقاء المستلمين الذين أضفتهم يدوياً.
-                        </p>
-                      </div>}
+                      )}
                       </>
                     )}
 
@@ -1524,14 +1909,33 @@ export default function MessagesPage() {
               </div>
 
               {canUseAiDrafting && (
-                <div className="border-t border-slate-100 bg-slate-50/60 p-5">
-                  <AIAssistantBox
-                    body={form.body}
-                    relatedRequestId={form.related_request_id}
-                    requestType={form.message_type}
-                    onUseDraft={applyAiDraft}
-                    onUseBody={applyAiBody}
-                  />
+                <div className="border-t border-slate-100 bg-slate-50/70 px-5 py-3">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-black text-slate-800">المساعد الذكي</p>
+                      <p className="mt-1 text-xs text-slate-500">اختياري، افتحه فقط عند الحاجة لصياغة أو تحسين الرسالة.</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setComposeAiOpen((value) => !value)}
+                      className="inline-flex h-10 items-center gap-2 rounded-md border border-bank-200 bg-white px-4 text-sm font-bold text-bank-800 shadow-sm hover:bg-bank-50"
+                      aria-expanded={composeAiOpen}
+                    >
+                      <Sparkles className="h-4 w-4" />
+                      {composeAiOpen ? "إخفاء المساعد الذكي" : "إظهار المساعد الذكي"}
+                    </button>
+                  </div>
+                  {composeAiOpen && (
+                    <div className="mt-4">
+                      <AIAssistantBox
+                        body={form.body}
+                        relatedRequestId={form.related_request_id}
+                        requestType={form.message_type}
+                        onUseDraft={applyAiDraft}
+                        onUseBody={applyAiBody}
+                      />
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -1651,7 +2055,7 @@ export default function MessagesPage() {
                           value={signatureDraft}
                           onChange={(event) => setSignatureDraft(event.target.value)}
                           rows={4}
-                          placeholder={"مثال:\nتحياتي،\nعبدالله باجرش\nإدارة تقنية المعلومات"}
+                          placeholder={"مثال:\nتحياتي،\nعبدالله باجرش\nالإدارة المختصة"}
                           className="w-full resize-y rounded-md border border-slate-300 bg-white px-3 py-2 text-sm leading-6 outline-none focus:border-bank-600 focus:ring-2 focus:ring-bank-100"
                         />
                       </label>
@@ -1709,6 +2113,26 @@ export default function MessagesPage() {
                     ))}
                   </div>
                 ))}
+                <div className="mt-5 flex flex-wrap items-center justify-end gap-3 border-t border-slate-200 pt-5">
+                  {messageSettings.enable_drafts && !replySource && !forwardSource && (
+                    <button type="button" onClick={saveDraft} className="inline-flex h-11 items-center gap-2 rounded-md border border-bank-200 bg-bank-50 px-5 text-sm font-bold text-bank-800 hover:bg-bank-100">
+                      <Save className="h-4 w-4" />
+                      حفظ مسودة
+                    </button>
+                  )}
+                  <Button type="submit" className="h-11 gap-2 px-6">
+                    <SendHorizonal className="h-4 w-4" />
+                    {replySource ? "إرسال الرد" : editingDraftId ? "إرسال المسودة" : "إرسال"}
+                  </Button>
+                  <button
+                    type="button"
+                    onClick={clearComposeForm}
+                    className="inline-flex h-11 items-center gap-2 rounded-md border border-slate-300 bg-white px-5 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                  >
+                    <Eraser className="h-4 w-4" />
+                    تفريغ
+                  </button>
+                </div>
               </div>
             </div>
           </form>
@@ -1730,14 +2154,23 @@ export default function MessagesPage() {
                           {selected.message_uid}
                         </span>
                       )}
-                      <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-700">{messageTypeLabel(selected.message_type)}</span>
+                      <span style={messageTypeBadgeStyle(selectedMessageType)} className="rounded-full border border-slate-200 bg-slate-100 px-3 py-1 text-xs font-bold text-slate-700">{messageTypeLabel(selected.message_type)}</span>
+                      {selectedMessageType?.is_official && <span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-bold text-blue-700">رسمية</span>}
+                      {selectedMessageType?.show_in_pdf && <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-bold text-emerald-700">تظهر في PDF</span>}
+                      <span className={`rounded-full px-3 py-1 text-xs font-bold ${messagePriorityBadgeClass(selected.priority)}`}>{messagePriorityLabel(selected.priority)}</span>
+                      <span className={`rounded-full px-3 py-1 text-xs font-bold ${messageClassificationBadgeClass(selectedClassification)}`}>{messageClassificationLabel(selected.classification_code, messageClassificationOptions)}</span>
                       <h3 className="text-xl font-bold text-slate-950">{selected.subject || "بدون موضوع"}</h3>
                     </div>
-                    {selected.related_request_id && (
-                      <p className="mt-2 inline-flex items-center gap-2 rounded-md bg-bank-50 px-3 py-1 text-xs font-bold text-bank-700">
+                    {selectedClassification?.restricted_access && (
+                      <p className="mt-2 rounded-md border border-amber-100 bg-amber-50 px-3 py-2 text-xs font-bold text-amber-800">
+                        هذه الرسالة مصنفة كرسالة سرية. الوصول والتنزيل يخضعان لإعدادات تصنيف السرية.
+                      </p>
+                    )}
+                    {messageSettings.enable_linked_requests && selected.related_request_id && (
+                      <button type="button" onClick={() => navigate(`/requests/${selected.related_request_id}`)} className="mt-2 inline-flex items-center gap-2 rounded-md bg-bank-50 px-3 py-1 text-xs font-bold text-bank-700 hover:bg-bank-100">
                         <Link className="h-3.5 w-3.5" />
                         طلب مرتبط: {selected.related_request_number || selected.related_request_id}
-                      </p>
+                      </button>
                     )}
                     <p className="mt-2 text-xs text-slate-500">{mailbox === "drafts" ? `آخر حفظ: ${formatDate(selected.updated_at || selected.created_at)}` : formatDate(selected.created_at)}</p>
                   </div>
@@ -1767,13 +2200,13 @@ export default function MessagesPage() {
                     </div>
                   ) : (
                     <div className="flex flex-wrap items-center gap-2">
-                      {messageSettings.allow_replies && canUseAiReplies && (
+                      {selectedCanReply && canUseAiReplies && (
                         <button type="button" onClick={() => suggestAiReply(selected)} disabled={selectedAiLoading === "reply"} className="inline-flex h-10 items-center gap-2 rounded-md border border-bank-200 bg-bank-50 px-3 text-sm font-bold text-bank-800 hover:bg-bank-100 disabled:cursor-not-allowed disabled:opacity-60">
                           <Sparkles className="h-4 w-4" />
                           {selectedAiLoading === "reply" ? "جاري الاقتراح..." : "اقتراح رد"}
                         </button>
                       )}
-                      {messageSettings.allow_replies && (
+                      {selectedCanReply && (
                         <button type="button" onClick={() => beginReply(selected)} className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50">
                           <Reply className="h-4 w-4" />
                           رد
@@ -1783,6 +2216,25 @@ export default function MessagesPage() {
                         <button type="button" onClick={() => beginForward(selected)} className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50">
                           <ArrowBigLeftDash className="h-4 w-4" />
                           تحويل
+                        </button>
+                      )}
+                      {mailbox === "inbox" || mailbox === "unread" ? (
+                        selected.is_read ? (
+                          <button type="button" onClick={() => markSelectedReadState(false)} className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+                            <EyeOff className="h-4 w-4" />
+                            غير مقروءة
+                          </button>
+                        ) : (
+                          <button type="button" onClick={() => markSelectedReadState(true)} className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+                            <Eye className="h-4 w-4" />
+                            مقروءة
+                          </button>
+                        )
+                      ) : null}
+                      {messageSettings.enable_linked_requests && selected.related_request_id && (
+                        <button type="button" onClick={() => navigate(`/requests/${selected.related_request_id}`)} className="inline-flex h-10 items-center gap-2 rounded-md border border-bank-200 bg-bank-50 px-3 text-sm font-bold text-bank-800 hover:bg-bank-100">
+                          <Link className="h-4 w-4" />
+                          فتح الطلب
                         </button>
                       )}
                       {messageSettings.allow_archiving && (
@@ -1800,8 +2252,8 @@ export default function MessagesPage() {
                     </div>
                   )}
                 </div>
-                {messageSettings.allow_replies && canUseAiReplies && selectedAiError && <div className="rounded-md border border-red-100 bg-red-50 p-3 text-sm text-red-700">{selectedAiError}</div>}
-                {messageSettings.allow_replies && canUseAiReplies && selectedAiSuggestion?.type === "reply" && (
+                {selectedCanReply && canUseAiReplies && selectedAiError && <div className="rounded-md border border-red-100 bg-red-50 p-3 text-sm text-red-700">{selectedAiError}</div>}
+                {selectedCanReply && canUseAiReplies && selectedAiSuggestion?.type === "reply" && (
                   <AISuggestionPanel
                     title="اقتراح رد"
                     body={selectedAiSuggestion.body}
@@ -1823,10 +2275,10 @@ export default function MessagesPage() {
                     </h4>
                     <div className="grid gap-2 md:grid-cols-2">
                       {selected.attachments.map((attachment) => (
-                        <button key={attachment.id} type="button" onClick={() => downloadAttachment(selected.id, attachment)} className="flex items-center justify-between rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-right text-sm hover:bg-bank-50">
+                        <button key={attachment.id} type="button" onClick={() => selectedClassification?.allow_attachment_download === false ? setError("تحميل مرفقات هذا التصنيف غير مسموح.") : downloadAttachment(selected.id, attachment)} disabled={selectedClassification?.allow_attachment_download === false} className="flex items-center justify-between rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-right text-sm hover:bg-bank-50 disabled:cursor-not-allowed disabled:opacity-60">
                           <span>
                             <span className="block font-semibold text-slate-800">{attachment.original_name}</span>
-                            <span className="text-xs text-slate-500">{formatBytes(attachment.size_bytes)}</span>
+                            <span className="text-xs text-slate-500">{selectedClassification?.allow_attachment_download === false ? "التنزيل غير مسموح لهذا التصنيف" : formatBytes(attachment.size_bytes)}</span>
                           </span>
                           <Download className="h-4 w-4 text-bank-700" />
                         </button>
@@ -1888,6 +2340,7 @@ function MessageSection({
   count,
   messages,
   messageTypeOptions,
+  messageClassificationOptions,
   selectedIds,
   selectedId,
   mailbox,
@@ -1900,6 +2353,7 @@ function MessageSection({
   count: number;
   messages: InternalMessage[];
   messageTypeOptions: MessageTypeOption[];
+  messageClassificationOptions: MessageClassificationOption[];
   selectedIds: number[];
   selectedId: number | null;
   mailbox: Mailbox;
@@ -1915,7 +2369,7 @@ function MessageSection({
         <span>{count}</span>
       </div>
       {messages.map((message) => (
-        <MessageListItem key={message.id} message={message} messageTypeOptions={messageTypeOptions} selectedIds={selectedIds} selectedId={selectedId} mailbox={mailbox} archiveView={archiveView} showUnreadBadge={showUnreadBadge} onSelect={onSelect} onToggleSelection={onToggleSelection} />
+        <MessageListItem key={message.id} message={message} messageTypeOptions={messageTypeOptions} messageClassificationOptions={messageClassificationOptions} selectedIds={selectedIds} selectedId={selectedId} mailbox={mailbox} archiveView={archiveView} showUnreadBadge={showUnreadBadge} onSelect={onSelect} onToggleSelection={onToggleSelection} />
       ))}
     </div>
   );
@@ -1924,6 +2378,7 @@ function MessageSection({
 function MessageListItem({
   message,
   messageTypeOptions,
+  messageClassificationOptions,
   selectedIds,
   selectedId,
   mailbox,
@@ -1934,6 +2389,7 @@ function MessageListItem({
 }: {
   message: InternalMessage;
   messageTypeOptions: MessageTypeOption[];
+  messageClassificationOptions: MessageClassificationOption[];
   selectedIds: number[];
   selectedId: number | null;
   mailbox: Mailbox;
@@ -1944,6 +2400,7 @@ function MessageListItem({
 }) {
   const isInboxLike = mailbox === "inbox" || (mailbox === "archived" && archiveView === "inbox");
   const messageDate = message.is_draft ? message.updated_at || message.created_at : message.created_at;
+  const classification = messageClassificationOptions.find((option) => option.code === (message.classification_code || defaultMessageClassification));
   return (
     <button
       type="button"
@@ -1962,13 +2419,29 @@ function MessageListItem({
         />
         <div className="min-w-0 flex-1 text-right">
           <div className="flex min-w-0 flex-wrap items-center justify-start gap-2 text-right">
-            <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-bold text-slate-600">{getMessageTypeLabel(message.message_type, messageTypeOptions)}</span>
+            <span style={messageTypeBadgeStyle(messageTypeOptions.find((option) => option.value === message.message_type))} className="shrink-0 rounded-full border border-slate-200 bg-slate-100 px-2 py-0.5 text-[11px] font-bold text-slate-600">{getMessageTypeLabel(message.message_type, messageTypeOptions)}</span>
+            <span className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-bold ${messagePriorityBadgeClass(message.priority)}`}>{messagePriorityLabel(message.priority)}</span>
+            <span className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-bold ${messageClassificationBadgeClass(classification)}`}>{messageClassificationLabel(message.classification_code, messageClassificationOptions)}</span>
             <p className={`min-w-0 flex-1 truncate font-semibold ${message.is_read ? "text-slate-700" : "text-slate-950"}`}>{message.subject || "بدون موضوع"}</p>
           </div>
           <p className="mt-1 truncate text-xs text-slate-500">
             {message.is_draft ? `مسودة - ${formatDate(messageDate)}` : isInboxLike ? message.sender_name : message.recipient_names.join("، ")}
           </p>
-          {message.message_uid && <p className="mt-1 truncate text-[11px] font-bold text-slate-400">معرف الرسالة: {message.message_uid}</p>}
+          <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] font-bold text-slate-400">
+            {message.message_uid && <span className="truncate">معرف الرسالة: {message.message_uid}</span>}
+            {message.attachments?.length > 0 && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-slate-500">
+                <Paperclip className="h-3 w-3" />
+                {message.attachments.length}
+              </span>
+            )}
+            {message.related_request_id && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-bank-50 px-2 py-0.5 text-bank-700">
+                <Link className="h-3 w-3" />
+                {message.related_request_number || message.related_request_id}
+              </span>
+            )}
+          </div>
         </div>
         {showUnreadBadge && !message.is_read && mailbox === "inbox" && <span className="mt-1 h-2.5 w-2.5 shrink-0 rounded-full bg-bank-700" />}
       </div>
@@ -1986,14 +2459,15 @@ function ToolGroup({ label, children }: { label: string; children: ReactNode }) 
   );
 }
 
-function Tab({ active, onClick, icon: Icon, label, collapsed = false, featured = false }: { active: boolean; onClick: () => void; icon: typeof Mail; label: string; collapsed?: boolean; featured?: boolean }) {
+function Tab({ active, onClick, icon: Icon, label, collapsed = false, featured = false, disabled = false }: { active: boolean; onClick: () => void; icon: typeof Mail; label: string; collapsed?: boolean; featured?: boolean; disabled?: boolean }) {
   if (featured) {
     return (
       <button
         type="button"
         onClick={onClick}
+        disabled={disabled}
         title={label}
-        className={`relative flex h-11 items-center justify-center gap-2 rounded-md border-2 border-bank-700 bg-white text-xs font-bold text-bank-700 shadow-sm transition hover:bg-bank-50 focus:outline-none focus:ring-2 focus:ring-bank-100 ${active ? "bg-bank-50 ring-2 ring-bank-100" : ""} ${collapsed ? "w-full px-0" : "px-3"}`}
+        className={`relative flex h-11 items-center justify-center gap-2 rounded-md border-2 border-bank-700 bg-white text-xs font-bold text-bank-700 shadow-sm transition hover:bg-bank-50 focus:outline-none focus:ring-2 focus:ring-bank-100 disabled:cursor-not-allowed disabled:opacity-50 ${active ? "bg-bank-50 ring-2 ring-bank-100" : ""} ${collapsed ? "w-full px-0" : "px-3"}`}
       >
         <Icon className="relative h-5 w-5" />
         {!collapsed && <span className="relative">{label}</span>}
@@ -2001,7 +2475,7 @@ function Tab({ active, onClick, icon: Icon, label, collapsed = false, featured =
     );
   }
   return (
-    <button type="button" onClick={onClick} title={label} className={`flex h-10 items-center justify-center gap-2 rounded-md text-xs font-bold ${active ? "bg-bank-50 text-bank-700" : "text-slate-600 hover:bg-slate-50"} ${collapsed ? "w-full" : ""}`}>
+    <button type="button" onClick={onClick} disabled={disabled} title={label} className={`flex h-10 items-center justify-center gap-2 rounded-md text-xs font-bold disabled:cursor-not-allowed disabled:opacity-50 ${active ? "bg-bank-50 text-bank-700" : "text-slate-600 hover:bg-slate-50"} ${collapsed ? "w-full" : ""}`}>
       <Icon className="h-4 w-4" />
       {!collapsed && label}
     </button>
@@ -2018,6 +2492,73 @@ function sortByNewest(first: InternalMessage, second: InternalMessage) {
 
 function getMessageTypeLabel(value: string, options: MessageTypeOption[] = defaultMessageTypeOptions) {
   return options.find((option) => option.value === value)?.label || "مراسلة داخلية";
+}
+
+function messageTypeBadgeStyle(option?: MessageTypeOption | null) {
+  if (option?.color && /^#[0-9a-f]{6}$/i.test(option.color)) {
+    return {
+      color: option.color,
+      backgroundColor: `${option.color}14`,
+      borderColor: `${option.color}33`
+    };
+  }
+  return undefined;
+}
+
+function messagePriorityLabel(value?: string | null) {
+  return { normal: "عادية", high: "مرتفعة", urgent: "عاجلة" }[value || "normal"] || "عادية";
+}
+
+function messagePriorityBadgeClass(value?: string | null) {
+  if (value === "urgent") return "bg-red-50 text-red-700";
+  if (value === "high") return "bg-amber-50 text-amber-700";
+  return "bg-emerald-50 text-emerald-700";
+}
+
+function messageClassificationLabel(value?: string | null, options: MessageClassificationOption[] = defaultMessageClassificationOptions) {
+  return options.find((option) => option.code === (value || defaultMessageClassification))?.name_ar || "داخلي";
+}
+
+function messageClassificationBadgeClass(option?: MessageClassificationOption | null) {
+  if (option?.code === "top_secret") return "bg-red-50 text-red-700";
+  if (option?.code === "confidential" || option?.restricted_access) return "bg-amber-50 text-amber-700";
+  if (option?.code === "public") return "bg-emerald-50 text-emerald-700";
+  return "bg-slate-100 text-slate-700";
+}
+
+function mailboxTitle(value: Mailbox) {
+  return {
+    inbox: "الوارد",
+    sent: "الصادر",
+    drafts: "المسودات",
+    archived: "المؤرشفة",
+    unread: "غير المقروءة",
+    "request-linked": "مرتبطة بالطلبات",
+    official: "المراسلات الرسمية",
+    clarifications: "طلبات الاستيضاح",
+    compose: "رسالة جديدة"
+  }[value];
+}
+
+function mailboxFromPath(pathname: string): Mailbox | null {
+  const normalized = pathname.replace(/\/+$/, "") || "/messages";
+  if (normalized === "/messages") return null;
+  if (messageIdFromPath(normalized)) return "inbox";
+  if (normalized === "/messages/inbox") return "inbox";
+  if (normalized === "/messages/sent") return "sent";
+  if (normalized === "/messages/drafts") return "drafts";
+  if (normalized === "/messages/archived") return "archived";
+  if (normalized === "/messages/unread") return "unread";
+  if (normalized === "/messages/request-linked") return "request-linked";
+  if (normalized === "/messages/official") return "official";
+  if (normalized === "/messages/clarifications") return "clarifications";
+  if (normalized === "/messages/new") return "compose";
+  return null;
+}
+
+function messageIdFromPath(pathname: string) {
+  const match = pathname.match(/^\/messages\/(\d+)\/?$/);
+  return match ? Number(match[1]) : null;
 }
 
 function escapeHtml(value: string) {

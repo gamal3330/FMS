@@ -92,13 +92,55 @@ def require_request_types_manage(db: Session = Depends(get_db), current_user: Us
 view_actor = Depends(require_request_types_view)
 manage_actor = Depends(require_request_types_manage)
 
+WORKFLOW_STEP_LABELS = {
+    "direct_manager": "المدير المباشر",
+    "department_manager": "مدير الإدارة المختصة",
+    "department_specialist": "مختص الإدارة المختصة",
+    "specific_department_manager": "مدير إدارة محددة",
+    "information_security": "أمن المعلومات (مرحلة قديمة)",
+    "it_manager": "مدير إدارة",
+    "it_staff": "مختص تنفيذ",
+    "executive_management": "الإدارة التنفيذية",
+    "implementation_engineer": "مختص تنفيذ",
+    "implementation": "مختص تنفيذ",
+    "execution": "مختص تنفيذ",
+    "specific_role": "دور محدد",
+    "specific_user": "مستخدم محدد",
+    "close_request": "إغلاق الطلب",
+}
+
+
+def workflow_step_display(step_type: str | None, step_name_ar: str | None = None, step_name_en: str | None = None) -> str:
+    return WORKFLOW_STEP_LABELS.get(step_type or "", step_name_ar or step_name_en or step_type or "")
+
+
+def is_hidden_workflow_role(role: Role | None) -> bool:
+    if not role:
+        return False
+    code = str(role.code or role.name or "")
+    return code == "information_security" or code.startswith("information_security_copy")
+
+
+def require_department_manager(db: Session, department_id: int | None, step_label: str = "مرحلة الموافقة") -> int:
+    if not department_id:
+        raise HTTPException(status_code=422, detail=f"يجب تحديد الإدارة في {step_label}")
+    department = db.get(Department, department_id)
+    if not department or not department.is_active:
+        raise HTTPException(status_code=422, detail=f"الإدارة المحددة في {step_label} غير موجودة أو غير نشطة")
+    if not department.manager_id:
+        raise HTTPException(status_code=422, detail=f"الإدارة المحددة في {step_label} لا يوجد لها مدير")
+    manager = db.get(User, department.manager_id)
+    if not manager or not manager.is_active:
+        raise HTTPException(status_code=422, detail=f"مدير الإدارة المحددة في {step_label} غير نشط")
+    return department.manager_id
+
 
 def workflow_summary(db: Session, request_type_id: int) -> str:
     template = db.scalar(select(WorkflowTemplate).where(WorkflowTemplate.request_type_id == request_type_id, WorkflowTemplate.is_active == True))
     if not template:
         return "No workflow"
     steps = db.scalars(select(WorkflowTemplateStep).where(WorkflowTemplateStep.workflow_template_id == template.id).order_by(WorkflowTemplateStep.sort_order)).all()
-    return " -> ".join(step.step_name_en for step in steps) or "No steps"
+    return " -> ".join(workflow_step_display(step.step_type, step.step_name_ar, step.step_name_en) for step in steps) or "No steps"
 
 
 def request_type_has_active_workflow(db: Session, request_type_id: int) -> bool:
@@ -131,6 +173,7 @@ def workflow_snapshot(db: Session, request_type_id: int) -> list[dict]:
             "step_type": step.step_type,
             "approver_role_id": step.approver_role_id,
             "approver_user_id": step.approver_user_id,
+            "target_department_id": step.target_department_id,
             "is_mandatory": step.is_mandatory,
             "can_reject": step.can_reject,
             "can_return_for_edit": step.can_return_for_edit,
@@ -178,6 +221,28 @@ def ensure_active_request_type_version(db: Session, request_type: RequestTypeSet
     db.add(active)
     db.flush()
     return active
+
+
+def hydrate_active_version_request_type_snapshot(db: Session, request_type: RequestTypeSetting, version: RequestTypeVersion) -> RequestTypeVersion:
+    snapshot = dict(version.snapshot_json or {})
+    request_type_snapshot_data = dict(snapshot.get("request_type") or {})
+    current_snapshot = request_type_snapshot(request_type)
+    changed = False
+
+    for key, value in current_snapshot.items():
+        current_value = request_type_snapshot_data.get(key)
+        if key not in request_type_snapshot_data:
+            request_type_snapshot_data[key] = value
+            changed = True
+        elif current_value in (None, "") and value not in (None, ""):
+            request_type_snapshot_data[key] = value
+            changed = True
+
+    if changed:
+        snapshot["request_type"] = request_type_snapshot_data
+        version.snapshot_json = snapshot
+        db.flush()
+    return version
 
 
 def upsert_draft_request_type_version(db: Session, request_type: RequestTypeSetting, actor: User | None = None, reason: str = "configuration_changed") -> RequestTypeVersion:
@@ -339,7 +404,11 @@ def request_type_read_from_version(item: RequestTypeSetting, version: RequestTyp
     request_type = snapshot.get("request_type") or {}
     fields = snapshot.get("fields") or []
     workflow = snapshot.get("workflow") or []
-    workflow_text = " -> ".join(step.get("step_name_en") or step.get("step_name_ar") or "" for step in workflow if step.get("is_active", True)) or "No workflow"
+    workflow_text = " -> ".join(
+        workflow_step_display(step.get("step_type"), step.get("step_name_ar"), step.get("step_name_en"))
+        for step in workflow
+        if step.get("is_active", True)
+    ) or "No workflow"
     return RequestTypeRead(
         id=item.id,
         name_ar=request_type.get("name_ar") or item.name_ar,
@@ -379,6 +448,7 @@ def version_is_ready(version: RequestTypeVersion) -> bool:
 
 def active_version_for_usage(db: Session, item: RequestTypeSetting) -> RequestTypeVersion:
     version = ensure_active_request_type_version(db, item)
+    version = hydrate_active_version_request_type_snapshot(db, item, version)
     if item.current_version_number != version.version_number:
         item.current_version_number = version.version_number
         db.flush()
@@ -460,6 +530,8 @@ def build_version_validation(db: Session | None, version: RequestTypeVersion) ->
             invalid_steps.append(step.get("step_name_ar") or step.get("step_name_en") or "مرحلة بدون اسم")
         if step_type == "specific_role" and not step.get("approver_role_id"):
             invalid_steps.append(step.get("step_name_ar") or step.get("step_name_en") or "مرحلة بدون اسم")
+        if step_type == "specific_department_manager" and not step.get("target_department_id"):
+            invalid_steps.append(step.get("step_name_ar") or step.get("step_name_en") or "مرحلة بدون اسم")
         if db and step.get("approver_user_id"):
             user = db.get(User, step.get("approver_user_id"))
             if not user or not user.is_active:
@@ -468,18 +540,23 @@ def build_version_validation(db: Session | None, version: RequestTypeVersion) ->
             role = db.get(Role, step.get("approver_role_id"))
             if not role or not role.is_active:
                 inactive_step_refs.append(step.get("step_name_ar") or step.get("step_name_en") or "مرحلة بدون اسم")
+        if db and step.get("target_department_id"):
+            department = db.get(Department, step.get("target_department_id"))
+            manager = db.get(User, department.manager_id) if department and department.manager_id else None
+            if not department or not department.is_active or not manager or not manager.is_active:
+                inactive_step_refs.append(step.get("step_name_ar") or step.get("step_name_en") or "مرحلة بدون اسم")
 
     add_check(
         "workflow_approvers",
         "مراجعو المراحل",
         "failed" if invalid_steps else "passed",
-        f"مراحل تحتاج تحديد مستخدم أو دور: {', '.join(invalid_steps)}" if invalid_steps else "كل مراحل الموافقة تحتوي على قاعدة اعتماد صالحة.",
+        f"مراحل تحتاج تحديد مستخدم أو دور أو إدارة: {', '.join(invalid_steps)}" if invalid_steps else "كل مراحل الموافقة تحتوي على قاعدة اعتماد صالحة.",
     )
     add_check(
         "active_approvers",
         "حالة المستخدمين والأدوار",
         "failed" if inactive_step_refs else "passed",
-        f"مراحل مرتبطة بمستخدم أو دور غير نشط: {', '.join(inactive_step_refs)}" if inactive_step_refs else "المستخدمون والأدوار المرتبطة بالمسار نشطة.",
+        f"مراحل مرتبطة بمستخدم أو دور أو إدارة غير جاهزة: {', '.join(inactive_step_refs)}" if inactive_step_refs else "المستخدمون والأدوار والإدارات المرتبطة بالمسار نشطة.",
     )
 
     sla_response = request_type.get("sla_response_hours")
@@ -554,9 +631,19 @@ def create_snapshot_steps_from_version(db: Session, service_request: ServiceRequ
     if not steps:
         raise HTTPException(status_code=409, detail="Workflow must have at least one approval step")
     now = datetime.now(timezone.utc)
-    for index, step in enumerate(sorted(steps, key=lambda item: item.get("sort_order") or 0)):
-        sort_order = int(step.get("sort_order") or index + 1)
+    used_orders: set[int] = set()
+    for index, step in enumerate(sorted(steps, key=lambda item: (item.get("sort_order") or 0, item.get("step_name_ar") or ""))):
+        candidate_order = int(step.get("sort_order") or index + 1)
+        sort_order = candidate_order if candidate_order > 0 and candidate_order not in used_orders else index + 1
+        while sort_order in used_orders:
+            sort_order += 1
+        used_orders.add(sort_order)
         step_type = step.get("step_type") or "direct_manager"
+        resolved_approver_user_id = step.get("approver_user_id")
+        if step_type == "specific_department_manager":
+            step_label = step.get("step_name_ar") or step.get("step_name_en") or f"مرحلة {sort_order}"
+            resolved_approver_user_id = require_department_manager(db, step.get("target_department_id"), step_label)
+            step["approver_user_id"] = resolved_approver_user_id
         db.add(
             RequestApprovalStep(
                 request_id=service_request.id,
@@ -564,7 +651,7 @@ def create_snapshot_steps_from_version(db: Session, service_request: ServiceRequ
                 step_name_en=step.get("step_name_en") or step.get("step_name_ar") or f"Step {sort_order}",
                 step_type=step_type,
                 approver_role_id=step.get("approver_role_id"),
-                approver_user_id=step.get("approver_user_id"),
+                approver_user_id=resolved_approver_user_id,
                 status="pending" if index == 0 else "waiting",
                 sla_due_at=now + timedelta(hours=int(step.get("sla_hours") or 8)),
                 sort_order=sort_order,
@@ -600,6 +687,8 @@ def read_request_types_bulk(db: Session, items: list[RequestTypeSetting]) -> lis
     workflow_rows = db.execute(
         select(
             WorkflowTemplate.request_type_id,
+            WorkflowTemplateStep.step_type,
+            WorkflowTemplateStep.step_name_ar,
             WorkflowTemplateStep.step_name_en,
             WorkflowTemplateStep.sort_order,
         )
@@ -613,7 +702,7 @@ def read_request_types_bulk(db: Session, items: list[RequestTypeSetting]) -> lis
     ).all()
     workflow_map: dict[int, list[str]] = {}
     for row in workflow_rows:
-        workflow_map.setdefault(row.request_type_id, []).append(row.step_name_en)
+        workflow_map.setdefault(row.request_type_id, []).append(workflow_step_display(row.step_type, row.step_name_ar, row.step_name_en))
 
     return [
         request_type_read(
@@ -684,6 +773,37 @@ def list_active_request_types(db: Session = Depends(get_db), _: User = Depends(g
             ready_types.append(request_type_read_from_version(item, version))
     db.commit()
     return ready_types
+
+
+@router.get("/workflow-roles")
+def list_workflow_roles(db: Session = Depends(get_db), _: User = view_actor):
+    roles = db.scalars(select(Role).where(Role.is_active == True).order_by(Role.label_ar, Role.name_ar)).all()
+    return [
+        {
+            "id": role.id,
+            "code": role.code or role.name,
+            "name_ar": role.name_ar or role.label_ar or role.name,
+            "name_en": role.name_en or role.name,
+            "is_system_role": role.is_system_role,
+        }
+        for role in roles
+        if not is_hidden_workflow_role(role)
+    ]
+
+
+@router.get("/workflow-departments")
+def list_workflow_departments(db: Session = Depends(get_db), _: User = view_actor):
+    departments = db.scalars(select(Department).where(Department.is_active == True).order_by(Department.name_ar)).all()
+    return [
+        {
+            "id": department.id,
+            "code": department.code,
+            "name_ar": department.name_ar,
+            "name_en": department.name_en,
+            "manager_id": department.manager_id,
+        }
+        for department in departments
+    ]
 
 
 @router.get("/{request_type_id}", response_model=RequestTypeRead)
@@ -982,6 +1102,36 @@ def validate_return_target(db: Session, template: WorkflowTemplate, payload: Wor
         raise HTTPException(status_code=422, detail="Return target step is not available")
 
 
+def validate_workflow_step_reference(db: Session, payload: WorkflowStepPayload) -> None:
+    step_label = payload.step_name_ar or payload.step_name_en or "مرحلة الموافقة"
+    if payload.step_type == "specific_role":
+        if not payload.approver_role_id:
+            raise HTTPException(status_code=422, detail="يجب تحديد الدور لهذه المرحلة")
+        role = db.get(Role, payload.approver_role_id)
+        if not role or not role.is_active:
+            raise HTTPException(status_code=422, detail="الدور المحدد غير موجود أو غير نشط")
+        payload.approver_user_id = None
+        payload.target_department_id = None
+        return
+    if payload.step_type == "specific_user":
+        if not payload.approver_user_id:
+            raise HTTPException(status_code=422, detail="يجب تحديد المستخدم لهذه المرحلة")
+        user = db.get(User, payload.approver_user_id)
+        if not user or not user.is_active:
+            raise HTTPException(status_code=422, detail="المستخدم المحدد غير موجود أو غير نشط")
+        payload.approver_role_id = None
+        payload.target_department_id = None
+        return
+    if payload.step_type == "specific_department_manager":
+        require_department_manager(db, payload.target_department_id, step_label)
+        payload.approver_role_id = None
+        payload.approver_user_id = None
+        return
+    payload.approver_role_id = None
+    payload.approver_user_id = None
+    payload.target_department_id = None
+
+
 @router.get("/{request_type_id}/workflow", response_model=WorkflowRead)
 def get_workflow(request_type_id: int, db: Session = Depends(get_db), _: User = view_actor):
     template = get_or_create_template(db, request_type_id)
@@ -994,6 +1144,7 @@ def get_workflow(request_type_id: int, db: Session = Depends(get_db), _: User = 
 def create_workflow_step(request_type_id: int, payload: WorkflowStepPayload, db: Session = Depends(get_db), actor: User = manage_actor):
     template = get_or_create_template(db, request_type_id)
     validate_return_target(db, template, payload)
+    validate_workflow_step_reference(db, payload)
     item = WorkflowTemplateStep(workflow_template_id=template.id, **payload.model_dump())
     db.add(item)
     db.flush()
@@ -1011,6 +1162,7 @@ def update_workflow_step(step_id: int, payload: WorkflowStepPayload, db: Session
         raise HTTPException(status_code=404, detail="Workflow step not found")
     template = db.get(WorkflowTemplate, item.workflow_template_id)
     validate_return_target(db, template, payload, step_id)
+    validate_workflow_step_reference(db, payload)
     for field, value in payload.model_dump().items():
         setattr(item, field, value)
     if template.request_type_id:
@@ -1061,7 +1213,19 @@ def reorder_workflow(request_type_id: int, payload: ReorderPayload, db: Session 
 def preview_workflow(request_type_id: int, db: Session = Depends(get_db), _: User = view_actor):
     template = get_or_create_template(db, request_type_id)
     steps = db.scalars(select(WorkflowTemplateStep).where(WorkflowTemplateStep.workflow_template_id == template.id, WorkflowTemplateStep.is_active == True).order_by(WorkflowTemplateStep.sort_order)).all()
-    return {"steps": [{"order": step.sort_order, "name_ar": step.step_name_ar, "name_en": step.step_name_en, "type": step.step_type, "sla_hours": step.sla_hours} for step in steps]}
+    return {
+        "steps": [
+            {
+                "order": step.sort_order,
+                "name_ar": step.step_name_ar,
+                "name_en": step.step_name_en,
+                "type": step.step_type,
+                "target_department_id": step.target_department_id,
+                "sla_hours": step.sla_hours,
+            }
+            for step in steps
+        ]
+    }
 
 
 @router.get("/{request_type_id}/form-schema")
@@ -1096,7 +1260,7 @@ def validate_form_data(fields: list, form_data: dict) -> None:
         field_type = _field_attr(field, "field_type")
         options = _field_attr(field, "options", []) or []
         value = form_data.get(field_name)
-        if _field_attr(field, "is_required", False) and (value is None or value == ""):
+        if _field_attr(field, "is_required", False) and (value is None or value == "" or (isinstance(value, list) and len(value) == 0)):
             raise HTTPException(status_code=422, detail=f"الحقل {label} مطلوب")
         if value in (None, ""):
             continue
@@ -1127,6 +1291,9 @@ def create_snapshot_steps(db: Session, service_request: ServiceRequest, request_
         raise HTTPException(status_code=409, detail="Workflow must have at least one approval step")
     now = datetime.now(timezone.utc)
     for index, step in enumerate(steps):
+        resolved_approver_user_id = step.approver_user_id
+        if step.step_type == "specific_department_manager":
+            resolved_approver_user_id = require_department_manager(db, step.target_department_id, step.step_name_ar or step.step_name_en)
         db.add(
             RequestApprovalStep(
                 request_id=service_request.id,
@@ -1134,7 +1301,7 @@ def create_snapshot_steps(db: Session, service_request: ServiceRequest, request_
                 step_name_en=step.step_name_en,
                 step_type=step.step_type,
                 approver_role_id=step.approver_role_id,
-                approver_user_id=step.approver_user_id,
+                approver_user_id=resolved_approver_user_id,
                 status="pending" if index == 0 else "waiting",
                 sla_due_at=now + timedelta(hours=step.sla_hours),
                 sort_order=step.sort_order,
@@ -1174,6 +1341,13 @@ def section_label(db: Session, code: str | None) -> str:
         return ""
     section = db.scalar(select(SpecializedSection).where(SpecializedSection.code == code))
     return section.name_ar if section else SECTION_LABELS.get(code, "")
+
+
+def section_department_id(db: Session, code: str | None) -> int | None:
+    if not code:
+        return None
+    section = db.scalar(select(SpecializedSection).where(SpecializedSection.code == code))
+    return section.department_id if section else None
 
 
 def sla_due_from_request_type_config(request_type_config: dict) -> datetime | None:
@@ -1259,15 +1433,20 @@ def submit_dynamic_request(payload: RequestSubmitPayload, db: Session = Depends(
         raise HTTPException(status_code=409, detail="نوع الطلب غير جاهز للاستخدام")
     version_snapshot = active_version.snapshot_json or {}
     request_type_config = version_snapshot.get("request_type") or {}
-    workflow_steps = version_snapshot.get("workflow") or []
-    fields = version_snapshot.get("fields") or []
+    workflow_steps = [dict(step) for step in (version_snapshot.get("workflow") or [])]
+    fields = [dict(field) for field in (version_snapshot.get("fields") or [])]
     assigned_section = request_type_config.get("assigned_section") or payload.form_data.get("assigned_section") or payload.form_data.get("administrative_section")
     assigned_department_id = request_type_config.get("assigned_department_id")
+    if not assigned_department_id:
+        assigned_department_id = section_department_id(db, assigned_section)
     assigned_to_id = resolve_assigned_user_id(db, request_type_config, assigned_section)
     if not assigned_section and not assigned_department_id:
         raise HTTPException(status_code=409, detail="نوع الطلب غير مرتبط بقسم مختص")
     if not workflow_steps:
         raise HTTPException(status_code=409, detail="نوع الطلب لا يحتوي على مسار موافقات فعال")
+    attachments_enabled = bool(request_type_config.get("requires_attachment") or request_type_config.get("allow_multiple_attachments"))
+    if not attachments_enabled and payload.attachment_count > 0:
+        raise HTTPException(status_code=422, detail="المرفقات غير مفعلة لهذا النوع من الطلبات")
     if request_type_config.get("requires_attachment") and payload.attachment_count <= 0:
         raise HTTPException(status_code=422, detail="هذا النوع من الطلبات يتطلب إرفاق ملف قبل الإرسال")
     max_attachments = int(request_type_config.get("max_attachments") or (5 if request_type_config.get("allow_multiple_attachments") else 1))
@@ -1283,6 +1462,7 @@ def submit_dynamic_request(payload: RequestSubmitPayload, db: Session = Depends(
         "administrative_section_label": section_label(db, assigned_section),
         "assigned_section": assigned_section,
         "assigned_section_label": section_label(db, assigned_section),
+        "assigned_department_id": assigned_department_id,
     }
     service_request = ServiceRequest(
         request_number=next_request_number(db),
@@ -1297,7 +1477,7 @@ def submit_dynamic_request(payload: RequestSubmitPayload, db: Session = Depends(
         status=RequestStatus.PENDING_APPROVAL,
         priority=priority,
         form_data=form_data,
-        request_type_snapshot={**request_type_config, "workflow": workflow_steps},
+        request_type_snapshot={**request_type_config, "assigned_department_id": assigned_department_id, "workflow": workflow_steps},
         form_schema_snapshot=fields,
         business_justification=payload.business_justification,
         sla_due_at=sla_due_from_request_type_config(request_type_config),

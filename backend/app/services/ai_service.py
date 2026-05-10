@@ -194,9 +194,9 @@ PROMPT_ALIASES = {
 ROLE_LABELS = {
     UserRole.EMPLOYEE: "موظف",
     UserRole.DIRECT_MANAGER: "مدير مباشر",
-    UserRole.IT_STAFF: "موظف تنفيذ",
-    UserRole.IT_MANAGER: "مدير تقنية المعلومات",
-    UserRole.INFOSEC: "أمن المعلومات",
+    UserRole.IT_STAFF: "مختص تنفيذ",
+    UserRole.IT_MANAGER: "مدير إدارة",
+    UserRole.INFOSEC: "أمن المعلومات (دور قديم)",
     UserRole.EXECUTIVE: "الإدارة التنفيذية",
     UserRole.SUPER_ADMIN: "مدير النظام",
 }

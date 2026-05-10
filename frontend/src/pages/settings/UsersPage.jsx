@@ -52,14 +52,14 @@ const tabs = [
 const roleOptions = [
   ["employee", "موظف"],
   ["direct_manager", "مدير مباشر"],
-  ["it_staff", "موظف تنفيذ"],
-  ["it_manager", "مدير تقنية المعلومات"],
-  ["information_security", "أمن المعلومات"],
+  ["it_staff", "مختص تنفيذ"],
+  ["it_manager", "مدير إدارة"],
   ["executive_management", "الإدارة التنفيذية"],
   ["super_admin", "مدير النظام"]
 ];
 
-const roleLabel = new Map(roleOptions);
+const legacyRoleOptions = [["information_security", "أمن المعلومات (دور قديم)"]];
+const roleLabel = new Map([...roleOptions, ...legacyRoleOptions]);
 const relationOptions = [
   ["employee", "موظف"],
   ["direct_manager", "مدير مباشر"],
@@ -120,6 +120,7 @@ function initialData() {
     overview: null,
     users: [],
     departments: [],
+    specializedSections: [],
     roles: [],
     screenMatrix: null,
     actionMatrix: null,
@@ -175,6 +176,7 @@ export default function UsersPage() {
       overview,
       users,
       departments,
+      specializedSections,
       roles,
       screenMatrix,
       actionMatrix,
@@ -190,6 +192,7 @@ export default function UsersPage() {
       safeGet("/users/overview", null),
       safeGet("/users", []),
       safeGet("/departments", []),
+      safeGet("/settings/specialized-sections?active_only=true", []),
       safeGet("/roles", []),
       safeGet("/permissions/screens", null),
       safeGet("/permissions/actions", null),
@@ -202,7 +205,7 @@ export default function UsersPage() {
       safeGet("/users/access-review", null),
       safeGet("/users/audit-logs", [])
     ]);
-    setData({ overview, users, departments, roles, screenMatrix, actionMatrix, orgTree, orgIssues, importBatches, sessions, attempts, delegations, accessReview, auditLogs });
+    setData({ overview, users, departments, specializedSections, roles, screenMatrix, actionMatrix, orgTree, orgIssues, importBatches, sessions, attempts, delegations, accessReview, auditLogs });
     setLoading(false);
   }
 
@@ -458,7 +461,20 @@ export default function UsersPage() {
                   }}
                 />
               )}
-              {activeTab === "roles" && <RolesTab roles={data.roles} busy={busy} onAdd={() => setRoleModal({ mode: "create", form: emptyRoleForm })} onEdit={(role) => setRoleModal({ mode: "edit", role, form: roleToForm(role) })} onClone={(role) => runAction("clone-role", async () => api.post(`/roles/${role.id}/clone`))} />}
+              {activeTab === "roles" && (
+                <RolesTab
+                  roles={data.roles}
+                  busy={busy}
+                  onAdd={() => setRoleModal({ mode: "create", form: emptyRoleForm })}
+                  onEdit={(role) => setRoleModal({ mode: "edit", role, form: roleToForm(role) })}
+                  onClone={(role) => runAction("clone-role", async () => api.post(`/roles/${role.id}/clone`))}
+                  onDelete={(role) => {
+                    if (window.confirm(`هل تريد حذف الدور "${role.role_name_ar || role.name_ar}"؟ لا يمكن التراجع عن هذه العملية.`)) {
+                      runAction("delete-role", async () => api.delete(`/roles/${role.id}`));
+                    }
+                  }}
+                />
+              )}
               {activeTab === "screens" && <ScreenPermissionsTab matrix={data.screenMatrix} subject={screenSubject} setSubject={setScreenSubject} draft={screenDraft} setDraft={setScreenDraft} onSave={saveScreenPermissions} />}
               {activeTab === "actions" && <ActionPermissionsTab matrix={data.actionMatrix} subject={actionSubject} setSubject={setActionSubject} draft={actionDraft} setDraft={setActionDraft} onSave={saveActionPermissions} />}
               {activeTab === "organization" && (
@@ -498,7 +514,7 @@ export default function UsersPage() {
         </div>
       </Card>
 
-      {userModal && <UserFormModal modal={userModal} setModal={setUserModal} users={data.users} departments={data.departments} onSubmit={saveUser} />}
+      {userModal && <UserFormModal modal={userModal} setModal={setUserModal} users={data.users} departments={data.departments} specializedSections={data.specializedSections} onSubmit={saveUser} />}
       {roleModal && <RoleFormModal modal={roleModal} setModal={setRoleModal} onSubmit={saveRole} />}
       {details && <UserDetailsDrawer details={details} usersById={usersById} departmentsById={departmentsById} onClose={() => setDetails(null)} />}
     </section>
@@ -628,7 +644,7 @@ function UsersTab({ users, allUsers, departments, filters, setFilters, selectedU
   );
 }
 
-function RolesTab({ roles, onAdd, onEdit, onClone }) {
+function RolesTab({ roles, onAdd, onEdit, onClone, onDelete }) {
   return (
     <div className="space-y-4">
       <div className="flex justify-end">
@@ -636,15 +652,19 @@ function RolesTab({ roles, onAdd, onEdit, onClone }) {
       </div>
       <DataTable
         headers={["الدور", "الكود", "الوصف", "نوع الدور", "الحالة", "عدد المستخدمين", "الإجراءات"]}
-        rows={roles.map((role) => [
-          <StrongCell key="role" title={role.role_name_ar || role.name_ar} subtitle={role.role_name_en || role.name_en} />,
-          role.code,
-          role.description || "-",
-          role.is_system_role ? <Badge color="slate">نظامي</Badge> : <Badge color="bank">مخصص</Badge>,
-          role.is_active ? <Badge color="green">نشط</Badge> : <Badge color="slate">معطل</Badge>,
-          role.users_count ?? 0,
-          <ActionBar key="actions" actions={[["تعديل", Edit3, () => onEdit(role)], ["استنساخ", Copy, () => onClone(role)]]} />
-        ])}
+        rows={roles.map((role) => {
+          const actions = [["تعديل", Edit3, () => onEdit(role)], ["استنساخ", Copy, () => onClone(role)]];
+          if (!role.is_system_role) actions.push(["حذف", Trash2, () => onDelete(role), "danger"]);
+          return [
+            <StrongCell key="role" title={role.role_name_ar || role.name_ar} subtitle={role.role_name_en || role.name_en} />,
+            role.code,
+            role.description || "-",
+            role.is_system_role ? <Badge color="slate">نظامي</Badge> : <Badge color="bank">مخصص</Badge>,
+            role.is_active ? <Badge color="green">نشط</Badge> : <Badge color="slate">معطل</Badge>,
+            role.users_count ?? 0,
+            <ActionBar key="actions" actions={actions} />
+          ];
+        })}
       />
     </div>
   );
@@ -849,9 +869,11 @@ function AuditLogsTab({ logs }) {
   return <DataTable headers={["الإجراء", "المستخدم المتأثر", "بواسطة", "التاريخ", "IP", "النتيجة"]} rows={logs.map((log) => [auditLabel(log.action), log.affected_user_id || "-", log.performed_by, formatSystemDateTime(log.created_at), log.ip_address || "-", log.result || "success"])} />;
 }
 
-function UserFormModal({ modal, setModal, users, departments, onSubmit }) {
+function UserFormModal({ modal, setModal, users, departments, specializedSections, onSubmit }) {
   const form = modal.form;
   const setForm = (patch) => setModal({ ...modal, form: { ...form, ...patch } });
+  const currentSectionExists = specializedSections.some((section) => section.code === form.administrative_section);
+  const selectableRoleOptions = form.role === "information_security" ? [...roleOptions, ...legacyRoleOptions] : roleOptions;
   return (
     <Modal title={modal.mode === "edit" ? "تعديل مستخدم" : "إضافة مستخدم"} onClose={() => setModal(null)}>
       <form onSubmit={onSubmit} className="space-y-4">
@@ -866,8 +888,20 @@ function UserFormModal({ modal, setModal, users, departments, onSubmit }) {
           <Field label="الإدارة"><Select value={form.department_id || ""} onChange={(event) => setForm({ department_id: event.target.value })}><option value="">اختر الإدارة</option>{departments.map((department) => <option key={department.id} value={department.id}>{department.name_ar}</option>)}</Select></Field>
           <Field label="المدير المباشر"><Select value={form.manager_id || ""} onChange={(event) => setForm({ manager_id: event.target.value })}><option value="">بدون مدير</option>{users.map((user) => <option key={user.id} value={user.id}>{user.full_name_ar}</option>)}</Select></Field>
           <Field label="نوع العلاقة"><Select value={form.relationship_type || "employee"} onChange={(event) => setForm({ relationship_type: event.target.value })}>{relationOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</Select></Field>
-          <Field label="الدور"><Select value={form.role} onChange={(event) => setForm({ role: event.target.value })}>{roleOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</Select></Field>
-          <Field label="القسم المختص"><Input value={form.administrative_section || ""} onChange={(event) => setForm({ administrative_section: event.target.value })} placeholder="لموظف التنفيذ فقط" /></Field>
+          <Field label="الدور"><Select value={form.role} onChange={(event) => setForm({ role: event.target.value, administrative_section: event.target.value === "it_staff" ? form.administrative_section : "" })}>{selectableRoleOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</Select></Field>
+          <Field label="القسم المختص">
+            <Select
+              value={form.administrative_section || ""}
+              disabled={form.role !== "it_staff"}
+              onChange={(event) => setForm({ administrative_section: event.target.value })}
+            >
+              <option value="">{form.role === "it_staff" ? "اختر القسم المختص" : "لا ينطبق إلا على مختص تنفيذ"}</option>
+              {form.administrative_section && !currentSectionExists && <option value={form.administrative_section}>{form.administrative_section}</option>}
+              {specializedSections.map((section) => (
+                <option key={section.id || section.code} value={section.code}>{section.name_ar || section.code}</option>
+              ))}
+            </Select>
+          </Field>
           {modal.mode !== "edit" && <Field label="كلمة المرور المؤقتة"><Input required value={form.password} onChange={(event) => setForm({ password: event.target.value })} /></Field>}
           <Field label="انتهاء كلمة المرور"><Input type="datetime-local" value={form.password_expires_at || ""} onChange={(event) => setForm({ password_expires_at: event.target.value })} /></Field>
           <Field label="IP مسموح"><Input value={form.allowed_login_from_ip || ""} onChange={(event) => setForm({ allowed_login_from_ip: event.target.value })} /></Field>
@@ -1012,8 +1046,18 @@ function DataTable({ headers, rows, compact = false }) {
 function ActionBar({ actions }) {
   return (
     <div className="flex flex-wrap gap-2">
-      {actions.map(([label, Icon, onClick]) => (
-        <button key={label} type="button" onClick={onClick} title={label} className="inline-flex h-8 items-center gap-1 rounded-md border border-slate-200 bg-white px-2 text-xs font-bold text-slate-700 hover:border-bank-200 hover:bg-bank-50 hover:text-bank-800">
+      {actions.map(([label, Icon, onClick, variant]) => (
+        <button
+          key={label}
+          type="button"
+          onClick={onClick}
+          title={label}
+          className={`inline-flex h-8 items-center gap-1 rounded-md border bg-white px-2 text-xs font-bold ${
+            variant === "danger"
+              ? "border-red-200 text-red-700 hover:border-red-300 hover:bg-red-50"
+              : "border-slate-200 text-slate-700 hover:border-bank-200 hover:bg-bank-50 hover:text-bank-800"
+          }`}
+        >
           <Icon className="h-3.5 w-3.5" />
           {label}
         </button>

@@ -35,6 +35,7 @@ export interface ApprovalStep {
   action: ApprovalAction;
   can_reject?: boolean;
   can_return_for_edit?: boolean;
+  can_act?: boolean;
   note?: string | null;
   acted_at?: string | null;
   approver?: CurrentUser | null;

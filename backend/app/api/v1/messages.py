@@ -6,7 +6,7 @@ from uuid import uuid4
 import anyio
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from fastapi.responses import FileResponse
-from sqlalchemy import func, select
+from sqlalchemy import func, inspect, select, text
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import get_current_user
@@ -15,10 +15,12 @@ from app.db.session import get_db
 from app.models.message import InternalMessage, InternalMessageAttachment, InternalMessageRecipient
 from app.models.messaging_settings import (
     MessageAttachmentSettings,
+    MessageClassification,
     MessageNotificationSettings,
     MessageRequestIntegrationSettings,
     MessageRetentionPolicy,
     MessageSecurityPolicy,
+    MessageTemplate,
     MessageType,
     MessagingSettings,
 )
@@ -26,14 +28,16 @@ from app.models.enums import UserRole
 from app.models.request import ServiceRequest
 from app.models.settings import PortalSetting
 from app.models.user import User
-from app.schemas.message import InternalMessageCreate, InternalMessageDraftUpsert, InternalMessageForward, InternalMessageRead, InternalMessageReply, MessageAttachmentRead, MessageBulkAction, MessageCapabilitiesRead, MessageCounters, MessageReadReceipt, MessageSettingsRead, MessageSettingsUpdate, MessageSignatureRead, MessageSignatureUpdate, MessageTemplateRead, MessageTemplatesUpdate, MessageTypeRead, MessageTypesUpdate, MessageUserRead
+from app.schemas.message import InternalMessageCreate, InternalMessageDraftUpsert, InternalMessageForward, InternalMessageRead, InternalMessageReply, MessageAttachmentRead, MessageBulkAction, MessageCapabilitiesRead, MessageClassificationRead, MessageCounters, MessageReadReceipt, MessageSettingsRead, MessageSettingsUpdate, MessageSignatureRead, MessageSignatureUpdate, MessageTemplateRead, MessageTemplatesUpdate, MessageTypeRead, MessageTypesUpdate, MessageUserRead
 from app.services.audit import write_audit
+from app.services.messaging_settings_service import get_effective_message_attachment_max_mb
 from app.services.realtime import message_notification_payload, notification_manager
 
 router = APIRouter(prefix="/messages", tags=["Internal Messages"])
 settings = get_settings()
 MAX_MESSAGE_ATTACHMENT_BYTES = 25 * 1024 * 1024
 DEFAULT_MESSAGE_TYPE = "internal_correspondence"
+DEFAULT_MESSAGE_CLASSIFICATION = "internal"
 BLOCKED_MESSAGE_ATTACHMENT_EXTENSIONS = {"exe", "bat", "cmd", "ps1", "sh", "js", "vbs", "msi"}
 STRUCTURED_TO_LEGACY_MESSAGE_TYPES = {
     "internal_message": "internal_correspondence",
@@ -45,6 +49,8 @@ STRUCTURED_TO_LEGACY_MESSAGE_TYPES = {
 }
 LEGACY_TO_STRUCTURED_MESSAGE_TYPES = {value: key for key, value in STRUCTURED_TO_LEGACY_MESSAGE_TYPES.items()}
 MESSAGE_SETTINGS_DEFAULTS = {
+    "module_name_ar": "المراسلات الداخلية",
+    "module_name_en": "Internal Messaging",
     "enabled": True,
     "enable_attachments": True,
     "enable_drafts": True,
@@ -75,10 +81,13 @@ MESSAGE_SETTINGS_DEFAULTS = {
     "notify_on_new_message": True,
     "notify_on_reply": True,
     "notify_on_read": False,
+    "notify_on_clarification_request": True,
+    "notify_on_official_message": True,
     "auto_refresh_seconds": 20,
     "max_attachment_mb": 25,
     "max_attachments_per_message": 10,
     "max_recipients": 200,
+    "default_priority": "normal",
     "default_message_type": DEFAULT_MESSAGE_TYPE,
     "allowed_extensions": ["pdf", "png", "jpg", "jpeg"],
     "block_executable_files": True,
@@ -107,6 +116,87 @@ MESSAGE_TYPE_DEFAULTS = [
     {"value": "circular", "label": "تعميم", "is_system": True},
 ]
 MESSAGE_TYPES = {item["value"] for item in MESSAGE_TYPE_DEFAULTS}
+MESSAGE_PRIORITIES = {"normal", "high", "urgent"}
+_MESSAGE_RUNTIME_COLUMNS_READY = False
+MESSAGE_CLASSIFICATION_DEFAULTS = [
+    {
+        "code": "public",
+        "name_ar": "عام",
+        "name_en": "Public",
+        "description": "مراسلة عامة داخل النظام",
+        "is_active": True,
+        "restricted_access": False,
+        "show_in_pdf": True,
+        "show_in_reports": True,
+        "allow_attachment_download": True,
+        "log_downloads": False,
+        "requires_special_permission": False,
+    },
+    {
+        "code": "internal",
+        "name_ar": "داخلي",
+        "name_en": "Internal",
+        "description": "مراسلة داخلية لمستخدمي النظام",
+        "is_active": True,
+        "restricted_access": False,
+        "show_in_pdf": True,
+        "show_in_reports": True,
+        "allow_attachment_download": True,
+        "log_downloads": False,
+        "requires_special_permission": False,
+    },
+    {
+        "code": "confidential",
+        "name_ar": "سري",
+        "name_en": "Confidential",
+        "description": "مراسلة سرية بين الأطراف المحددة",
+        "is_active": True,
+        "restricted_access": True,
+        "show_in_pdf": False,
+        "show_in_reports": False,
+        "allow_attachment_download": True,
+        "log_downloads": True,
+        "requires_special_permission": False,
+    },
+    {
+        "code": "top_secret",
+        "name_ar": "سري للغاية",
+        "name_en": "Top Secret",
+        "description": "مراسلة عالية السرية",
+        "is_active": True,
+        "restricted_access": True,
+        "show_in_pdf": False,
+        "show_in_reports": False,
+        "allow_attachment_download": False,
+        "log_downloads": True,
+        "requires_special_permission": True,
+    },
+]
+
+
+def ensure_message_runtime_columns(db: Session) -> None:
+    global _MESSAGE_RUNTIME_COLUMNS_READY
+    if _MESSAGE_RUNTIME_COLUMNS_READY:
+        return
+    try:
+        bind = db.get_bind()
+        inspector = inspect(bind)
+        if "internal_messages" not in inspector.get_table_names():
+            return
+        columns = {column["name"] for column in inspector.get_columns("internal_messages")}
+        if "priority" not in columns:
+            db.execute(text("ALTER TABLE internal_messages ADD COLUMN priority VARCHAR(20) DEFAULT 'normal'"))
+            db.execute(text("UPDATE internal_messages SET priority = 'normal' WHERE priority IS NULL OR priority = ''"))
+        if "classification_code" not in columns:
+            db.execute(text("ALTER TABLE internal_messages ADD COLUMN classification_code VARCHAR(80) DEFAULT 'internal'"))
+            db.execute(text("UPDATE internal_messages SET classification_code = 'internal' WHERE classification_code IS NULL OR classification_code = ''"))
+        db.execute(text('CREATE INDEX IF NOT EXISTS "idx_internal_messages_priority_created" ON "internal_messages" (priority, created_at)'))
+        db.execute(text('CREATE INDEX IF NOT EXISTS "idx_internal_messages_classification_created" ON "internal_messages" (classification_code, created_at)'))
+        db.commit()
+        _MESSAGE_RUNTIME_COLUMNS_READY = True
+    except Exception:
+        db.rollback()
+        raise
 
 MESSAGE_DEFAULT_ROLES = {
     UserRole.EMPLOYEE,
@@ -172,6 +262,7 @@ def message_settings_setting(db: Session) -> PortalSetting | None:
 
 
 def load_message_settings(db: Session) -> dict:
+    ensure_message_runtime_columns(db)
     setting = message_settings_setting(db)
     value = setting.setting_value if setting and isinstance(setting.setting_value, dict) else {}
     loaded = {**MESSAGE_SETTINGS_DEFAULTS, **value}
@@ -183,6 +274,8 @@ def load_message_settings(db: Session) -> dict:
     recipient_setting = db.scalar(select(PortalSetting).where(PortalSetting.category == "messaging_recipient_settings", PortalSetting.setting_key == "defaults"))
     recipient_value = recipient_setting.setting_value if recipient_setting and isinstance(recipient_setting.setting_value, dict) else {}
     if general is not None:
+        loaded["module_name_ar"] = general.module_name_ar or loaded.get("module_name_ar") or "المراسلات الداخلية"
+        loaded["module_name_en"] = general.module_name_en or loaded.get("module_name_en") or "Internal Messaging"
         loaded["enabled"] = bool(general.enable_messaging)
         loaded["allow_archiving"] = bool(general.allow_archiving)
         loaded["allow_general_messages"] = bool(general.allow_general_messages)
@@ -193,6 +286,7 @@ def load_message_settings(db: Session) -> dict:
         loaded["enable_unread_badge"] = bool(general.enable_unread_badge)
         loaded["enable_circulars"] = bool(general.allow_broadcast_messages)
         loaded["enable_department_broadcasts"] = bool(general.allow_broadcast_messages)
+        loaded["default_priority"] = general.default_priority or loaded.get("default_priority") or "normal"
         loaded["max_recipients"] = int(general.max_recipients or loaded.get("max_recipients") or 10)
     if attachments is not None:
         loaded["enable_attachments"] = bool(attachments.allow_message_attachments)
@@ -214,6 +308,8 @@ def load_message_settings(db: Session) -> dict:
         loaded["notify_on_new_message"] = bool(notifications.notify_on_new_message)
         loaded["notify_on_reply"] = bool(notifications.notify_on_reply)
         loaded["notify_on_read"] = bool(notifications.notify_on_read)
+        loaded["notify_on_clarification_request"] = bool(notifications.notify_on_clarification_request)
+        loaded["notify_on_official_message"] = bool(notifications.notify_on_official_message)
         loaded["enable_unread_badge"] = bool(loaded.get("enable_unread_badge", True) and notifications.show_unread_count)
     if recipient_value:
         loaded["allow_send_to_user"] = bool(recipient_value.get("allow_send_to_user", True))
@@ -237,9 +333,11 @@ def load_message_settings(db: Session) -> dict:
         loaded["auto_archive_after_days"] = int(retention.auto_archive_after_days or 0)
         loaded["allow_admin_purge_messages"] = bool(retention.allow_admin_purge_messages)
     loaded["auto_refresh_seconds"] = min(max(int(loaded.get("auto_refresh_seconds") or 20), 5), 300)
-    loaded["max_attachment_mb"] = min(max(int(loaded.get("max_attachment_mb") or 25), 1), 1024)
+    configured_attachment_max_mb = min(max(int(loaded.get("max_attachment_mb") or 25), 1), 1024)
+    loaded["max_attachment_mb"] = get_effective_message_attachment_max_mb(db, configured_attachment_max_mb)
     loaded["max_attachments_per_message"] = min(max(int(loaded.get("max_attachments_per_message") or 10), 1), 100)
     loaded["max_recipients"] = min(max(int(loaded.get("max_recipients") or 200), 1), 1000)
+    loaded["default_priority"] = normalize_message_priority(str(loaded.get("default_priority") or "normal"))
     loaded["default_message_type"] = str(loaded.get("default_message_type") or DEFAULT_MESSAGE_TYPE)
     allowed_extensions = loaded.get("allowed_extensions") or ["pdf", "png", "jpg", "jpeg"]
     loaded["allowed_extensions"] = sorted({str(item).strip().lower().lstrip(".") for item in allowed_extensions if str(item).strip()})
@@ -368,6 +466,13 @@ def load_message_types(db: Session) -> list[dict]:
                 "value": legacy_message_type_code(item.code),
                 "label": item.name_ar,
                 "is_system": item.code in {"internal_message", "official_message", "clarification_request", "clarification_response", "approval_note", "rejection_note", "execution_note", "notification", "announcement"},
+                "color": item.color,
+                "icon": item.icon,
+                "is_official": bool(item.is_official),
+                "requires_request": bool(item.requires_request),
+                "requires_attachment": bool(item.requires_attachment),
+                "show_in_pdf": bool(item.show_in_pdf),
+                "allow_reply": bool(item.allow_reply),
             }
             for item in rows
             if item.is_active
@@ -385,6 +490,43 @@ def load_message_types(db: Session) -> list[dict]:
     return list(types.values())
 
 
+def load_message_classifications(db: Session) -> list[dict]:
+    rows = db.scalars(select(MessageClassification).order_by(MessageClassification.id)).all()
+    if rows:
+        return [
+            {
+                "code": item.code,
+                "name_ar": item.name_ar,
+                "name_en": item.name_en,
+                "description": item.description,
+                "is_active": bool(item.is_active),
+                "restricted_access": bool(item.restricted_access),
+                "show_in_pdf": bool(item.show_in_pdf),
+                "show_in_reports": bool(item.show_in_reports),
+                "allow_attachment_download": bool(item.allow_attachment_download),
+                "log_downloads": bool(item.log_downloads),
+                "requires_special_permission": bool(item.requires_special_permission),
+            }
+            for item in rows
+            if item.is_active
+        ]
+    return [dict(item) for item in MESSAGE_CLASSIFICATION_DEFAULTS if item["is_active"]]
+
+
+def get_message_classification(db: Session, code: str | None) -> dict:
+    normalized_code = str(code or DEFAULT_MESSAGE_CLASSIFICATION).strip() or DEFAULT_MESSAGE_CLASSIFICATION
+    classifications = {item["code"]: item for item in load_message_classifications(db)}
+    return classifications.get(normalized_code) or classifications.get(DEFAULT_MESSAGE_CLASSIFICATION) or MESSAGE_CLASSIFICATION_DEFAULTS[1]
+
+
+def normalize_message_classification(db: Session, value: str | None) -> str:
+    classification_code = str(value or DEFAULT_MESSAGE_CLASSIFICATION).strip() or DEFAULT_MESSAGE_CLASSIFICATION
+    classifications = {item["code"] for item in load_message_classifications(db)}
+    if classification_code not in classifications:
+        raise HTTPException(status_code=422, detail="تصنيف السرية غير صحيح أو غير مفعل")
+    return classification_code
+
+
 def normalize_message_template(raw: dict) -> dict:
     return {
         "key": str(raw.get("key") or "").strip(),
@@ -400,6 +542,23 @@ def message_template_setting(db: Session) -> PortalSetting | None:
 
 
 def load_message_templates(db: Session) -> list[dict]:
+    rows = db.scalars(
+        select(MessageTemplate)
+        .options(selectinload(MessageTemplate.message_type))
+        .where(MessageTemplate.is_active == True)
+        .order_by(MessageTemplate.id)
+    ).all()
+    if rows:
+        return [
+            {
+                "key": f"template_{item.id}",
+                "label": item.name,
+                "message_type": legacy_message_type_code(item.message_type.code if item.message_type else DEFAULT_MESSAGE_TYPE),
+                "subject": item.subject_template.replace("{{", "{").replace("}}", "}"),
+                "body": item.body_template.replace("{{", "{").replace("}}", "}"),
+            }
+            for item in rows
+        ]
     templates = {item["key"]: dict(item) for item in MESSAGE_TEMPLATE_DEFAULTS}
     setting = message_template_setting(db)
     value = setting.setting_value if setting and isinstance(setting.setting_value, dict) else {}
@@ -462,6 +621,8 @@ def message_read(message: InternalMessage, current_user: User, recipient_state: 
         message_uid=message.message_uid,
         thread_id=message.thread_id or message.id,
         message_type=message.message_type or DEFAULT_MESSAGE_TYPE,
+        priority=message.priority or "normal",
+        classification_code=message.classification_code or DEFAULT_MESSAGE_CLASSIFICATION,
         subject=message.subject,
         body=message.body,
         sender_id=message.sender_id,
@@ -603,6 +764,14 @@ def normalize_message_type(value: str | None, db: Session | None = None) -> str:
     return message_type
 
 
+def normalize_message_priority(value: str | None, message_settings: dict | None = None) -> str:
+    default_priority = str((message_settings or {}).get("default_priority") or "normal").strip() or "normal"
+    priority = str(value or default_priority).strip()
+    if priority not in MESSAGE_PRIORITIES:
+        raise HTTPException(status_code=422, detail="أولوية الرسالة غير صحيحة")
+    return priority
+
+
 def authorize_message_type(db: Session, user: User, value: str | None, message_settings: dict | None = None) -> str:
     message_type = normalize_message_type(value, db)
     settings_value = message_settings or load_message_settings(db)
@@ -658,7 +827,18 @@ def resolve_message_recipients(db: Session, current_user: User, recipient_ids: l
     return recipients
 
 
-def create_message_record(db: Session, current_user: User, recipient_ids: list[int], subject: str, body: str, related_request_id: int | str | None = None, message_type: str | None = None, attachment_count: int = 0) -> InternalMessage:
+def create_message_record(
+    db: Session,
+    current_user: User,
+    recipient_ids: list[int],
+    subject: str,
+    body: str,
+    related_request_id: int | str | None = None,
+    message_type: str | None = None,
+    priority: str | None = None,
+    classification_code: str | None = None,
+    attachment_count: int = 0,
+) -> InternalMessage:
     message_settings = load_message_settings(db)
     if not message_settings.get("enabled", True):
         raise HTTPException(status_code=403, detail="المراسلات غير مفعلة حالياً")
@@ -675,6 +855,8 @@ def create_message_record(db: Session, current_user: User, recipient_ids: list[i
         message_uid=generate_message_uid(db),
         sender_id=current_user.id,
         message_type=authorized_message_type,
+        priority=normalize_message_priority(priority, message_settings),
+        classification_code=normalize_message_classification(db, classification_code),
         subject=subject.strip(),
         body=body.strip(),
         related_request_id=resolved_related_request_id,
@@ -701,6 +883,11 @@ def notify_message_recipients(db: Session, message: InternalMessage, sender: Use
     if event == "new" and not message_settings.get("notify_on_new_message", True):
         return
     if event == "reply" and not message_settings.get("notify_on_reply", True):
+        return
+    structured_type = structured_message_type_code(message.message_type)
+    if structured_type == "official_message" and not message_settings.get("notify_on_official_message", True):
+        return
+    if structured_type == "clarification_request" and not message_settings.get("notify_on_clarification_request", True):
         return
     recipient_ids = [recipient.recipient_id for recipient in message.recipients if recipient.recipient_id != sender.id]
     if not recipient_ids:
@@ -824,6 +1011,13 @@ def list_message_types(db: Session = Depends(get_db), current_user: User = Depen
     return load_message_types(db)
 
 
+@router.get("/classifications", response_model=list[MessageClassificationRead])
+def list_message_classifications(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    if not (user_has_messages_screen(db, current_user) or can_manage_message_templates(current_user)):
+        raise HTTPException(status_code=403, detail="المراسلات غير مفعلة لهذا المستخدم")
+    return load_message_classifications(db)
+
+
 @router.put("/types", response_model=list[MessageTypeRead])
 def update_message_types(payload: MessageTypesUpdate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     if not can_manage_message_templates(current_user):
@@ -886,11 +1080,16 @@ def inbox(
     related_request: str | None = None,
     sender_id: int | None = None,
     message_type: str | None = None,
+    official_only: bool = Query(default=False),
+    clarification_only: bool = Query(default=False),
+    priority: str | None = None,
+    classification_code: str | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
 ):
+    ensure_message_runtime_columns(db)
     stmt = (
         select(InternalMessageRecipient)
         .options(
@@ -918,12 +1117,127 @@ def inbox(
         stmt = stmt.where(InternalMessage.sender_id == sender_id)
     if message_type:
         stmt = stmt.where(InternalMessage.message_type == normalize_message_type(message_type, db))
+    if official_only:
+        official_types = [
+            legacy_message_type_code(row.code)
+            for row in db.scalars(select(MessageType).where(MessageType.is_active == True, MessageType.is_official == True)).all()
+        ] or ["official_correspondence"]
+        stmt = stmt.where(InternalMessage.message_type.in_(official_types))
+    if clarification_only:
+        clarification_types = [
+            legacy_message_type_code(row.code)
+            for row in db.scalars(
+                select(MessageType).where(
+                    MessageType.is_active == True,
+                    MessageType.code.in_(["clarification_request", "clarification_response"]),
+                )
+            ).all()
+        ] or ["clarification_request", "reply_to_clarification"]
+        stmt = stmt.where(InternalMessage.message_type.in_(clarification_types))
+    if priority:
+        stmt = stmt.where(InternalMessage.priority == normalize_message_priority(priority))
+    if classification_code:
+        stmt = stmt.where(InternalMessage.classification_code == normalize_message_classification(db, classification_code))
     if date_from:
         stmt = stmt.where(InternalMessage.created_at >= parse_filter_date(date_from))
     if date_to:
         stmt = stmt.where(InternalMessage.created_at <= parse_filter_date(date_to, end_of_day=True))
     rows = db.scalars(stmt.offset(offset).limit(limit)).all()
     return [message_read(row.message, current_user, row) for row in rows]
+
+
+@router.get("/unread", response_model=list[InternalMessageRead])
+def unread_messages(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    search: str | None = None,
+    related_request_id: int | None = None,
+    related_request: str | None = None,
+    sender_id: int | None = None,
+    message_type: str | None = None,
+    priority: str | None = None,
+    classification_code: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+):
+    return inbox(
+        db=db,
+        current_user=current_user,
+        search=search,
+        unread_only=True,
+        archived=False,
+        related_request_id=related_request_id,
+        related_request=related_request,
+        sender_id=sender_id,
+        message_type=message_type,
+        official_only=False,
+        clarification_only=False,
+        priority=priority,
+        classification_code=classification_code,
+        date_from=date_from,
+        date_to=date_to,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get("/request-linked", response_model=list[InternalMessageRead])
+def request_linked_messages(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    search: str | None = None,
+    related_request_id: int | None = None,
+    related_request: str | None = None,
+    message_type: str | None = None,
+    priority: str | None = None,
+    classification_code: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+):
+    ensure_message_runtime_columns(db)
+    if not load_message_settings(db).get("enable_linked_requests", True):
+        raise HTTPException(status_code=403, detail="ربط الرسائل بالطلبات غير مفعل")
+    stmt = (
+        select(InternalMessage)
+        .options(
+            selectinload(InternalMessage.sender),
+            selectinload(InternalMessage.recipients).selectinload(InternalMessageRecipient.recipient),
+            selectinload(InternalMessage.attachments),
+            selectinload(InternalMessage.related_request),
+        )
+        .where(InternalMessage.related_request_id.is_not(None), InternalMessage.is_draft == False)
+        .order_by(InternalMessage.created_at.desc())
+    )
+    if search:
+        stmt = stmt.where(InternalMessage.message_uid.ilike(f"%{search}%") | InternalMessage.subject.ilike(f"%{search}%") | InternalMessage.body.ilike(f"%{search}%"))
+    if related_request_id or related_request:
+        stmt = stmt.where(InternalMessage.related_request_id == resolve_related_request_id(db, related_request_id or related_request))
+    if message_type:
+        stmt = stmt.where(InternalMessage.message_type == normalize_message_type(message_type, db))
+    if priority:
+        stmt = stmt.where(InternalMessage.priority == normalize_message_priority(priority))
+    if classification_code:
+        stmt = stmt.where(InternalMessage.classification_code == normalize_message_classification(db, classification_code))
+    if date_from:
+        stmt = stmt.where(InternalMessage.created_at >= parse_filter_date(date_from))
+    if date_to:
+        stmt = stmt.where(InternalMessage.created_at <= parse_filter_date(date_to, end_of_day=True))
+    messages = db.scalars(stmt.offset(offset).limit(limit)).all()
+    result: list[InternalMessageRead] = []
+    for message in messages:
+        if not can_access_message(message, current_user):
+            continue
+        recipient_state = next((recipient for recipient in message.recipients if recipient.recipient_id == current_user.id), None)
+        if message.sender_id == current_user.id and (message.is_sender_archived or message.is_sender_deleted):
+            continue
+        if recipient_state and (recipient_state.is_archived or recipient_state.is_deleted):
+            continue
+        result.append(message_read(message, current_user, recipient_state))
+    return result
 
 
 @router.get("/sent", response_model=list[InternalMessageRead])
@@ -935,11 +1249,14 @@ def sent(
     related_request_id: int | None = None,
     related_request: str | None = None,
     message_type: str | None = None,
+    priority: str | None = None,
+    classification_code: str | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
 ):
+    ensure_message_runtime_columns(db)
     stmt = (
         select(InternalMessage)
         .options(
@@ -962,6 +1279,10 @@ def sent(
         stmt = stmt.where(InternalMessage.related_request_id == resolve_related_request_id(db, related_request_id or related_request))
     if message_type:
         stmt = stmt.where(InternalMessage.message_type == normalize_message_type(message_type, db))
+    if priority:
+        stmt = stmt.where(InternalMessage.priority == normalize_message_priority(priority))
+    if classification_code:
+        stmt = stmt.where(InternalMessage.classification_code == normalize_message_classification(db, classification_code))
     if date_from:
         stmt = stmt.where(InternalMessage.created_at >= parse_filter_date(date_from))
     if date_to:
@@ -976,11 +1297,14 @@ def drafts(
     search: str | None = None,
     message_type: str | None = None,
     related_request: str | None = None,
+    priority: str | None = None,
+    classification_code: str | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
 ):
+    ensure_message_runtime_columns(db)
     stmt = (
         select(InternalMessage)
         .options(
@@ -996,6 +1320,10 @@ def drafts(
         stmt = stmt.where(InternalMessage.message_uid.ilike(f"%{search}%") | InternalMessage.subject.ilike(f"%{search}%") | InternalMessage.body.ilike(f"%{search}%"))
     if message_type:
         stmt = stmt.where(InternalMessage.message_type == normalize_message_type(message_type, db))
+    if priority:
+        stmt = stmt.where(InternalMessage.priority == normalize_message_priority(priority))
+    if classification_code:
+        stmt = stmt.where(InternalMessage.classification_code == normalize_message_classification(db, classification_code))
     if related_request:
         stmt = stmt.where(InternalMessage.related_request_id == resolve_related_request_id(db, related_request))
     if date_from:
@@ -1017,6 +1345,8 @@ def create_draft(payload: InternalMessageDraftUpsert, db: Session = Depends(get_
         message_uid=generate_message_uid(db),
         sender_id=current_user.id,
         message_type=authorize_message_type(db, current_user, payload.message_type),
+        priority=normalize_message_priority(payload.priority, message_settings),
+        classification_code=normalize_message_classification(db, payload.classification_code),
         subject=payload.subject.strip(),
         body=payload.body.strip(),
         related_request_id=resolved_related_request_id,
@@ -1036,6 +1366,8 @@ def create_draft(payload: InternalMessageDraftUpsert, db: Session = Depends(get_
 async def create_draft_with_attachments(
     recipient_ids: str = Form(default=""),
     message_type: str = Form(default=DEFAULT_MESSAGE_TYPE),
+    priority: str = Form(default="normal"),
+    classification_code: str = Form(default=DEFAULT_MESSAGE_CLASSIFICATION),
     subject: str = Form(default=""),
     body: str = Form(default=""),
     related_request_id: str | None = Form(default=None),
@@ -1055,6 +1387,8 @@ async def create_draft_with_attachments(
         message_uid=generate_message_uid(db),
         sender_id=current_user.id,
         message_type=authorize_message_type(db, current_user, message_type),
+        priority=normalize_message_priority(priority, message_settings),
+        classification_code=normalize_message_classification(db, classification_code),
         subject=subject.strip(),
         body=body.strip(),
         related_request_id=resolved_related_request_id,
@@ -1084,6 +1418,8 @@ def update_draft(draft_id: int, payload: InternalMessageDraftUpsert, db: Session
         raise HTTPException(status_code=403, detail="المراسلات العامة غير مفعلة. يجب ربط المسودة بطلب")
     draft.subject = payload.subject.strip()
     draft.message_type = authorize_message_type(db, current_user, payload.message_type, message_settings)
+    draft.priority = normalize_message_priority(payload.priority, message_settings)
+    draft.classification_code = normalize_message_classification(db, payload.classification_code)
     draft.body = payload.body.strip()
     draft.related_request_id = resolved_related_request_id
     draft.updated_at = datetime.now(timezone.utc)
@@ -1114,6 +1450,8 @@ def send_draft(draft_id: int, payload: InternalMessageDraftUpsert, db: Session =
     validate_message_type_rules(db, authorized_message_type, resolved_related_request_id, len(draft.attachments))
     draft.subject = subject
     draft.message_type = authorized_message_type
+    draft.priority = normalize_message_priority(payload.priority, message_settings)
+    draft.classification_code = normalize_message_classification(db, payload.classification_code)
     draft.body = body
     draft.related_request_id = resolved_related_request_id
     draft.is_draft = False
@@ -1158,7 +1496,17 @@ def request_messages(request_id: int, db: Session = Depends(get_db), current_use
 
 @router.post("", response_model=InternalMessageRead, status_code=status.HTTP_201_CREATED)
 def send_message(payload: InternalMessageCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    message = create_message_record(db, current_user, payload.recipient_ids, payload.subject, payload.body, payload.related_request_id, payload.message_type)
+    message = create_message_record(
+        db,
+        current_user,
+        payload.recipient_ids,
+        payload.subject,
+        payload.body,
+        payload.related_request_id,
+        payload.message_type,
+        payload.priority,
+        payload.classification_code,
+    )
     write_audit(db, "internal_message_sent", "internal_message", actor=current_user, entity_id=str(message.id))
     db.commit()
     message = db.scalar(
@@ -1179,6 +1527,8 @@ def send_message(payload: InternalMessageCreate, db: Session = Depends(get_db), 
 async def send_message_with_attachments(
     recipient_ids: str = Form(...),
     message_type: str = Form(default=DEFAULT_MESSAGE_TYPE),
+    priority: str = Form(default="normal"),
+    classification_code: str = Form(default=DEFAULT_MESSAGE_CLASSIFICATION),
     subject: str = Form(...),
     body: str = Form(...),
     related_request_id: str | None = Form(default=None),
@@ -1187,7 +1537,18 @@ async def send_message_with_attachments(
     current_user: User = Depends(get_current_user),
 ):
     ids = [int(value) for value in recipient_ids.split(",") if value.strip().isdigit()]
-    message = create_message_record(db, current_user, ids, subject, body, related_request_id, message_type, attachment_count=len([file for file in attachments if file.filename]))
+    message = create_message_record(
+        db,
+        current_user,
+        ids,
+        subject,
+        body,
+        related_request_id,
+        message_type,
+        priority,
+        classification_code,
+        attachment_count=len([file for file in attachments if file.filename]),
+    )
     await save_message_attachments(db, message, attachments, current_user)
     write_audit(
         db,
@@ -1333,6 +1694,8 @@ def reply_message(message_id: int, payload: InternalMessageReply, db: Session = 
         thread_id=original.thread_id or original.id,
         sender_id=current_user.id,
         message_type=authorized_message_type,
+        priority=normalize_message_priority(payload.priority, load_message_settings(db)),
+        classification_code=normalize_message_classification(db, payload.classification_code),
         subject=original.subject if original.subject.startswith("رد:") else f"رد: {original.subject}",
         body=payload.body.strip(),
         related_request_id=original.related_request_id,
@@ -1353,6 +1716,8 @@ async def reply_message_with_attachments(
     message_id: int,
     body: str = Form(...),
     message_type: str = Form(default="reply_to_clarification"),
+    priority: str = Form(default="normal"),
+    classification_code: str = Form(default=DEFAULT_MESSAGE_CLASSIFICATION),
     attachments: list[UploadFile] = File(default=[]),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -1370,6 +1735,8 @@ async def reply_message_with_attachments(
         thread_id=original.thread_id or original.id,
         sender_id=current_user.id,
         message_type=authorized_message_type,
+        priority=normalize_message_priority(priority, load_message_settings(db)),
+        classification_code=normalize_message_classification(db, classification_code),
         subject=original.subject if original.subject.startswith("رد:") else f"رد: {original.subject}",
         body=body.strip(),
         related_request_id=original.related_request_id,
@@ -1414,6 +1781,8 @@ def forward_message(message_id: int, payload: InternalMessageForward, db: Sessio
         forwarded_body,
         original.related_request_id,
         payload.message_type,
+        payload.priority,
+        payload.classification_code,
     )
     write_audit(
         db,
@@ -1450,6 +1819,33 @@ def mark_read(message_id: int, db: Session = Depends(get_db), current_user: User
         db.commit()
         db.refresh(row)
         notify_message_read(db, row.message, current_user)
+    return message_read(row.message, current_user, row)
+
+
+@router.post("/{message_id}/mark-read", response_model=InternalMessageRead)
+def mark_read_alias(message_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    return mark_read(message_id, db, current_user)
+
+
+@router.post("/{message_id}/mark-unread", response_model=InternalMessageRead)
+def mark_unread(message_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    row = db.scalar(
+        select(InternalMessageRecipient)
+        .options(
+            selectinload(InternalMessageRecipient.message).selectinload(InternalMessage.sender),
+            selectinload(InternalMessageRecipient.message).selectinload(InternalMessage.recipients).selectinload(InternalMessageRecipient.recipient),
+            selectinload(InternalMessageRecipient.message).selectinload(InternalMessage.attachments),
+            selectinload(InternalMessageRecipient.message).selectinload(InternalMessage.related_request),
+        )
+        .where(InternalMessageRecipient.message_id == message_id, InternalMessageRecipient.recipient_id == current_user.id)
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Message not found")
+    row.is_read = False
+    row.read_at = None
+    write_audit(db, "internal_message_marked_unread", "internal_message", actor=current_user, entity_id=str(message_id))
+    db.commit()
+    db.refresh(row)
     return message_read(row.message, current_user, row)
 
 
@@ -1524,7 +1920,10 @@ def download_attachment(message_id: int, attachment_id: int, db: Session = Depen
         raise HTTPException(status_code=404, detail="Attachment file not found")
     message_settings = load_message_settings(db)
     security_policy = db.scalar(select(MessageSecurityPolicy).limit(1))
-    if message_settings.get("log_attachment_downloads", True) or (security_policy and security_policy.log_attachment_downloaded):
+    classification = get_message_classification(db, message.classification_code)
+    if not classification.get("allow_attachment_download", True):
+        raise HTTPException(status_code=403, detail="تحميل مرفقات هذا التصنيف غير مسموح")
+    if message_settings.get("log_attachment_downloads", True) or classification.get("log_downloads", False) or (security_policy and security_policy.log_attachment_downloaded):
         write_audit(db, "internal_message_attachment_downloaded", "internal_message", actor=current_user, entity_id=str(message_id), metadata={"attachment_id": attachment_id})
         db.commit()
     return FileResponse(path, media_type=attachment.content_type, filename=attachment.original_name)

@@ -344,9 +344,8 @@ const defaultMessageTypes = [
 const messageRoleOptions = [
   { id: "employee", label: "موظف" },
   { id: "direct_manager", label: "مدير مباشر" },
-  { id: "it_staff", label: "موظف تنفيذ" },
-  { id: "it_manager", label: "مدير تقنية المعلومات" },
-  { id: "information_security", label: "أمن المعلومات" },
+  { id: "it_staff", label: "مختص تنفيذ" },
+  { id: "it_manager", label: "مدير إدارة" },
   { id: "executive_management", label: "الإدارة التنفيذية" },
   { id: "super_admin", label: "مدير النظام" }
 ];

@@ -7,9 +7,8 @@ import { Input } from "../ui/input";
 const roles = [
   ["employee", "موظف"],
   ["direct_manager", "مدير مباشر"],
-  ["it_staff", "موظف تنفيذ"],
-  ["it_manager", "مدير تقنية المعلومات"],
-  ["information_security", "أمن المعلومات"],
+  ["it_staff", "مختص تنفيذ"],
+  ["it_manager", "مدير إدارة"],
   ["executive_management", "الإدارة التنفيذية"],
   ["super_admin", "مدير النظام"]
 ];
@@ -237,7 +236,7 @@ export default function UserSettings({ notify }) {
   async function save(event) {
     event.preventDefault();
     if (form.role === "it_staff" && !(form.administrative_section || administrativeSection)) {
-      const message = "اختر القسم المختص لموظف التنفيذ قبل الحفظ.";
+      const message = "اختر القسم المختص لمختص التنفيذ قبل الحفظ.";
       setError(message);
       notify(message, "error");
       return;
@@ -481,7 +480,7 @@ export default function UserSettings({ notify }) {
           <div className="grid gap-2 sm:grid-cols-3">
             <RelationButton active={relationMode === "employee"} onClick={() => updateField("role", "employee")} title="موظف" description="يرتبط بمدير مباشر داخل نفس الإدارة" />
             <RelationButton active={relationMode === "direct_manager"} onClick={() => updateField("role", "direct_manager")} title="مدير مباشر" description="يظهر كمدير لموظفي الإدارة المختارة" />
-            <RelationButton active={relationMode === "advanced"} onClick={() => updateField("role", "it_staff")} title="صلاحية إدارية" description="أدوار تقنية المعلومات أو الإدارة العليا" />
+            <RelationButton active={relationMode === "advanced"} onClick={() => updateField("role", "it_staff")} title="مختص تنفيذ" description="يرتبط بقسم مختص لتنفيذ الطلبات" />
           </div>
           {relationMode === "advanced" && (
             <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3">

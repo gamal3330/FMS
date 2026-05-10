@@ -59,6 +59,7 @@ class SpecializedSectionPayload(BaseModel):
     name_ar: str = Field(max_length=120)
     name_en: str | None = Field(default=None, max_length=120)
     code: str = Field(max_length=40, pattern=r"^[A-Za-z0-9_-]+$")
+    department_id: int | None = None
     description: str | None = None
     is_active: bool = True
 

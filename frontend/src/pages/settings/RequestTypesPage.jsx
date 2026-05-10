@@ -40,7 +40,13 @@ export default function RequestTypesPage() {
       ]);
       setItems(data.request_types || []);
       setDepartments(data.departments || []);
-      setSections((data.specialized_sections || []).map((section) => [section.code, section.name_ar]));
+      const departmentNameById = new Map((data.departments || []).map((department) => [Number(department.id), department.name_ar]));
+      setSections(
+        (data.specialized_sections || []).map((section) => [
+          section.code,
+          section.department_id ? `${section.name_ar} - ${departmentNameById.get(Number(section.department_id)) || "إدارة مرتبطة"}` : section.name_ar
+        ])
+      );
       setOverview(overviewResponse.data);
       setSelected((current) => current || data.request_types?.[0] || null);
     } catch (error) {
@@ -262,62 +268,94 @@ function OverviewCard({ label, value, tone = "bank" }) {
 }
 
 function PublishValidationPanel({ validation, onRefresh, onPublish }) {
+  const [showDetails, setShowDetails] = useState(false);
   if (!validation) {
     return <div className="rounded-md bg-slate-50 p-4 text-sm font-semibold text-slate-500">جاري فحص المسودة...</div>;
   }
   const preview = validation.preview || {};
   const canPublish = validation.can_publish && validation.has_draft;
+  const failedChecks = (validation.checks || []).filter((check) => check.status === "failed");
+  const warningChecks = (validation.checks || []).filter((check) => check.status === "warning");
+  const nextActions = failedChecks.length ? failedChecks : warningChecks.slice(0, 3);
   return (
-    <div className="space-y-4">
-      <div className={`rounded-md border p-4 ${validation.can_publish ? "border-emerald-200 bg-emerald-50" : "border-red-200 bg-red-50"}`}>
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-          <div>
-            <p className={`text-base font-black ${validation.can_publish ? "text-emerald-900" : "text-red-900"}`}>
-              {validation.can_publish ? "المسودة قابلة للنشر" : "المسودة تحتاج معالجة قبل النشر"}
-            </p>
-            <p className={`mt-1 text-sm font-semibold ${validation.can_publish ? "text-emerald-800" : "text-red-800"}`}>
-              {validation.has_draft ? `سيتم نشر النسخة v${validation.version_number}.` : "لا توجد مسودة جديدة؛ عدّل البيانات أو الحقول أو المسار لإنشاء مسودة."}
-            </p>
+    <div className="space-y-3">
+      <div className={`rounded-lg border p-5 ${canPublish ? "border-emerald-200 bg-emerald-50" : "border-amber-200 bg-amber-50"}`}>
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex items-start gap-3">
+            {canPublish ? <CheckCircle2 className="mt-1 h-6 w-6 text-emerald-700" /> : <AlertTriangle className="mt-1 h-6 w-6 text-amber-700" />}
+            <div>
+              <p className={`text-lg font-black ${canPublish ? "text-emerald-950" : "text-amber-950"}`}>
+                {canPublish ? "جاهزة للنشر" : validation.has_draft ? "تحتاج مراجعة قبل النشر" : "لا توجد مسودة للنشر"}
+              </p>
+              <p className={`mt-1 text-sm leading-6 ${canPublish ? "text-emerald-800" : "text-amber-800"}`}>
+                {validation.has_draft
+                  ? `هذه النسخة v${validation.version_number}. النشر سيجعلها النسخة المستخدمة في الطلبات الجديدة فقط.`
+                  : "عدّل بيانات نوع الطلب أو الحقول أو مسار الموافقات ليتم إنشاء مسودة جديدة."}
+              </p>
+            </div>
           </div>
           <div className="flex flex-wrap gap-2">
             <Button type="button" onClick={onRefresh} className="gap-2 border border-slate-200 bg-white text-slate-700 hover:bg-slate-50">
               <RefreshCw className="h-4 w-4" />
-              إعادة الفحص
+              فحص
             </Button>
             <Button type="button" onClick={onPublish} disabled={!canPublish} className="gap-2">
               <Rocket className="h-4 w-4" />
-              نشر المسودة
+              نشر
             </Button>
           </div>
         </div>
       </div>
 
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-        <OverviewCard label="عدد الأخطاء" value={validation.errors_count || 0} tone={validation.errors_count ? "amber" : "green"} />
-        <OverviewCard label="عدد التحذيرات" value={validation.warnings_count || 0} tone={validation.warnings_count ? "amber" : "green"} />
+        <OverviewCard label="الأخطاء" value={validation.errors_count || 0} tone={validation.errors_count ? "amber" : "green"} />
+        <OverviewCard label="التحذيرات" value={validation.warnings_count || 0} tone={validation.warnings_count ? "amber" : "green"} />
         <OverviewCard label="حقول النموذج" value={preview.fields_count ?? 0} />
         <OverviewCard label="مراحل الموافقات" value={preview.workflow_steps_count ?? 0} />
       </div>
 
-      <div className="overflow-x-auto rounded-md border border-slate-200">
-        <table className="w-full min-w-[760px] text-sm">
-          <thead className="bg-slate-50 text-slate-500">
-            <tr>
-              {["الفحص", "الحالة", "النتيجة"].map((header) => (
-                <th key={header} className="p-3 text-right font-bold">{header}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100 bg-white">
-            {(validation.checks || []).map((check) => (
-              <tr key={check.code}>
-                <td className="p-3 font-black text-slate-900">{check.label}</td>
-                <td className="p-3"><ValidationBadge status={check.status} /></td>
-                <td className="p-3 text-slate-600">{check.message}</td>
-              </tr>
+      <div className="rounded-lg border border-slate-200 bg-white p-4">
+        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          <div>
+            <p className="font-black text-slate-950">{nextActions.length ? "المطلوب الآن" : "لا توجد ملاحظات تمنع النشر"}</p>
+            <p className="mt-1 text-sm text-slate-500">احتفظنا بالتفاصيل الكاملة عند الحاجة فقط حتى تبقى الشاشة خفيفة.</p>
+          </div>
+          <button type="button" onClick={() => setShowDetails((value) => !value)} className="rounded-md border border-slate-200 px-3 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50">
+            {showDetails ? "إخفاء التفاصيل" : "عرض تفاصيل الفحص"}
+          </button>
+        </div>
+        {nextActions.length > 0 && (
+          <div className="mt-4 grid gap-2">
+            {nextActions.map((check) => (
+              <div key={check.code} className="rounded-md border border-slate-100 bg-slate-50 p-3">
+                <p className="font-black text-slate-900">{check.label}</p>
+                <p className="mt-1 text-sm leading-6 text-slate-600">{check.message}</p>
+              </div>
             ))}
-          </tbody>
-        </table>
+          </div>
+        )}
+        {showDetails && (
+          <div className="mt-4 overflow-x-auto rounded-md border border-slate-200">
+            <table className="w-full min-w-[760px] text-sm">
+              <thead className="bg-slate-50 text-slate-500">
+                <tr>
+                  {["الفحص", "الحالة", "النتيجة"].map((header) => (
+                    <th key={header} className="p-3 text-right font-bold">{header}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 bg-white">
+                {(validation.checks || []).map((check) => (
+                  <tr key={check.code}>
+                    <td className="p-3 font-black text-slate-900">{check.label}</td>
+                    <td className="p-3"><ValidationBadge status={check.status} /></td>
+                    <td className="p-3 text-slate-600">{check.message}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -334,21 +372,39 @@ function ValidationBadge({ status }) {
 }
 
 function RequestTypeVersionsPanel({ versionInfo, onPublishDraft }) {
+  const [showHistory, setShowHistory] = useState(false);
   if (!versionInfo) {
     return <div className="rounded-md bg-slate-50 p-4 text-sm text-slate-500">جاري تحميل النسخ...</div>;
   }
-  const draft = (versionInfo.versions || []).find((version) => version.status === "draft");
+  const versions = versionInfo.versions || [];
+  const draft = versions.find((version) => version.status === "draft");
+  const active = versions.find((version) => version.status === "active");
+  const archivedCount = versions.filter((version) => version.status === "archived").length;
   return (
-    <div className="space-y-4">
-      <div className="rounded-md border border-bank-100 bg-bank-50 p-4 text-sm leading-7 text-bank-900">
-        يتم حفظ التعديلات الجديدة كمسودة أولاً. الطلبات الجديدة تستخدم النسخة النشطة فقط، ولن تنتقل للمسودة إلا بعد الضغط على نشر المسودة.
+    <div className="space-y-3">
+      <div className="rounded-lg border border-bank-100 bg-bank-50 p-4">
+        <p className="font-black text-bank-950">كيف تعمل النسخ؟</p>
+        <p className="mt-1 text-sm leading-7 text-bank-900">
+          التعديلات تحفظ كمسودة. الطلبات الجديدة لا تستخدمها إلا بعد النشر، والطلبات القديمة تبقى على نسختها الأصلية.
+        </p>
       </div>
-      {draft && (
-        <div className="flex flex-col gap-3 rounded-md border border-amber-200 bg-amber-50 p-4 md:flex-row md:items-center md:justify-between">
+
+      <div className="grid gap-3 lg:grid-cols-3">
+        <VersionSummaryCard title="النسخة المستخدمة الآن" version={active} empty="لا توجد نسخة نشطة" />
+        <VersionSummaryCard title="المسودة الحالية" version={draft} empty="لا توجد مسودة" tone={draft?.is_ready ? "amber" : "slate"} />
+        <div className="rounded-lg border border-slate-200 bg-white p-4">
+          <p className="text-sm font-bold text-slate-500">المؤرشفة</p>
+          <p className="mt-3 text-3xl font-black text-slate-950">{archivedCount}</p>
+          <p className="mt-2 text-xs leading-5 text-slate-500">تبقى للطلبات القديمة والتدقيق.</p>
+        </div>
+      </div>
+
+      {draft ? (
+        <div className={`flex flex-col gap-3 rounded-lg border p-4 md:flex-row md:items-center md:justify-between ${draft.is_ready ? "border-amber-200 bg-amber-50" : "border-red-200 bg-red-50"}`}>
           <div>
-            <p className="text-sm font-black text-amber-900">توجد مسودة غير منشورة v{draft.version_number}</p>
-            <p className="mt-1 text-xs font-semibold text-amber-800">
-              {draft.is_ready ? "المسودة جاهزة للنشر بعد مراجعتها." : "المسودة تحتاج إلى قسم مختص ومسار موافقات فعال قبل النشر."}
+            <p className={`text-sm font-black ${draft.is_ready ? "text-amber-900" : "text-red-900"}`}>توجد مسودة غير منشورة v{draft.version_number}</p>
+            <p className={`mt-1 text-xs font-semibold ${draft.is_ready ? "text-amber-800" : "text-red-800"}`}>
+              {draft.is_ready ? "يمكن نشرها لتصبح النسخة المستخدمة في الطلبات الجديدة." : "أكمل القسم المختص ومسار الموافقات قبل النشر."}
             </p>
           </div>
           <Button type="button" onClick={onPublishDraft} disabled={!draft.is_ready} className="gap-2">
@@ -356,37 +412,83 @@ function RequestTypeVersionsPanel({ versionInfo, onPublishDraft }) {
             نشر المسودة
           </Button>
         </div>
+      ) : (
+        <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm font-semibold text-slate-600">
+          لا توجد تعديلات غير منشورة حالياً.
+        </div>
       )}
-      <div className="overflow-x-auto rounded-md border border-slate-200">
-        <table className="w-full min-w-[720px] text-sm">
-          <thead className="bg-slate-50 text-slate-500">
-            <tr>
-              {["رقم النسخة", "الحالة", "جاهزية النشر", "عدد الطلبات", "آخر تعديل"].map((header) => (
-                <th key={header} className="p-3 text-right font-bold">{header}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100 bg-white">
-            {(versionInfo.versions || []).map((version) => (
-              <tr key={version.version_number}>
-                <td className="p-3 font-black text-slate-950">v{version.version_number}</td>
-                <td className="p-3">
-                  <span className={`rounded-md px-2 py-1 text-xs font-bold ${version.status === "active" ? "bg-bank-50 text-bank-700" : "bg-slate-100 text-slate-600"}`}>
-                    {version.status === "active" ? "نشطة" : version.status === "draft" ? "مسودة" : "مؤرشفة"}
-                  </span>
-                </td>
-                <td className="p-3">
-                  <span className={`rounded-md px-2 py-1 text-xs font-bold ${version.is_ready ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>
-                    {version.is_ready ? "جاهزة" : "ناقصة"}
-                  </span>
-                </td>
-                <td className="p-3">{version.requests_count || 0}</td>
-                <td className="p-3 text-slate-600">{version.updated_at ? new Date(version.updated_at).toLocaleString("ar") : "-"}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+
+      <div className="rounded-lg border border-slate-200 bg-white p-4">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <p className="font-black text-slate-950">سجل النسخ</p>
+            <p className="mt-1 text-sm text-slate-500">اعرضه فقط عند الحاجة للمراجعة أو التدقيق.</p>
+          </div>
+          <button type="button" onClick={() => setShowHistory((value) => !value)} className="rounded-md border border-slate-200 px-3 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50">
+            {showHistory ? "إخفاء السجل" : "عرض السجل"}
+          </button>
+        </div>
+        {showHistory && (
+          <div className="mt-4 overflow-x-auto rounded-md border border-slate-200">
+            <table className="w-full min-w-[720px] text-sm">
+              <thead className="bg-slate-50 text-slate-500">
+                <tr>
+                  {["رقم النسخة", "الحالة", "جاهزية النشر", "عدد الطلبات", "آخر تعديل"].map((header) => (
+                    <th key={header} className="p-3 text-right font-bold">{header}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 bg-white">
+                {versions.map((version) => (
+                  <tr key={version.version_number}>
+                    <td className="p-3 font-black text-slate-950">v{version.version_number}</td>
+                    <td className="p-3"><VersionStatusBadge status={version.status} /></td>
+                    <td className="p-3">
+                      <span className={`rounded-md px-2 py-1 text-xs font-bold ${version.is_ready ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>
+                        {version.is_ready ? "جاهزة" : "ناقصة"}
+                      </span>
+                    </td>
+                    <td className="p-3">{version.requests_count || 0}</td>
+                    <td className="p-3 text-slate-600">{version.updated_at ? new Date(version.updated_at).toLocaleString("ar") : "-"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
     </div>
   );
+}
+
+function VersionSummaryCard({ title, version, empty, tone = "bank" }) {
+  const toneClasses = {
+    bank: "border-bank-100 bg-bank-50 text-bank-900",
+    amber: "border-amber-100 bg-amber-50 text-amber-900",
+    slate: "border-slate-200 bg-slate-50 text-slate-700"
+  };
+  return (
+    <div className={`rounded-lg border p-4 ${toneClasses[tone] || toneClasses.bank}`}>
+      <p className="text-sm font-bold opacity-80">{title}</p>
+      {version ? (
+        <>
+          <p className="mt-3 text-3xl font-black">v{version.version_number}</p>
+          <div className="mt-3"><VersionStatusBadge status={version.status} /></div>
+          <p className="mt-2 text-xs leading-5 opacity-80">{version.requests_count || 0} طلب مرتبط بهذه النسخة.</p>
+        </>
+      ) : (
+        <p className="mt-3 text-sm font-bold">{empty}</p>
+      )}
+    </div>
+  );
+}
+
+function VersionStatusBadge({ status }) {
+  const classes = status === "active"
+    ? "bg-bank-50 text-bank-700"
+    : status === "draft"
+      ? "bg-amber-50 text-amber-700"
+      : "bg-slate-100 text-slate-600";
+  const label = status === "active" ? "نشطة" : status === "draft" ? "مسودة" : "مؤرشفة";
+  return <span className={`rounded-md px-2 py-1 text-xs font-bold ${classes}`}>{label}</span>;
 }

@@ -106,6 +106,7 @@ export default function MessagingSettingsPage() {
     ai: null,
     analytics: null,
     auditLogs: [],
+    generalProfile: null,
     users: []
   });
   const [typeModal, setTypeModal] = useState(null);
@@ -140,6 +141,7 @@ export default function MessagingSettingsPage() {
         ai,
         analytics,
         auditLogs,
+        generalProfile,
         users
       ] = await Promise.all([
         api.get("/auth/me"),
@@ -157,6 +159,7 @@ export default function MessagingSettingsPage() {
         api.get("/settings/messaging/ai"),
         api.get("/settings/messaging/analytics"),
         api.get("/settings/messaging/audit-logs"),
+        api.get("/settings/general-profile"),
         api.get("/users").catch(() => ({ data: [] }))
       ]);
       setCurrentUser(userRes.data);
@@ -175,6 +178,7 @@ export default function MessagingSettingsPage() {
         ai: ai.data,
         analytics: analytics.data,
         auditLogs: auditLogs.data || [],
+        generalProfile: generalProfile.data,
         users: users.data || []
       });
     } catch (error) {
@@ -193,6 +197,11 @@ export default function MessagingSettingsPage() {
   }
 
   async function saveSection(section, endpoint, payload = data[section]) {
+    const globalUploadMaxMb = Number(data.generalProfile?.upload_max_file_size_mb || 0);
+    if (section === "attachments" && globalUploadMaxMb > 0 && Number(payload.max_file_size_mb || 0) > globalUploadMaxMb) {
+      notify(`لا يمكن أن يتجاوز حد مرفقات المراسلات الحد الأقصى العام لرفع الملفات (${globalUploadMaxMb} MB).`, "error");
+      return;
+    }
     setSaving(section);
     try {
       const { data: response } = await api.put(endpoint, normalizeSectionPayload(section, payload));
@@ -321,7 +330,7 @@ export default function MessagingSettingsPage() {
           employee_name: "عبدالله باجرش",
           request_number: "QIB-2026-000001",
           request_type: "طلب VPN",
-          department: "تقنية المعلومات",
+          department: "الإدارة المختصة",
           created_at: "2026/05/08",
           current_user: "مدير النظام",
           message_subject: item.subject_template,
@@ -346,6 +355,11 @@ export default function MessagingSettingsPage() {
   }
 
   const filteredTypes = data.types.filter((item) => `${item.name_ar} ${item.name_en || ""} ${item.code}`.toLowerCase().includes(search.toLowerCase()));
+  const globalUploadMaxMb = Number(data.generalProfile?.upload_max_file_size_mb || 0);
+  const configuredMessageMaxMb = Number(data.attachments?.max_file_size_mb || 0);
+  const effectiveMessageMaxMb = globalUploadMaxMb > 0 && configuredMessageMaxMb > 0
+    ? Math.min(globalUploadMaxMb, configuredMessageMaxMb)
+    : configuredMessageMaxMb || globalUploadMaxMb || "-";
 
   if (loading) {
     return <div className="rounded-md border border-slate-200 bg-slate-50 p-4 text-sm text-slate-500" dir="rtl">جاري تحميل إعدادات المراسلات...</div>;
@@ -494,13 +508,19 @@ export default function MessagingSettingsPage() {
           {active === "attachments" && data.attachments && (
             <Section title="المرفقات" description="تحكم في امتدادات الملفات، الحجم الأقصى، والتدقيق على تحميل المرفقات.">
               <WarningBox>لن يتم السماح بالامتدادات التنفيذية الخطرة مثل exe و bat و ps1 و sh.</WarningBox>
+              <WarningBox>
+                الحد الأقصى العام لرفع الملفات هو {data.generalProfile?.upload_max_file_size_mb ?? "-"} MB. حد مرفقات المراسلات لا يمكن أن يتجاوزه، والرفع سيستخدم الحد الأقل بينهما.
+              </WarningBox>
+              <div className="rounded-lg border border-bank-100 bg-bank-50 p-3 text-sm font-bold text-bank-900">
+                الحد الفعلي المستخدم حالياً في المراسلات: {effectiveMessageMaxMb} MB.
+              </div>
               <Grid>
                 <Toggle label="السماح بمرفقات الرسائل" checked={data.attachments.allow_message_attachments} disabled={!canEdit} onChange={(value) => update("attachments", "allow_message_attachments", value)} />
                 <Toggle label="إخفاء المسار الحقيقي" checked={data.attachments.hide_real_file_path} disabled={!canEdit} onChange={(value) => update("attachments", "hide_real_file_path", value)} />
                 <Toggle label="تسجيل تحميل المرفقات" checked={data.attachments.log_attachment_downloads} disabled={!canEdit} onChange={(value) => update("attachments", "log_attachment_downloads", value)} />
                 <Toggle label="فحص فيروسات" checked={data.attachments.enable_virus_scan} disabled={!canEdit} onChange={(value) => update("attachments", "enable_virus_scan", value)} />
                 <Toggle label="حظر الملفات التنفيذية" checked={data.attachments.block_executable_files} disabled={!canEdit} onChange={(value) => update("attachments", "block_executable_files", value)} />
-                <Field label="الحد الأقصى MB" type="number" value={data.attachments.max_file_size_mb} disabled={!canEdit} onChange={(value) => update("attachments", "max_file_size_mb", Number(value))} />
+                <Field label="الحد الأقصى MB" type="number" min="1" max={data.generalProfile?.upload_max_file_size_mb || 1024} value={data.attachments.max_file_size_mb} disabled={!canEdit} onChange={(value) => update("attachments", "max_file_size_mb", Number(value))} />
                 <Field label="أقصى عدد مرفقات" type="number" value={data.attachments.max_attachments_per_message} disabled={!canEdit} onChange={(value) => update("attachments", "max_attachments_per_message", Number(value))} />
                 <Field label="مسار الحفظ" value={data.attachments.message_upload_path} disabled={!canEdit} onChange={(value) => update("attachments", "message_upload_path", value)} />
               </Grid>
@@ -690,11 +710,11 @@ function Toggle({ label, checked, onChange, disabled }) {
   );
 }
 
-function Field({ label, value, onChange, disabled, type = "text" }) {
+function Field({ label, value, onChange, disabled, type = "text", ...inputProps }) {
   return (
     <label className="space-y-2 text-sm font-bold text-slate-700">
       {label}
-      <Input type={type} value={value ?? ""} disabled={disabled} onChange={(event) => onChange(event.target.value)} />
+      <Input type={type} value={value ?? ""} disabled={disabled} onChange={(event) => onChange(event.target.value)} {...inputProps} />
     </label>
   );
 }

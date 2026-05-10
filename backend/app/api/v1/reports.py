@@ -159,7 +159,7 @@ def build_pdf_report(items: Iterable[ServiceRequest], db: Session, actor: User) 
         pdf,
         theme,
         font_name,
-        "تقرير طلبات خدمات تقنية المعلومات",
+        "تقرير طلبات خدمات البنك",
         f"تاريخ الطباعة: {format_pdf_datetime(datetime.now(timezone.utc), theme.timezone)}",
     )
     y = draw_section_header(pdf, theme, font_name, "ملخص التقرير", left, right, y)

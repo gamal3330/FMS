@@ -17,7 +17,7 @@ settings = get_settings()
 app = FastAPI(
     title=settings.app_name,
     version="1.0.0",
-    description="Internal IT service request management platform for bank employees.",
+    description="Internal service request management platform for bank employees.",
     openapi_url=f"{settings.api_v1_prefix}/openapi.json",
 )
 

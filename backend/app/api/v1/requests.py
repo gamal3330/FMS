@@ -13,11 +13,13 @@ from sqlalchemy.orm import Session, selectinload
 from app.api.deps import get_current_user
 from app.core.config import get_settings
 from app.db.session import get_db
+from app.models.audit import AuditLog
 from app.models.enums import ApprovalAction, RequestStatus, RequestType, UserRole
 from app.models.message import InternalMessage, InternalMessageRecipient
 from app.models.request import ApprovalStep, Attachment, RequestApprovalStep, RequestComment, ServiceRequest
 from app.models.settings import PortalSetting, RequestTypeField, RequestTypeSetting, SettingsGeneral
-from app.models.user import User, UserDelegation
+from app.models.user import Department, Role, ScreenPermission, User, UserDelegation
+from app.schemas.message import InternalMessageRead
 from app.schemas.request import ApprovalDecision, AttachmentRead, CommentCreate, ServiceRequestCreate, ServiceRequestRead, ServiceRequestUpdate
 from app.services.audit import write_audit
 from app.services.pdf_fonts import register_arabic_pdf_font, rtl_text
@@ -33,6 +35,7 @@ from app.services.pdf_template import (
 from app.services.request_notifications import create_request_workflow_message
 from app.services.messaging_settings_service import should_send_request_created_notification
 from app.services.workflow import (
+    DEPARTMENT_SPECIALIST_STEP,
     IMPLEMENTATION_STEP_ROLES,
     advance_workflow,
     create_approval_steps,
@@ -40,6 +43,7 @@ from app.services.workflow import (
     reset_workflow_for_resubmission,
     step_can_reject,
     step_can_return_for_edit,
+    user_can_act as workflow_user_can_act,
 )
 from app.api.v1.request_type_management import (
     active_version_for_usage,
@@ -53,6 +57,7 @@ from app.api.v1.request_type_management import (
     validate_form_data,
     version_is_ready,
 )
+from app.api.v1.messages import can_access_message, load_message_settings, message_read
 
 router = APIRouter(prefix="/requests", tags=["Service Requests"])
 settings = get_settings()
@@ -72,13 +77,17 @@ PRIORITY_LABELS = {"low": "منخفضة", "medium": "متوسطة", "high": "ع�
 ACTION_LABELS = {"pending": "بانتظار الإجراء", "approved": "تمت الموافقة", "rejected": "تم الرفض", "returned_for_edit": "أعيد للتعديل", "skipped": "تم التجاوز"}
 ROLE_LABELS = {
     "direct_manager": "المدير المباشر",
-    "information_security": "أمن المعلومات",
-    "it_manager": "مدير تقنية المعلومات",
-    "it_staff": "موظف تنفيذ",
+    "department_manager": "مدير الإدارة المختصة",
+    "department_specialist": "مختص الإدارة المختصة",
+    "information_security": "أمن المعلومات (مرحلة قديمة)",
+    "it_manager": "مدير إدارة",
+    "it_staff": "مختص تنفيذ",
     "executive_management": "الإدارة التنفيذية",
-    "implementation_engineer": "مهندس التنفيذ",
-    "implementation": "التنفيذ",
-    "execution": "التنفيذ",
+    "implementation_engineer": "مختص تنفيذ",
+    "implementation": "مختص تنفيذ",
+    "execution": "مختص تنفيذ",
+    "specific_role": "دور محدد",
+    "specific_user": "مستخدم محدد",
 }
 MESSAGE_DEFAULT_ROLES = {
     UserRole.EMPLOYEE,
@@ -88,6 +97,16 @@ MESSAGE_DEFAULT_ROLES = {
     UserRole.INFOSEC,
     UserRole.EXECUTIVE,
     UserRole.SUPER_ADMIN,
+}
+
+SCREEN_PERMISSION_ORDER = {
+    "no_access": 0,
+    "view": 1,
+    "create": 2,
+    "edit": 3,
+    "delete": 4,
+    "export": 5,
+    "manage": 6,
 }
 FIELD_LABELS = {
     "source_ip": "عنوان المصدر",
@@ -201,6 +220,30 @@ def delegated_approval_filter(db: Session, current_user: User):
     return or_(*filters) if filters else None
 
 
+def approval_visibility_conditions(db: Session, current_user: User, *, include_role: bool = True):
+    conditions = []
+    if include_role:
+        role_pending = select(ApprovalStep.request_id).where(ApprovalStep.role == str(current_user.role))
+        conditions.append(ServiceRequest.id.in_(role_pending))
+
+    specific_user_requests = select(RequestApprovalStep.request_id).where(RequestApprovalStep.approver_user_id == current_user.id)
+    conditions.append(ServiceRequest.id.in_(specific_user_requests))
+
+    if current_user.role_id:
+        specific_role_requests = select(RequestApprovalStep.request_id).where(RequestApprovalStep.approver_role_id == current_user.role_id)
+        conditions.append(ServiceRequest.id.in_(specific_role_requests))
+
+    managed_departments = select(Department.id).where(Department.manager_id == current_user.id, Department.is_active == True)
+    department_manager_requests = select(ApprovalStep.request_id).where(ApprovalStep.role == "department_manager")
+    conditions.append(and_(ServiceRequest.department_id.in_(managed_departments), ServiceRequest.id.in_(department_manager_requests)))
+
+    if current_user.department_id:
+        department_specialist_requests = select(ApprovalStep.request_id).where(ApprovalStep.role == DEPARTMENT_SPECIALIST_STEP)
+        conditions.append(and_(ServiceRequest.department_id == current_user.department_id, ServiceRequest.id.in_(department_specialist_requests)))
+
+    return conditions
+
+
 def user_has_messages_screen(db: Session, user: User) -> bool:
     setting = db.scalar(select(PortalSetting).where(PortalSetting.category == "screen_permissions", PortalSetting.setting_key == str(user.id)))
     if not setting:
@@ -241,6 +284,27 @@ def first_request_notification_recipients(db: Session, service_request: ServiceR
         manager_id = actor.manager_id or (service_request.requester.manager_id if service_request.requester else None)
         if manager_id:
             recipient_ids.add(manager_id)
+    elif role_value == "department_manager":
+        department = service_request.department or (db.get(Department, service_request.department_id) if service_request.department_id else None)
+        if department and department.manager_id:
+            recipient_ids.add(department.manager_id)
+    elif role_value == DEPARTMENT_SPECIALIST_STEP:
+        department = service_request.department or (db.get(Department, service_request.department_id) if service_request.department_id else None)
+        if department:
+            stmt = select(User).where(User.is_active == True, User.department_id == department.id)
+            if department.manager_id:
+                stmt = stmt.where(User.id != department.manager_id)
+            recipient_ids.update(user.id for user in db.scalars(stmt).all())
+    elif role_value == "specific_role" and first_snapshot and first_snapshot.approver_role_id:
+        role = db.get(Role, first_snapshot.approver_role_id)
+        stmt = select(User).where(User.is_active == True)
+        if role and role.code:
+            stmt = stmt.where(or_(User.role_id == role.id, User.role == role.code))
+        else:
+            stmt = stmt.where(User.role_id == first_snapshot.approver_role_id)
+        recipient_ids.update(user.id for user in db.scalars(stmt).all())
+    elif role_value in {"specific_user", "specific_role"}:
+        pass
     elif role_value in IMPLEMENTATION_STEP_ROLES:
         form_data = service_request.form_data or {}
         request_section = form_data.get("assigned_section") or form_data.get("administrative_section")
@@ -323,13 +387,59 @@ def request_query():
     )
 
 
+def requests_screen_level(db: Session, user: User) -> str:
+    if user.role in {UserRole.SUPER_ADMIN, UserRole.IT_MANAGER}:
+        return "manage"
+
+    user_permission = db.scalar(
+        select(ScreenPermission).where(
+            ScreenPermission.user_id == user.id,
+            ScreenPermission.role_id.is_(None),
+            ScreenPermission.screen_code == "requests",
+        )
+    )
+    if user_permission:
+        return user_permission.permission_level or "no_access"
+
+    role = db.get(Role, user.role_id) if user.role_id else None
+    if not role:
+        role = db.scalar(select(Role).where(or_(Role.code == str(user.role), Role.name == str(user.role))))
+    if role:
+        role_permission = db.scalar(
+            select(ScreenPermission).where(
+                ScreenPermission.role_id == role.id,
+                ScreenPermission.user_id.is_(None),
+                ScreenPermission.screen_code == "requests",
+            )
+        )
+        if role_permission:
+            return role_permission.permission_level or "no_access"
+
+    setting = db.scalar(select(PortalSetting).where(PortalSetting.category == "screen_permissions", PortalSetting.setting_key == str(user.id)))
+    if setting and isinstance(setting.setting_value, dict) and "requests" in setting.setting_value.get("screens", []):
+        return "view"
+    return "no_access"
+
+
+def can_view_all_requests(db: Session | None, user: User) -> bool:
+    if user.role in {UserRole.SUPER_ADMIN, UserRole.IT_MANAGER}:
+        return True
+    if not db:
+        return False
+    return SCREEN_PERMISSION_ORDER.get(requests_screen_level(db, user), 0) >= SCREEN_PERMISSION_ORDER["manage"]
+
+
 def ensure_request_access(service_request: ServiceRequest, current_user: User, db: Session | None = None) -> None:
-    if current_user.role in {UserRole.SUPER_ADMIN, UserRole.IT_MANAGER}:
+    if can_view_all_requests(db, current_user):
         return
     if service_request.requester_id == current_user.id:
         return
     if current_user.role == UserRole.DIRECT_MANAGER and service_request.requester and service_request.requester.manager_id == current_user.id:
         return
+    if db:
+        pending_step = next((step for step in sorted(service_request.approvals or [], key=lambda item: item.step_order) if step.action == ApprovalAction.PENDING), None)
+        if pending_step and workflow_user_can_act(db, service_request, current_user, pending_step):
+            return
     if current_user.role != UserRole.IT_STAFF and any(step.role == current_user.role for step in service_request.approvals):
         return
     if current_user.role == UserRole.IT_STAFF and any(step.role in IMPLEMENTATION_STEP_ROLES for step in service_request.approvals):
@@ -352,32 +462,97 @@ def ensure_request_access(service_request: ServiceRequest, current_user: User, d
     raise HTTPException(status_code=403, detail="Insufficient permissions")
 
 
-def enrich_approval_steps(db: Session, service_request: ServiceRequest | None) -> ServiceRequest | None:
+def can_view_request_linked_message(message: InternalMessage, service_request: ServiceRequest, current_user: User, message_settings: dict) -> bool:
+    if can_access_message(message, current_user):
+        return True
+    if service_request.requester_id == current_user.id:
+        return bool(message_settings.get("allow_request_owner_to_view_messages", False))
+    if current_user.role in {UserRole.SUPER_ADMIN, UserRole.IT_MANAGER}:
+        return bool(message_settings.get("allow_approvers_to_view_request_messages", True))
+    if current_user.role == UserRole.DIRECT_MANAGER and service_request.requester and service_request.requester.manager_id == current_user.id:
+        return bool(message_settings.get("allow_approvers_to_view_request_messages", True))
+    if any(step.role == current_user.role for step in service_request.approvals or []):
+        return bool(message_settings.get("allow_approvers_to_view_request_messages", True))
+    approval_roles = {str(step.role) for step in service_request.approvals or []}
+    if "department_manager" in approval_roles and service_request.department and service_request.department.manager_id == current_user.id:
+        return bool(message_settings.get("allow_approvers_to_view_request_messages", True))
+    if DEPARTMENT_SPECIALIST_STEP in approval_roles and service_request.department_id and current_user.department_id == service_request.department_id:
+        return bool(message_settings.get("allow_approvers_to_view_request_messages", True))
+    return False
+
+
+def enrich_approval_steps(db: Session, service_request: ServiceRequest | None, current_user: User | None = None) -> ServiceRequest | None:
     if not service_request:
         return service_request
     for step in service_request.approvals or []:
         step.can_reject = step.action == ApprovalAction.PENDING and step_can_reject(db, service_request, step)
         step.can_return_for_edit = step.action == ApprovalAction.PENDING and step_can_return_for_edit(db, service_request, step)
+        step.can_act = bool(current_user and step.action == ApprovalAction.PENDING and workflow_user_can_act(db, service_request, current_user, step))
     return service_request
 
 
-def enrich_request_list(db: Session, requests: list[ServiceRequest]) -> list[ServiceRequest]:
+def enrich_request_list(db: Session, requests: list[ServiceRequest], current_user: User | None = None) -> list[ServiceRequest]:
     for service_request in requests:
-        enrich_approval_steps(db, service_request)
+        enrich_approval_steps(db, service_request, current_user)
     return requests
 
 
+def request_status_history(service_request: ServiceRequest) -> list[dict]:
+    rows: list[dict] = [
+        {
+            "event": "created",
+            "label": "تم إنشاء الطلب",
+            "status": str(service_request.status),
+            "actor_name": service_request.requester.full_name_ar if service_request.requester else None,
+            "changed_at": service_request.created_at,
+            "comment": service_request.business_justification,
+        }
+    ]
+    for step in sorted(service_request.approvals or [], key=lambda item: item.step_order):
+        if step.action == ApprovalAction.PENDING and not step.acted_at:
+            rows.append(
+                {
+                    "event": "pending",
+                    "label": f"بانتظار {ROLE_LABELS.get(str(step.role), str(step.role))}",
+                    "status": "pending",
+                    "actor_name": None,
+                    "changed_at": None,
+                    "comment": None,
+                }
+            )
+            continue
+        rows.append(
+            {
+                "event": str(step.action),
+                "label": f"{ROLE_LABELS.get(str(step.role), str(step.role))}: {ACTION_LABELS.get(str(step.action), str(step.action))}",
+                "status": str(step.action),
+                "actor_name": step.approver.full_name_ar if step.approver else None,
+                "changed_at": step.acted_at,
+                "comment": step.note,
+            }
+        )
+    return rows
+
+
 def attachment_rules_from_snapshot(snapshot: dict, request_type_record: RequestTypeSetting | None = None) -> dict:
+    requires_attachment = (
+        bool(snapshot.get("requires_attachment"))
+        if "requires_attachment" in snapshot
+        else bool(request_type_record.requires_attachment) if request_type_record else False
+    )
     allow_multiple = (
         bool(snapshot.get("allow_multiple_attachments"))
         if "allow_multiple_attachments" in snapshot
-        else bool(request_type_record.allow_multiple_attachments) if request_type_record else True
+        else bool(request_type_record.allow_multiple_attachments) if request_type_record else False
     )
+    attachments_enabled = requires_attachment or allow_multiple
     max_attachments = snapshot.get("max_attachments") or (request_type_record.max_attachments if request_type_record else None) or (5 if allow_multiple else 1)
     max_file_size_mb = snapshot.get("max_file_size_mb") or (request_type_record.max_file_size_mb if request_type_record else None) or 10
     allowed_extensions = snapshot.get("allowed_extensions_json") or (request_type_record.allowed_extensions_json if request_type_record else None) or ["pdf", "png", "jpg", "jpeg"]
     allowed_extensions = sorted({str(item).strip().lower().lstrip(".") for item in allowed_extensions if str(item).strip()})
     return {
+        "attachments_enabled": attachments_enabled,
+        "requires_attachment": requires_attachment,
         "allow_multiple_attachments": allow_multiple,
         "max_attachments": int(max_attachments),
         "max_file_size_mb": int(max_file_size_mb),
@@ -693,18 +868,22 @@ class RequestPdfBuilder:
 
 
 def scoped_requests_stmt(stmt, current_user: User, db: Session | None = None):
-    if current_user.role in {UserRole.SUPER_ADMIN, UserRole.IT_MANAGER}:
+    if can_view_all_requests(db, current_user):
         return stmt
 
     own_request = ServiceRequest.requester_id == current_user.id
     delegated_filter = delegated_approval_filter(db, current_user) if db else None
+    dynamic_conditions = approval_visibility_conditions(db, current_user, include_role=current_user.role != UserRole.IT_STAFF) if db else []
 
     if current_user.role == UserRole.EMPLOYEE:
-        return stmt.where(or_(own_request, delegated_filter) if delegated_filter is not None else own_request)
+        conditions = [own_request, *dynamic_conditions]
+        if delegated_filter is not None:
+            conditions.append(delegated_filter)
+        return stmt.where(or_(*conditions))
 
     if current_user.role == UserRole.DIRECT_MANAGER:
         team_members = select(User.id).where(User.manager_id == current_user.id)
-        conditions = [own_request, ServiceRequest.requester_id.in_(team_members)]
+        conditions = [own_request, ServiceRequest.requester_id.in_(team_members), *dynamic_conditions]
         if delegated_filter is not None:
             conditions.append(delegated_filter)
         return stmt.where(or_(*conditions))
@@ -720,7 +899,7 @@ def scoped_requests_stmt(stmt, current_user: User, db: Session | None = None):
             ServiceRequest.form_data["administrative_section"].as_string(),
         )
         if staff_section:
-            conditions = [own_request, and_(ServiceRequest.id.in_(approval_requests), request_section == staff_section)]
+            conditions = [own_request, *dynamic_conditions, and_(ServiceRequest.id.in_(approval_requests), request_section == staff_section)]
             if delegated_filter is not None:
                 conditions.append(delegated_filter)
             return stmt.where(or_(*conditions))
@@ -731,18 +910,21 @@ def scoped_requests_stmt(stmt, current_user: User, db: Session | None = None):
             .correlate(ServiceRequest)
             .scalar_subquery()
         )
-        conditions = [own_request, and_(ServiceRequest.id.in_(approval_requests), request_section.is_not(None), section_has_staff == 0)]
+        conditions = [own_request, *dynamic_conditions, and_(ServiceRequest.id.in_(approval_requests), request_section.is_not(None), section_has_staff == 0)]
         if delegated_filter is not None:
             conditions.append(delegated_filter)
         return stmt.where(or_(*conditions))
 
     if current_user.role in {UserRole.INFOSEC, UserRole.EXECUTIVE, UserRole.IT_STAFF}:
-        conditions = [own_request, ServiceRequest.id.in_(approval_requests)]
+        conditions = [own_request, *dynamic_conditions, ServiceRequest.id.in_(approval_requests)]
         if delegated_filter is not None:
             conditions.append(delegated_filter)
         return stmt.where(or_(*conditions))
 
-    return stmt.where(or_(own_request, delegated_filter) if delegated_filter is not None else own_request)
+    conditions = [own_request, *dynamic_conditions]
+    if delegated_filter is not None:
+        conditions.append(delegated_filter)
+    return stmt.where(or_(*conditions))
 
 
 @router.get("", response_model=list[ServiceRequestRead])
@@ -766,7 +948,7 @@ def list_requests(
         stmt = stmt.where(or_(ServiceRequest.request_number.ilike(term), ServiceRequest.title.ilike(term)))
     if page and per_page:
         stmt = stmt.offset((page - 1) * per_page).limit(per_page)
-    return enrich_request_list(db, db.scalars(stmt).all())
+    return enrich_request_list(db, db.scalars(stmt).all(), current_user)
 
 
 @router.post("", response_model=ServiceRequestRead, status_code=status.HTTP_201_CREATED)
@@ -795,9 +977,11 @@ def create_request(payload: ServiceRequestCreate, db: Session = Depends(get_db),
             raise HTTPException(status_code=409, detail="نوع الطلب غير مرتبط بقسم مختص")
         if not workflow_steps:
             raise HTTPException(status_code=409, detail="نوع الطلب لا يحتوي على مسار موافقات فعال")
-        if request_type_config.get("requires_attachment") and payload.attachment_count <= 0:
-            raise HTTPException(status_code=422, detail="هذا النوع من الطلبات يتطلب إرفاق ملف قبل الإرسال")
         rules = attachment_rules_from_snapshot(request_type_config, request_type_record)
+        if not rules["attachments_enabled"] and payload.attachment_count > 0:
+            raise HTTPException(status_code=422, detail="المرفقات غير مفعلة لهذا النوع من الطلبات")
+        if rules["requires_attachment"] and payload.attachment_count <= 0:
+            raise HTTPException(status_code=422, detail="هذا النوع من الطلبات يتطلب إرفاق ملف قبل الإرسال")
         if payload.attachment_count > rules["max_attachments"]:
             raise HTTPException(status_code=422, detail=f"عدد المرفقات أكبر من الحد المسموح لهذا النوع ({rules['max_attachments']})")
         validate_form_data(fields, payload.form_data)
@@ -831,7 +1015,7 @@ def create_request(payload: ServiceRequestCreate, db: Session = Depends(get_db),
         create_request_created_message(db, service_request, current_user)
     write_audit(db, "request_created", "service_request", actor=current_user, entity_id=str(service_request.id))
     db.commit()
-    return enrich_approval_steps(db, db.scalar(request_query().where(ServiceRequest.id == service_request.id)))
+    return enrich_approval_steps(db, db.scalar(request_query().where(ServiceRequest.id == service_request.id)), current_user)
 
 
 @router.get("/{request_id}", response_model=ServiceRequestRead)
@@ -840,7 +1024,65 @@ def get_request(request_id: int, db: Session = Depends(get_db), current_user: Us
     if not service_request:
         raise HTTPException(status_code=404, detail="Request not found")
     ensure_request_access(service_request, current_user, db)
-    return enrich_approval_steps(db, service_request)
+    return enrich_approval_steps(db, service_request, current_user)
+
+
+@router.get("/{request_id}/messages", response_model=list[InternalMessageRead])
+def get_request_messages(request_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    message_settings = load_message_settings(db)
+    if not message_settings.get("enable_linked_requests", True) or not message_settings.get("show_messages_tab_in_request_details", True):
+        raise HTTPException(status_code=403, detail="عرض المراسلات المرتبطة بالطلبات غير مفعل من إعدادات المراسلات")
+    service_request = db.scalar(request_query().where(ServiceRequest.id == request_id))
+    if not service_request:
+        raise HTTPException(status_code=404, detail="Request not found")
+    ensure_request_access(service_request, current_user, db)
+    stmt = (
+        select(InternalMessage)
+        .options(
+            selectinload(InternalMessage.sender),
+            selectinload(InternalMessage.recipients).selectinload(InternalMessageRecipient.recipient),
+            selectinload(InternalMessage.attachments),
+            selectinload(InternalMessage.related_request),
+        )
+        .where(InternalMessage.related_request_id == service_request.id, InternalMessage.is_draft == False)
+        .order_by(InternalMessage.created_at.desc())
+    )
+    return [message_read(message, current_user) for message in db.scalars(stmt.limit(100)).all() if can_view_request_linked_message(message, service_request, current_user, message_settings)]
+
+
+@router.get("/{request_id}/status-history")
+def get_request_status_history(request_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    service_request = db.scalar(request_query().where(ServiceRequest.id == request_id))
+    if not service_request:
+        raise HTTPException(status_code=404, detail="Request not found")
+    ensure_request_access(service_request, current_user, db)
+    return request_status_history(service_request)
+
+
+@router.get("/{request_id}/audit-logs")
+def get_request_audit_logs(request_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    service_request = db.scalar(request_query().where(ServiceRequest.id == request_id))
+    if not service_request:
+        raise HTTPException(status_code=404, detail="Request not found")
+    ensure_request_access(service_request, current_user, db)
+    logs = db.scalars(
+        select(AuditLog)
+        .options(selectinload(AuditLog.actor))
+        .where(AuditLog.entity_type == "service_request", AuditLog.entity_id == str(request_id))
+        .order_by(AuditLog.created_at.desc(), AuditLog.id.desc())
+        .limit(50)
+    ).all()
+    return [
+        {
+            "id": log.id,
+            "action": log.action,
+            "actor_name": log.actor.full_name_ar if log.actor else None,
+            "created_at": log.created_at,
+            "ip_address": log.ip_address,
+            "metadata": log.metadata_json or {},
+        }
+        for log in logs
+    ]
 
 
 @router.get("/{request_id}/print.pdf")
@@ -871,7 +1113,7 @@ def update_request(request_id: int, payload: ServiceRequestUpdate, db: Session =
         setattr(service_request, field, value)
     write_audit(db, "request_edited", "service_request", actor=current_user, entity_id=str(service_request.id))
     db.commit()
-    return enrich_approval_steps(db, db.scalar(request_query().where(ServiceRequest.id == request_id)))
+    return enrich_approval_steps(db, db.scalar(request_query().where(ServiceRequest.id == request_id)), current_user)
 
 
 @router.post("/{request_id}/resubmit", response_model=ServiceRequestRead)
@@ -891,7 +1133,7 @@ def resubmit_request(request_id: int, db: Session = Depends(get_db), current_use
     reset_workflow_for_resubmission(service_request)
     write_audit(db, "request_resubmitted", "service_request", actor=current_user, entity_id=str(service_request.id))
     db.commit()
-    return enrich_approval_steps(db, db.scalar(request_query().where(ServiceRequest.id == request_id)))
+    return enrich_approval_steps(db, db.scalar(request_query().where(ServiceRequest.id == request_id)), current_user)
 
 
 @router.post("/{request_id}/approval", response_model=ServiceRequestRead)
@@ -911,7 +1153,7 @@ def decide(request_id: int, payload: ApprovalDecision, db: Session = Depends(get
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     write_audit(db, f"request_{payload.action}", "service_request", actor=current_user, entity_id=str(service_request.id))
     db.commit()
-    return enrich_approval_steps(db, db.scalar(request_query().where(ServiceRequest.id == request_id)))
+    return enrich_approval_steps(db, db.scalar(request_query().where(ServiceRequest.id == request_id)), current_user)
 
 
 @router.post("/{request_id}/comments")
@@ -941,6 +1183,8 @@ def upload_attachment(
     request_type_record = db.get(RequestTypeSetting, service_request.request_type_id) if service_request.request_type_id else None
     snapshot = service_request.request_type_snapshot or {}
     rules = attachment_rules_from_snapshot(snapshot, request_type_record)
+    if not rules["attachments_enabled"]:
+        raise HTTPException(status_code=409, detail="المرفقات غير مفعلة لهذا النوع من الطلبات")
     current_count = db.scalar(select(func.count()).select_from(Attachment).where(Attachment.request_id == request_id)) or 0
     if not rules["allow_multiple_attachments"] and current_count >= 1:
         raise HTTPException(status_code=409, detail="هذا النوع من الطلبات لا يسمح بأكثر من مرفق واحد")

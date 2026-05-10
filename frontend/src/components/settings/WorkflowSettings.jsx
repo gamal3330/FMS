@@ -4,7 +4,16 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 
 const requestTypes = ["email", "domain", "vpn_remote_access", "internet_access", "data_copy", "network_access", "computer_move_installation", "it_support_ticket"];
-const roles = ["direct_manager", "information_security", "it_manager", "it_staff", "executive_management", "implementation", "execution"];
+const roles = [
+  ["direct_manager", "المدير المباشر"],
+  ["department_manager", "مدير الإدارة المختصة"],
+  ["department_specialist", "مختص الإدارة المختصة"],
+  ["it_manager", "مدير إدارة"],
+  ["it_staff", "مختص تنفيذ"],
+  ["executive_management", "الإدارة التنفيذية"],
+  ["implementation", "مختص تنفيذ"],
+  ["execution", "مختص تنفيذ"]
+];
 
 export default function WorkflowSettings({ notify }) {
   const [workflows, setWorkflows] = useState([]);
@@ -64,7 +73,7 @@ export default function WorkflowSettings({ notify }) {
           <div key={index} className="grid gap-3 md:grid-cols-[80px_1fr_120px_120px_150px]">
             <Input type="number" value={step.step_order} onChange={(event) => updateStep(index, { step_order: Number(event.target.value) })} />
             <select value={step.approver_role} onChange={(event) => updateStep(index, { approver_role: event.target.value })} className="h-10 rounded-md border border-slate-300 px-3 text-sm">
-              {roles.map((role) => <option key={role}>{role}</option>)}
+              {roles.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
             </select>
             <Input type="number" value={step.sla_hours} onChange={(event) => updateStep(index, { sla_hours: Number(event.target.value) })} />
             <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={step.is_mandatory} onChange={(event) => updateStep(index, { is_mandatory: event.target.checked })} /> Mandatory</label>

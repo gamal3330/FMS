@@ -42,6 +42,7 @@ const assignmentStrategies = [
 export default function RequestTypeForm({ value, onSubmit, onCancel, sectionsOptions }) {
   const [form, setForm] = useState(initial);
   const [sections, setSections] = useState([]);
+  const attachmentsEnabled = Boolean(form.requires_attachment || form.allow_multiple_attachments);
 
   useEffect(() => {
     setForm(value ? { ...initial, ...value, category: value.category || "general", assigned_section: value.assigned_section || "networks", assigned_department_id: value.assigned_department_id || null } : initial);
@@ -124,7 +125,7 @@ export default function RequestTypeForm({ value, onSubmit, onCancel, sectionsOpt
         <div className="mb-4">
           <h4 className="text-base font-black text-slate-950">قواعد المرفقات</h4>
           <p className="mt-1 text-sm leading-6 text-slate-600">
-            يتم تطبيق هذه القواعد عند إنشاء الطلب وعند رفع أي مرفق لاحقاً لهذا النوع.
+            إذا كان خيارا "يتطلب مرفقاً" و"يسمح بعدة مرفقات" مغلقين فلن تظهر المرفقات في شاشة الطلب ولن يقبل الخادم رفعها لهذا النوع.
           </p>
         </div>
         <div className="grid gap-4 md:grid-cols-3">
@@ -145,6 +146,7 @@ export default function RequestTypeForm({ value, onSubmit, onCancel, sectionsOpt
               min="1"
               max="1024"
               value={form.max_file_size_mb ?? 10}
+              disabled={!attachmentsEnabled}
               onChange={(event) => update("max_file_size_mb", event.target.value)}
               required
             />
@@ -152,6 +154,7 @@ export default function RequestTypeForm({ value, onSubmit, onCancel, sectionsOpt
           <Field label="الامتدادات المسموحة">
             <Input
               value={extensionsText(form.allowed_extensions_json)}
+              disabled={!attachmentsEnabled}
               onChange={(event) => update("allowed_extensions_json", event.target.value)}
               required
               placeholder="pdf, png, jpg, jpeg"

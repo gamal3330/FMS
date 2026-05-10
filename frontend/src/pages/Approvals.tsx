@@ -40,13 +40,15 @@ const priorityLabels: Record<string, string> = {
 
 const roleLabels: Record<string, string> = {
   direct_manager: "المدير المباشر",
-  information_security: "أمن المعلومات",
-  it_manager: "مدير تقنية المعلومات",
-  it_staff: "موظف تنفيذ",
+  department_manager: "مدير الإدارة المختصة",
+  department_specialist: "مختص الإدارة المختصة",
+  information_security: "أمن المعلومات (مرحلة قديمة)",
+  it_manager: "مدير إدارة",
+  it_staff: "مختص تنفيذ",
   executive_management: "الإدارة التنفيذية",
-  implementation_engineer: "مهندس التنفيذ",
-  implementation: "التنفيذ",
-  execution: "التنفيذ"
+  implementation_engineer: "مختص تنفيذ",
+  implementation: "مختص تنفيذ",
+  execution: "مختص تنفيذ"
 };
 
 const sectionLabels: Record<string, string> = {
@@ -155,6 +157,7 @@ type ActiveDelegation = {
 
 function isActionableForUser(step: ApprovalStep | null, user: CurrentUser | null, delegations: ActiveDelegation[] = []) {
   if (!step || !user) return false;
+  if (typeof step.can_act === "boolean") return step.can_act;
   if (user.role === "super_admin") return true;
   if (step.role === user.role) return true;
   if (["implementation", "execution", "implementation_engineer", "close_request"].includes(step.role) && ["it_staff", "it_manager"].includes(user.role)) {

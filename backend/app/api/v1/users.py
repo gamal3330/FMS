@@ -6,15 +6,18 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, Upl
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ValidationError
 from sqlalchemy import and_, func, or_
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import get_current_user, require_roles
 from app.core.security import get_password_hash, verify_password
 from app.db.session import get_db
 from app.models.audit import AuditLog
+from app.models.ai import AIFeaturePermission
 from app.models.enums import UserRole
+from app.models.request import RequestApprovalStep
 from app.models.settings import PortalSetting, SecurityPolicy, SettingsGeneral, SpecializedSection
+from app.models.settings import WorkflowTemplateStep
 from app.models.user import (
     AccessReview,
     AccessReviewItem,
@@ -61,12 +64,26 @@ DASHBOARD_SCREEN_ROLES = {UserRole.SUPER_ADMIN, UserRole.IT_MANAGER, UserRole.EX
 ROLE_LABELS = {
     UserRole.EMPLOYEE.value: "موظف",
     UserRole.DIRECT_MANAGER.value: "مدير مباشر",
-    UserRole.IT_STAFF.value: "موظف تنفيذ",
-    UserRole.IT_MANAGER.value: "مدير تقنية المعلومات",
-    UserRole.INFOSEC.value: "أمن المعلومات",
+    UserRole.IT_STAFF.value: "مختص تنفيذ",
+    UserRole.IT_MANAGER.value: "مدير إدارة",
+    UserRole.INFOSEC.value: "أمن المعلومات (دور قديم)",
     UserRole.EXECUTIVE.value: "الإدارة التنفيذية",
     UserRole.SUPER_ADMIN.value: "مدير النظام",
 }
+
+HIDDEN_LEGACY_ROLE_PREFIXES = ("information_security",)
+
+
+def is_hidden_legacy_role(role: Role | None) -> bool:
+    if not role:
+        return False
+    code = str(role.code or role.name or "")
+    return any(code == prefix or code.startswith(f"{prefix}_copy") for prefix in HIDDEN_LEGACY_ROLE_PREFIXES)
+
+
+def is_hidden_legacy_role_code(code: str | None) -> bool:
+    value = str(code or "")
+    return any(value == prefix or value.startswith(f"{prefix}_copy") for prefix in HIDDEN_LEGACY_ROLE_PREFIXES)
 
 PERMISSION_LEVELS = ["no_access", "view", "create", "edit", "delete", "export", "manage"]
 ACTION_DEFINITIONS = [
@@ -283,7 +300,7 @@ def validate_user_links(db: Session, payload: UserCreate | UserUpdate, user_id: 
         if payload.department_id and manager.role == UserRole.DIRECT_MANAGER and manager.department_id != payload.department_id:
             raise HTTPException(status_code=400, detail="Direct manager must belong to the same department")
     if payload.role == UserRole.IT_STAFF and not payload.administrative_section:
-        raise HTTPException(status_code=400, detail="Administrative section is required for IT staff")
+        raise HTTPException(status_code=400, detail="القسم المختص مطلوب لمختص التنفيذ")
     if payload.administrative_section:
         section = db.scalar(select(SpecializedSection).where(SpecializedSection.code == payload.administrative_section, SpecializedSection.is_active == True))
         if not section:
@@ -291,6 +308,8 @@ def validate_user_links(db: Session, payload: UserCreate | UserUpdate, user_id: 
 
 
 def ensure_role_assignment_allowed(actor: User, role: UserRole) -> None:
+    if role == UserRole.INFOSEC:
+        raise HTTPException(status_code=422, detail="دور أمن المعلومات قديم وغير متاح للاستخدام. استخدم إدارة أو قسمًا مختصًا بدلًا منه.")
     if actor.role != UserRole.SUPER_ADMIN and role == UserRole.SUPER_ADMIN:
         raise HTTPException(status_code=403, detail="Only Super Admin can assign Super Admin role")
 
@@ -602,7 +621,7 @@ def download_users_import_template(db: Session = Depends(get_db), _: User = Depe
     notes.append(["الصلاحية", "نعم", "استخدم إحدى القيم من ورقة roles"])
     notes.append(["كود الإدارة", "نعم", "استخدم code من ورقة departments أو رقم id"])
     notes.append(["الرقم الوظيفي للمدير المباشر", "لا", "يمكن أن يشير إلى مستخدم موجود أو صف آخر داخل نفس الملف"])
-    notes.append(["كود القسم المختص", "لموظف التنفيذ فقط", "مطلوب عند role = it_staff، استخدم ورقة specialized_sections"])
+    notes.append(["كود القسم المختص", "لمختص التنفيذ فقط", "مطلوب عند role = it_staff، استخدم ورقة specialized_sections"])
     notes.append(["كلمة المرور المؤقتة", "لا", f"إذا تركت فارغة سيتم استخدام كلمة المرور المؤقتة المعرفة في إعدادات الأمان ({default_password})"])
     notes.append(["حساب نشط", "لا", "القيم المقبولة: نعم/لا أو true/false أو 1/0"])
 
@@ -695,8 +714,10 @@ async def import_users_from_excel(file: UploadFile = File(...), db: Session = De
             role = None
             errors.append(import_error(row_number, "الصلاحية", "الصلاحية غير صحيحة"))
 
+        if role == UserRole.INFOSEC:
+            errors.append(import_error(row_number, "الصلاحية", "دور أمن المعلومات قديم وغير متاح للاستخدام"))
         if role == UserRole.IT_STAFF and not administrative_section:
-            errors.append(import_error(row_number, "كود القسم المختص", "القسم المختص مطلوب لموظف التنفيذ"))
+            errors.append(import_error(row_number, "كود القسم المختص", "القسم المختص مطلوب لمختص التنفيذ"))
         if administrative_section and administrative_section not in active_sections:
             errors.append(import_error(row_number, "كود القسم المختص", "القسم المختص غير موجود أو غير نشط"))
 
@@ -1676,6 +1697,8 @@ def list_roles(db: Session = Depends(get_db), _: User = Depends(require_users_sc
     roles = db.scalars(select(Role).order_by(Role.label_ar)).all()
     result = []
     for role in roles:
+        if is_hidden_legacy_role(role):
+            continue
         item = role_to_dict(role)
         item["users_count"] = counts.get(role.code or role.name, 0)
         result.append(item)
@@ -1684,6 +1707,8 @@ def list_roles(db: Session = Depends(get_db), _: User = Depends(require_users_sc
 
 @roles_router.post("")
 def create_role(payload: RolePayload, request: Request, db: Session = Depends(get_db), actor: User = Depends(require_roles(UserRole.SUPER_ADMIN))):
+    if is_hidden_legacy_role_code(payload.code):
+        raise HTTPException(status_code=422, detail="لا يمكن استخدام كود دور قديم")
     existing = role_by_code(db, payload.code)
     if existing:
         raise HTTPException(status_code=409, detail="كود الدور مستخدم من قبل")
@@ -1701,6 +1726,8 @@ def update_role(role_id: int, payload: RolePayload, request: Request, db: Sessio
     role = db.get(Role, role_id)
     if not role:
         raise HTTPException(status_code=404, detail="الدور غير موجود")
+    if is_hidden_legacy_role(role) or is_hidden_legacy_role_code(payload.code):
+        raise HTTPException(status_code=422, detail="لا يمكن تعديل أو إعادة استخدام دور قديم")
     duplicate = db.scalar(select(Role).where(Role.id != role_id, or_(Role.code == payload.code, Role.name == payload.code)))
     if duplicate:
         raise HTTPException(status_code=409, detail="كود الدور مستخدم من قبل")
@@ -1727,6 +1754,8 @@ def update_role_status(role_id: int, payload: RolePayload, request: Request, db:
     role = db.get(Role, role_id)
     if not role:
         raise HTTPException(status_code=404, detail="الدور غير موجود")
+    if is_hidden_legacy_role(role):
+        raise HTTPException(status_code=422, detail="لا يمكن تفعيل دور قديم")
     active_users = db.scalar(select(func.count()).select_from(User).where(User.role == (role.code or role.name), User.is_active == True)) or 0
     if active_users and not payload.is_active:
         raise HTTPException(status_code=409, detail="لا يمكن تعطيل دور مرتبط بمستخدمين نشطين")
@@ -1741,6 +1770,8 @@ def clone_role(role_id: int, request: Request, db: Session = Depends(get_db), ac
     role = db.get(Role, role_id)
     if not role:
         raise HTTPException(status_code=404, detail="الدور غير موجود")
+    if is_hidden_legacy_role(role):
+        raise HTTPException(status_code=422, detail="لا يمكن استنساخ دور قديم")
     base_code = f"{role.code or role.name}_copy"
     code = base_code
     counter = 1
@@ -1758,6 +1789,45 @@ def clone_role(role_id: int, request: Request, db: Session = Depends(get_db), ac
     return role_to_dict(clone)
 
 
+@roles_router.delete("/{role_id}")
+def delete_role(role_id: int, request: Request, db: Session = Depends(get_db), actor: User = Depends(require_roles(UserRole.SUPER_ADMIN))):
+    role = db.get(Role, role_id)
+    if not role:
+        raise HTTPException(status_code=404, detail="الدور غير موجود")
+    if role.is_system_role:
+        raise HTTPException(status_code=409, detail="لا يمكن حذف دور نظامي. يمكن تعديل أو تعطيل الأدوار المخصصة فقط.")
+
+    role_code = role.code or role.name
+    linked_users = db.scalar(
+        select(func.count())
+        .select_from(User)
+        .where(or_(User.role == role_code, User.role == role.name, User.role_id == role.id))
+    ) or 0
+    if linked_users:
+        raise HTTPException(status_code=409, detail="لا يمكن حذف الدور لأنه مرتبط بمستخدمين. انقل المستخدمين إلى دور آخر أولاً.")
+
+    workflow_steps = db.scalar(
+        select(func.count()).select_from(WorkflowTemplateStep).where(WorkflowTemplateStep.approver_role_id == role.id)
+    ) or 0
+    if workflow_steps:
+        raise HTTPException(status_code=409, detail="لا يمكن حذف الدور لأنه مستخدم في مسارات الموافقة.")
+
+    request_steps = db.scalar(
+        select(func.count()).select_from(RequestApprovalStep).where(RequestApprovalStep.approver_role_id == role.id)
+    ) or 0
+    if request_steps:
+        raise HTTPException(status_code=409, detail="لا يمكن حذف الدور لأنه موجود في طلبات سابقة.")
+
+    old_value = role_to_dict(role)
+    db.execute(delete(ScreenPermission).where(ScreenPermission.role_id == role.id))
+    db.execute(delete(ActionPermission).where(ActionPermission.role_id == role.id))
+    db.execute(delete(AIFeaturePermission).where(AIFeaturePermission.role_id == role.id))
+    db.delete(role)
+    write_audit(db, "role_deleted", "role", actor=actor, entity_id=str(role_id), ip_address=client_ip(request), user_agent=request_user_agent(request), metadata={"old_value": old_value})
+    db.commit()
+    return {"deleted": True}
+
+
 @roles_router.get("/{role_id}/users")
 def users_in_role(role_id: int, db: Session = Depends(get_db), _: User = Depends(require_users_screen_view)):
     role = db.get(Role, role_id)
@@ -1772,7 +1842,7 @@ permissions_router = APIRouter(prefix="/permissions", tags=["Permissions"])
 
 @permissions_router.get("/screens")
 def screen_permissions_matrix(db: Session = Depends(get_db), _: User = Depends(require_users_screen_view)):
-    roles = db.scalars(select(Role).order_by(Role.label_ar)).all()
+    roles = [role for role in db.scalars(select(Role).order_by(Role.label_ar)).all() if not is_hidden_legacy_role(role)]
     users = db.scalars(select(User).order_by(User.full_name_ar)).all()
     return {
         "screens": SCREEN_DEFINITIONS,
@@ -1855,7 +1925,7 @@ def copy_screen_permissions(payload: dict, request: Request, db: Session = Depen
 
 @permissions_router.get("/actions")
 def action_permissions_matrix(db: Session = Depends(get_db), _: User = Depends(require_users_screen_view)):
-    roles = db.scalars(select(Role).order_by(Role.label_ar)).all()
+    roles = [role for role in db.scalars(select(Role).order_by(Role.label_ar)).all() if not is_hidden_legacy_role(role)]
     users = db.scalars(select(User).order_by(User.full_name_ar)).all()
     return {
         "actions": ACTION_DEFINITIONS,
@@ -1925,6 +1995,7 @@ def list_departments(db: Session = Depends(get_db), _: User = Depends(require_us
 
 @departments_router.post("", response_model=DepartmentRead, status_code=status.HTTP_201_CREATED)
 def create_department(payload: SettingsDepartmentCreate, db: Session = Depends(get_db), actor: User = Depends(require_roles(UserRole.SUPER_ADMIN, UserRole.IT_MANAGER))):
+    validate_department_manager(db, payload.manager_id)
     department = Department(
         name_ar=payload.name_ar,
         name_en=payload.name_en,
@@ -1945,6 +2016,7 @@ def update_department(department_id: int, payload: SettingsDepartmentCreate, db:
     department = db.get(Department, department_id)
     if not department:
         raise HTTPException(status_code=404, detail="Department not found")
+    validate_department_manager(db, payload.manager_id)
     for field, value in payload.model_dump().items():
         setattr(department, field, value)
     write_audit(db, "department_updated", "department", actor=actor, entity_id=str(department.id))
@@ -1961,3 +2033,13 @@ def delete_department(department_id: int, db: Session = Depends(get_db), actor: 
     db.delete(department)
     write_audit(db, "department_deleted", "department", actor=actor, entity_id=str(department_id))
     db.commit()
+
+
+def validate_department_manager(db: Session, manager_id: int | None) -> None:
+    if not manager_id:
+        return
+    manager = db.get(User, manager_id)
+    if not manager or not manager.is_active or manager.is_locked:
+        raise HTTPException(status_code=422, detail="مدير الإدارة المحدد غير موجود أو غير نشط")
+    if manager.role not in {UserRole.DIRECT_MANAGER, UserRole.IT_MANAGER, UserRole.EXECUTIVE, UserRole.SUPER_ADMIN}:
+        raise HTTPException(status_code=422, detail="مدير الإدارة يجب أن يكون مستخدماً بصلاحية إدارية أو مدير مباشر")

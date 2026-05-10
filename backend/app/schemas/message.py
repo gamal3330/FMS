@@ -18,6 +18,8 @@ class MessageUserRead(BaseModel):
 class InternalMessageCreate(BaseModel):
     recipient_ids: list[int] = Field(min_length=1)
     message_type: str = Field(default="internal_correspondence", max_length=40)
+    priority: str = Field(default="normal", max_length=20)
+    classification_code: str = Field(default="internal", max_length=80)
     subject: str = Field(min_length=2, max_length=180)
     body: str = Field(min_length=1)
     related_request_id: int | str | None = None
@@ -26,6 +28,8 @@ class InternalMessageCreate(BaseModel):
 class InternalMessageDraftUpsert(BaseModel):
     recipient_ids: list[int] = Field(default_factory=list)
     message_type: str = Field(default="internal_correspondence", max_length=40)
+    priority: str = Field(default="normal", max_length=20)
+    classification_code: str = Field(default="internal", max_length=80)
     subject: str = Field(default="", max_length=180)
     body: str = Field(default="")
     related_request_id: int | str | None = None
@@ -34,11 +38,15 @@ class InternalMessageDraftUpsert(BaseModel):
 class InternalMessageReply(BaseModel):
     body: str = Field(min_length=1)
     message_type: str = Field(default="reply_to_clarification", max_length=40)
+    priority: str = Field(default="normal", max_length=20)
+    classification_code: str = Field(default="internal", max_length=80)
 
 
 class InternalMessageForward(BaseModel):
     recipient_ids: list[int] = Field(min_length=1)
     message_type: str = Field(default="internal_correspondence", max_length=40)
+    priority: str = Field(default="normal", max_length=20)
+    classification_code: str = Field(default="internal", max_length=80)
     note: str | None = None
 
 
@@ -64,6 +72,8 @@ class MessageBulkAction(BaseModel):
 
 
 class MessageSettingsRead(BaseModel):
+    module_name_ar: str = "المراسلات الداخلية"
+    module_name_en: str = "Internal Messaging"
     enabled: bool = True
     enable_attachments: bool = True
     enable_drafts: bool = True
@@ -95,10 +105,13 @@ class MessageSettingsRead(BaseModel):
     notify_on_new_message: bool = True
     notify_on_reply: bool = True
     notify_on_read: bool = False
+    notify_on_clarification_request: bool = True
+    notify_on_official_message: bool = True
     auto_refresh_seconds: int = 20
     max_attachment_mb: int = 25
     max_attachments_per_message: int = 10
     max_recipients: int = 200
+    default_priority: str = "normal"
     default_message_type: str = "internal_correspondence"
     allowed_extensions: list[str] = Field(default_factory=lambda: ["pdf", "png", "jpg", "jpeg"])
     block_executable_files: bool = True
@@ -129,6 +142,7 @@ class MessageSettingsUpdate(BaseModel):
     auto_refresh_seconds: int = Field(default=20, ge=5, le=300)
     max_attachment_mb: int = Field(default=25, ge=1, le=100)
     max_recipients: int = Field(default=200, ge=1, le=1000)
+    default_priority: str = Field(default="normal", max_length=20)
     default_message_type: str = Field(default="internal_correspondence", max_length=40)
     allowed_user_ids: list[int] = Field(default_factory=list)
     blocked_user_ids: list[int] = Field(default_factory=list)
@@ -180,6 +194,29 @@ class MessageTypeRead(BaseModel):
     value: str
     label: str
     is_system: bool = False
+    color: str | None = None
+    icon: str | None = None
+    is_official: bool = False
+    requires_request: bool = False
+    requires_attachment: bool = False
+    show_in_pdf: bool = False
+    allow_reply: bool = True
+
+
+class MessageClassificationRead(BaseModel):
+    code: str
+    name_ar: str
+    name_en: str | None = None
+    description: str | None = None
+    is_active: bool = True
+    restricted_access: bool = False
+    show_in_pdf: bool = True
+    show_in_reports: bool = True
+    allow_attachment_download: bool = True
+    log_downloads: bool = False
+    requires_special_permission: bool = False
+
+    model_config = {"from_attributes": True}
 
 
 class MessageTypeUpdate(BaseModel):
@@ -197,6 +234,8 @@ class InternalMessageRead(BaseModel):
     message_uid: str | None = None
     thread_id: int | None = None
     message_type: str = "internal_correspondence"
+    priority: str = "normal"
+    classification_code: str = "internal"
     subject: str
     body: str
     sender_id: int

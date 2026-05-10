@@ -9,6 +9,8 @@ const fieldTypes = [
   ["text", "نص قصير"],
   ["textarea", "نص طويل"],
   ["number", "رقم"],
+  ["email", "بريد إلكتروني"],
+  ["phone", "رقم جوال"],
   ["date", "تاريخ"],
   ["datetime", "تاريخ ووقت"],
   ["select", "قائمة اختيار"],

@@ -30,6 +30,7 @@ class ApprovalStepRead(BaseModel):
     action: ApprovalAction
     can_reject: bool = True
     can_return_for_edit: bool = False
+    can_act: bool = False
     note: str | None = None
     acted_at: datetime | None = None
     approver: UserRead | None = None

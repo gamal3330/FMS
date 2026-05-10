@@ -11,9 +11,13 @@
   --app-bg: #f6f8f7;
   --app-surface: #ffffff;
   --app-surface-muted: #f8fafc;
+  --app-surface-raised: #ffffff;
   --app-border: #e2e8f0;
+  --app-border-strong: #cbd5e1;
   --app-text: #0f172a;
   --app-text-muted: #64748b;
+  --app-text-soft: #94a3b8;
+  --app-focus: rgba(18, 128, 70, 0.18);
   direction: rtl;
   color: var(--app-text);
   background: var(--app-bg);
@@ -21,12 +25,21 @@
 }
 
 :root[data-theme="dark"] {
-  --app-bg: #0f172a;
-  --app-surface: #111827;
-  --app-surface-muted: #1e293b;
-  --app-border: #334155;
-  --app-text: #e5e7eb;
-  --app-text-muted: #94a3b8;
+  --bank-50: 19 45 33;
+  --bank-100: 24 66 44;
+  --bank-600: 62 188 118;
+  --bank-700: 116 226 155;
+  --bank-900: 201 252 219;
+  --app-bg: #0b1110;
+  --app-surface: #101816;
+  --app-surface-muted: #16211e;
+  --app-surface-raised: #1a2622;
+  --app-border: #26362f;
+  --app-border-strong: #355044;
+  --app-text: #eef7f1;
+  --app-text-muted: #a9b8b1;
+  --app-text-soft: #7e9088;
+  --app-focus: rgba(116, 226, 155, 0.22);
   color-scheme: dark;
 }
 
@@ -43,6 +56,15 @@ body {
   color: var(--app-text);
   background: var(--app-bg);
   font-family: "Tajawal", "Cairo", "Segoe UI", Tahoma, Arial, sans-serif;
+}
+
+* {
+  scrollbar-color: var(--app-border-strong) transparent;
+}
+
+::selection {
+  background: rgb(var(--bank-600) / 0.22);
+  color: var(--app-text);
 }
 
 #root {
@@ -83,58 +105,168 @@ th, td {
   text-align: left;
 }
 
-:root:not([data-theme="dark"]) :where(body, body *) {
-  color: #000 !important;
+:root[data-theme="dark"] :where(body, #root, .min-h-screen, main) {
+  background-color: var(--app-bg) !important;
+  color: var(--app-text) !important;
 }
 
 :root[data-theme="dark"] :where(body, body *) {
   border-color: var(--app-border) !important;
 }
 
-:root[data-theme="dark"] :where(.bg-white, .bg-white\/95) {
-  background-color: rgb(17 24 39 / var(--tw-bg-opacity, 1)) !important;
+:root[data-theme="dark"] :where(.bg-white, .bg-white\/95, .bg-white\/90, .bg-white\/80) {
+  background-color: rgb(16 24 22 / var(--tw-bg-opacity, 1)) !important;
 }
 
-:root[data-theme="dark"] :where(.bg-slate-50, .bg-slate-100) {
-  background-color: rgb(30 41 59 / var(--tw-bg-opacity, 1)) !important;
+:root[data-theme="dark"] :where(.bg-slate-50, .bg-slate-100, .bg-gray-50, .bg-gray-100) {
+  background-color: rgb(22 33 30 / var(--tw-bg-opacity, 1)) !important;
 }
 
-:root[data-theme="dark"] :where(.bg-slate-200, .bg-slate-300) {
-  background-color: rgb(51 65 85 / var(--tw-bg-opacity, 1)) !important;
+:root[data-theme="dark"] :where(.bg-slate-200, .bg-slate-300, .bg-gray-200, .bg-gray-300) {
+  background-color: rgb(38 54 47 / var(--tw-bg-opacity, 1)) !important;
 }
 
 :root[data-theme="dark"] :where(.bg-bank-50, .bg-bank-100) {
-  background-color: rgb(var(--bank-900) / 0.32) !important;
+  background-color: rgb(24 66 44 / 0.36) !important;
 }
 
-:root[data-theme="dark"] :where(.text-slate-950, .text-slate-900, .text-slate-800, .text-slate-700) {
-  color: rgb(241 245 249) !important;
+:root[data-theme="dark"] :where(.bg-emerald-50, .bg-emerald-100, .bg-green-50, .bg-green-100) {
+  background-color: rgb(6 78 59 / 0.34) !important;
 }
 
-:root[data-theme="dark"] :where(.text-slate-600, .text-slate-500, .text-slate-400) {
-  color: rgb(148 163 184) !important;
+:root[data-theme="dark"] :where(.bg-amber-50, .bg-amber-100, .bg-yellow-50, .bg-yellow-100) {
+  background-color: rgb(120 78 18 / 0.28) !important;
 }
 
-:root[data-theme="dark"] :where(.text-bank-700, .text-bank-800, .text-bank-900) {
-  color: rgb(190 242 215) !important;
+:root[data-theme="dark"] :where(.bg-red-50, .bg-red-100, .bg-rose-50, .bg-rose-100) {
+  background-color: rgb(127 29 29 / 0.28) !important;
 }
 
-:root[data-theme="dark"] :where(.border-slate-100, .border-slate-200, .border-slate-300) {
-  border-color: rgb(51 65 85) !important;
+:root[data-theme="dark"] :where(.bg-blue-50, .bg-blue-100, .bg-indigo-50, .bg-indigo-100) {
+  background-color: rgb(30 64 75 / 0.34) !important;
 }
 
-:root[data-theme="dark"] :where(input, select, textarea, .message-rich-editor) {
-  background-color: rgb(15 23 42) !important;
-  border-color: rgb(51 65 85) !important;
-  color: rgb(241 245 249) !important;
+:root[data-theme="dark"] :where(.text-slate-950, .text-slate-900, .text-slate-800, .text-slate-700, .text-gray-950, .text-gray-900, .text-gray-800, .text-gray-700) {
+  color: var(--app-text) !important;
 }
 
-:root[data-theme="dark"] :where(.hover\:bg-slate-50:hover, .hover\:bg-slate-100:hover, tr:hover) {
-  background-color: rgb(30 41 59 / 0.9) !important;
+:root[data-theme="dark"] :where(.text-slate-600, .text-slate-500, .text-gray-600, .text-gray-500) {
+  color: var(--app-text-muted) !important;
 }
 
-:root[data-theme="dark"] :where(.shadow-sm, .shadow-xl, .shadow-2xl) {
-  --tw-shadow-color: rgb(0 0 0 / 0.45);
+:root[data-theme="dark"] :where(.text-slate-400, .text-gray-400) {
+  color: var(--app-text-soft) !important;
+}
+
+:root[data-theme="dark"] :where(.text-bank-600, .text-bank-700, .text-bank-800, .text-bank-900) {
+  color: #9af0bd !important;
+}
+
+:root[data-theme="dark"] :where(.text-emerald-700, .text-green-700) {
+  color: #86efac !important;
+}
+
+:root[data-theme="dark"] :where(.text-amber-700, .text-yellow-700) {
+  color: #facc15 !important;
+}
+
+:root[data-theme="dark"] :where(.text-red-700, .text-rose-700) {
+  color: #fca5a5 !important;
+}
+
+:root[data-theme="dark"] :where(.text-blue-700, .text-indigo-700) {
+  color: #93c5fd !important;
+}
+
+:root[data-theme="dark"] :where(.border-slate-50, .border-slate-100, .border-slate-200, .border-slate-300, .border-gray-100, .border-gray-200, .border-gray-300) {
+  border-color: var(--app-border) !important;
+}
+
+:root[data-theme="dark"] :where(.divide-slate-100 > :not([hidden]) ~ :not([hidden]), .divide-slate-200 > :not([hidden]) ~ :not([hidden])) {
+  border-color: var(--app-border) !important;
+}
+
+:root[data-theme="dark"] :where(input, select, textarea, .message-rich-editor, [contenteditable="true"]) {
+  background-color: #0d1513 !important;
+  border-color: var(--app-border-strong) !important;
+  color: var(--app-text) !important;
+  box-shadow: none;
+}
+
+:root[data-theme="dark"] :where(input:focus, select:focus, textarea:focus, .message-rich-editor:focus, [contenteditable="true"]:focus) {
+  border-color: rgb(var(--bank-600) / 0.8) !important;
+  box-shadow: 0 0 0 3px var(--app-focus) !important;
+}
+
+:root[data-theme="dark"] :where(input:disabled, select:disabled, textarea:disabled, button:disabled) {
+  background-color: rgb(18 27 24 / 0.85) !important;
+  color: var(--app-text-soft) !important;
+}
+
+:root[data-theme="dark"] :where(table) {
+  background-color: var(--app-surface) !important;
+}
+
+:root[data-theme="dark"] :where(thead, .sticky.right-0, .sticky.left-0) {
+  background-color: var(--app-surface-muted) !important;
+}
+
+:root[data-theme="dark"] :where(tbody tr) {
+  background-color: transparent !important;
+}
+
+:root[data-theme="dark"] :where(.hover\:bg-slate-50:hover, .hover\:bg-slate-100:hover, .hover\:bg-gray-50:hover, .hover\:bg-gray-100:hover, tr:hover) {
+  background-color: rgb(26 38 34 / 0.92) !important;
+}
+
+:root[data-theme="dark"] :where(.shadow-sm, .shadow, .shadow-md, .shadow-lg, .shadow-xl, .shadow-2xl) {
+  --tw-shadow-color: rgb(0 0 0 / 0.42);
+  box-shadow: 0 12px 32px rgb(0 0 0 / 0.25) !important;
+}
+
+:root[data-theme="dark"] :where(.backdrop-blur) {
+  background-color: rgb(16 24 22 / 0.88) !important;
+}
+
+:root[data-theme="dark"] :where(.ring-bank-100, .focus\:ring-bank-100:focus) {
+  --tw-ring-color: var(--app-focus) !important;
+}
+
+:root[data-theme="dark"] :where(.file\:bg-bank-50)::file-selector-button {
+  background-color: rgb(24 66 44 / 0.5) !important;
+  color: rgb(var(--bank-700) / 1) !important;
+}
+
+.request-form-intro {
+  background: color-mix(in srgb, var(--app-surface-muted) 78%, transparent);
+  border-color: var(--app-border);
+}
+
+.request-form-icon {
+  background: rgb(var(--bank-600) / 0.08);
+  color: rgb(var(--bank-700) / 1);
+}
+
+.request-form-meta {
+  background: var(--app-surface);
+  color: var(--app-text-muted);
+  border: 1px solid var(--app-border);
+}
+
+:root[data-theme="dark"] .request-form-intro {
+  background: rgb(13 21 19 / 0.72);
+  border-color: var(--app-border-strong);
+}
+
+:root[data-theme="dark"] .request-form-icon {
+  background: rgb(var(--bank-600) / 0.13);
+  color: #9af0bd;
+}
+
+:root[data-theme="dark"] .request-form-meta {
+  background: rgb(16 24 22 / 0.82);
+  color: var(--app-text-muted);
+  border-color: var(--app-border);
 }
 
 ::placeholder {
@@ -143,7 +275,7 @@ th, td {
 }
 
 :root[data-theme="dark"] ::placeholder {
-  color: rgb(148 163 184 / 0.85) !important;
+  color: rgb(169 184 177 / 0.72) !important;
 }
 
 .message-rich-editor:empty::before {
@@ -181,7 +313,8 @@ th, td {
 }
 
 :root[data-theme="dark"] .message-rich-editor :where(blockquote) {
-  background: rgb(15 23 42);
+  background: rgb(13 21 19);
+  border-color: rgb(var(--bank-600) / 0.75);
 }
 
 @keyframes toastIn {

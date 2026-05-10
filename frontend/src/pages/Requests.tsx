@@ -1,4 +1,4 @@
-import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
 import { Eye, FilePlus2, MessageSquare, RefreshCw, RotateCcw, Save, Search, Send } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { API_BASE, apiFetch, CurrentUser, ServiceRequest } from "../lib/api";
@@ -11,7 +11,8 @@ import { Pagination } from "../components/ui/Pagination";
 
 type RequestType = string;
 type Priority = "low" | "medium" | "high" | "critical";
-type FieldKind = "text" | "textarea" | "select" | "date";
+type FieldKind = "text" | "textarea" | "select" | "multi_select" | "checkbox" | "date" | "datetime" | "number" | "email" | "phone" | "ip_address" | "mac_address" | "file";
+type FieldValue = string | string[];
 type AdministrativeSection = string;
 
 interface FieldConfig {
@@ -82,16 +83,18 @@ const administrativeSections: Record<AdministrativeSection, string> = {
 
 const fieldTypeMap: Record<string, FieldKind> = {
   text: "text",
-  number: "text",
-  ip_address: "text",
-  mac_address: "text",
+  number: "number",
+  email: "email",
+  phone: "phone",
+  ip_address: "ip_address",
+  mac_address: "mac_address",
   file: "text",
   textarea: "textarea",
   select: "select",
-  multi_select: "select",
-  checkbox: "select",
+  multi_select: "multi_select",
+  checkbox: "checkbox",
   date: "date",
-  datetime: "date"
+  datetime: "datetime"
 };
 
 const priorities: { value: Priority; label: string }[] = [
@@ -131,8 +134,8 @@ export function Requests() {
     default_checked: true,
     allow_toggle: true
   });
-  const [formData, setFormData] = useState<Record<string, string>>({});
-  const [attachment, setAttachment] = useState<File | null>(null);
+  const [formData, setFormData] = useState<Record<string, FieldValue>>({});
+  const [attachments, setAttachments] = useState<File[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [isTypesLoading, setIsTypesLoading] = useState(true);
@@ -154,8 +157,10 @@ export function Requests() {
     [availableRequestTypes, requestType]
   );
   const requestListTotal = requestsHasMore ? requestsPage * requestPageSize + 1 : (requestsPage - 1) * requestPageSize + items.length;
+  const selectedRequiredFieldsCount = selectedType?.fields.filter((field) => field.required).length ?? 0;
+  const selectedAttachmentLabel = !selectedType ? "-" : selectedType.requiresAttachment ? "إلزامية" : typeAllowsAttachments(selectedType) ? "اختيارية" : "غير مفعلة";
 
-  function updateField(name: string, value: string) {
+  function updateField(name: string, value: FieldValue) {
     setFormData((current) => ({ ...current, [name]: value }));
   }
 
@@ -165,14 +170,14 @@ export function Requests() {
     setPriority(nextConfig?.defaultPriority ?? "medium");
     setBusinessJustification("");
     setSendNotification(requestNotificationControl.default_checked);
-    setAttachment(null);
+    setAttachments([]);
     if (!nextConfig) {
       setFormData({});
       return;
     }
     setFormData(
-      nextConfig.fields.reduce<Record<string, string>>((acc, field) => {
-        acc[field.name] = field.kind === "select" ? field.options?.[0] ?? "" : "";
+      nextConfig.fields.reduce<Record<string, FieldValue>>((acc, field) => {
+        acc[field.name] = field.kind === "multi_select" ? [] : field.kind === "select" ? field.options?.[0] ?? "" : field.kind === "checkbox" ? "لا" : "";
         return acc;
       }, {})
     );
@@ -304,12 +309,16 @@ export function Requests() {
     setIsSubmitting(true);
 
     try {
-      if (selectedType?.requiresAttachment && !attachment && !editingRequestId) {
+      if (selectedType && !typeAllowsAttachments(selectedType) && attachments.length > 0) {
+        setError("المرفقات غير مفعلة لهذا النوع من الطلبات.");
+        return;
+      }
+      if (selectedType?.requiresAttachment && attachments.length === 0 && !editingRequestId) {
         setError("هذا النوع من الطلبات يتطلب إرفاق ملف قبل الإرسال.");
         return;
       }
-      if (attachment && selectedType) {
-        const attachmentError = validateAttachmentForType(attachment, selectedType);
+      if (selectedType) {
+        const attachmentError = validateAttachmentsForType(attachments, selectedType);
         if (attachmentError) {
           setError(attachmentError);
           return;
@@ -321,8 +330,8 @@ export function Requests() {
           method: "PATCH",
           body: JSON.stringify(payload)
         });
-        if (attachment) {
-          await uploadAttachment(editingRequestId, attachment);
+        for (const file of attachments) {
+          await uploadAttachment(editingRequestId, file);
         }
         await apiFetch<ServiceRequest>(`/requests/${editingRequestId}/resubmit`, { method: "POST" });
         setMessage("تم تحديث الطلب وإعادة إرساله إلى مسار الموافقات.");
@@ -332,8 +341,10 @@ export function Requests() {
           method: "POST",
           body: JSON.stringify(payload)
         });
-        if (attachment && created?.id) {
-          await uploadAttachment(created.id, attachment);
+        if (created?.id) {
+          for (const file of attachments) {
+            await uploadAttachment(created.id, file);
+          }
         }
         setMessage("تم إرسال الطلب بنجاح وإضافته إلى مسار الموافقات.");
       }
@@ -359,7 +370,7 @@ export function Requests() {
     setPriority(item.priority as Priority);
     setBusinessJustification(item.business_justification || "");
     setSendNotification(requestNotificationControl.default_checked);
-    setAttachment(null);
+    setAttachments([]);
     setFormData({ ...(item.form_data || {}) });
     setMessage("");
     setError("");
@@ -388,7 +399,7 @@ export function Requests() {
         priority,
         business_justification: businessJustification,
         send_notification: sendRequestNotification,
-        attachment_count: attachment ? 1 : 0,
+        attachment_count: attachments.length,
         form_data: enrichedFormData
       };
     }
@@ -399,7 +410,7 @@ export function Requests() {
       priority,
       business_justification: businessJustification,
       send_notification: sendRequestNotification,
-      attachment_count: attachment ? 1 : 0,
+      attachment_count: attachments.length,
       form_data: enrichedFormData
     };
   }
@@ -424,7 +435,7 @@ export function Requests() {
     setIsLinkedMessagesLoading(true);
     setError("");
     try {
-      const data = await apiFetch<LinkedMessage[]>(`/messages/request/${item.id}`);
+      const data = await apiFetch<LinkedMessage[]>(`/requests/${item.id}/messages`);
       setLinkedMessages(data);
     } catch {
       setError("تعذر تحميل المراسلات المرتبطة بالطلب.");
@@ -491,130 +502,190 @@ export function Requests() {
             </div>
           ) : (
             <>
-              <div className="mb-5 flex items-center gap-3">
-                <div className="rounded-md bg-bank-50 p-3 text-bank-700">
-                  <FilePlus2 className="h-5 w-5" />
+              <div className="request-form-intro mb-4 rounded-md border p-4">
+                <div className="flex items-start gap-3">
+                  <div className="request-form-icon rounded-md p-2">
+                    <FilePlus2 className="h-4 w-4" />
+                  </div>
+                  <div className="min-w-0">
+                    <h3 className="font-bold text-slate-950">بيانات الطلب</h3>
+                    <p className="mt-1 line-clamp-1 text-sm text-slate-500">{selectedType.description}</p>
+                    {editingRequestId && <p className="mt-1 text-xs font-bold text-amber-700">وضع تعديل طلب معاد: سيتم إعادة إرساله للموافقات بعد الحفظ.</p>}
+                  </div>
                 </div>
-                <div>
-                  <h3 className="font-bold text-slate-950">بيانات الطلب</h3>
-                  <p className="text-sm text-slate-500">{selectedType.description}</p>
-                  {editingRequestId && <p className="mt-1 text-xs font-bold text-amber-700">وضع تعديل طلب معاد: سيتم إعادة إرساله للموافقات بعد الحفظ.</p>}
+
+                <div className="mt-3 flex flex-wrap gap-2 text-xs font-bold">
+                  <span className="request-form-meta rounded-full px-3 py-1">القسم: {sectionLabels[selectedType.section] || selectedType.section}</span>
+                  <span className="request-form-meta rounded-full px-3 py-1">الحقول المطلوبة: {selectedRequiredFieldsCount}</span>
+                  {typeAllowsAttachments(selectedType) && <span className="request-form-meta rounded-full px-3 py-1">المرفقات: {selectedAttachmentLabel}</span>}
                 </div>
               </div>
 
-              <form onSubmit={create} className="space-y-4">
-            <label className="block space-y-2 text-sm font-medium text-slate-700">
-              نوع الطلب
-              <select value={requestType} onChange={handleTypeChange} className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none focus:border-bank-600 focus:ring-2 focus:ring-bank-100">
-                {availableRequestTypes.map((item) => (
-                  <option key={item.value} value={item.value}>{item.label}</option>
-                ))}
-              </select>
-            </label>
+              <form onSubmit={create} className="space-y-5">
+            <FormSection title="معلومات الطلب الأساسية" description="يتم جلب نوع الطلب والقسم المختص والأولوية الافتراضية من إدارة الطلبات.">
+              <div className="grid gap-4 md:grid-cols-2">
+                <label className="block space-y-2 text-sm font-medium text-slate-700">
+                  نوع الطلب
+                  <select value={requestType} onChange={handleTypeChange} className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none focus:border-bank-600 focus:ring-2 focus:ring-bank-100">
+                    {availableRequestTypes.map((item) => (
+                      <option key={item.value} value={item.value}>{item.label}</option>
+                    ))}
+                  </select>
+                </label>
 
-            <label className="block space-y-2 text-sm font-medium text-slate-700">
-              القسم المختص
-              <select value={selectedType.section} disabled className="h-10 w-full rounded-md border border-slate-300 bg-slate-100 px-3 text-sm text-slate-600 outline-none">
-                {Object.entries(sectionLabels).map(([value, label]) => (
-                  <option key={value} value={value}>{label}</option>
-                ))}
-              </select>
-              <span className="block text-xs font-normal text-slate-500">يتم تحديد القسم من إدارة أنواع الطلبات.</span>
-            </label>
+                <label className="block space-y-2 text-sm font-medium text-slate-700">
+                  القسم المختص
+                  <select value={selectedType.section} disabled className="h-10 w-full rounded-md border border-slate-300 bg-slate-100 px-3 text-sm text-slate-600 outline-none">
+                    {Object.entries(sectionLabels).map(([value, label]) => (
+                      <option key={value} value={value}>{label}</option>
+                    ))}
+                  </select>
+                  <span className="block text-xs font-normal text-slate-500">يتم تحديد القسم من إدارة أنواع الطلبات.</span>
+                </label>
 
-            <label className="block space-y-2 text-sm font-medium text-slate-700">
-              عنوان الطلب
-              <Input value={title} onChange={(event) => setTitle(event.target.value)} required placeholder="مثال: تفعيل VPN لموظف إدارة العمليات" />
-            </label>
+                <label className="block space-y-2 text-sm font-medium text-slate-700 md:col-span-2">
+                  عنوان الطلب
+                  <Input value={title} onChange={(event) => setTitle(event.target.value)} required placeholder="مثال: تفعيل VPN لموظف إدارة العمليات" />
+                </label>
 
-            <label className="block space-y-2 text-sm font-medium text-slate-700">
-              الأولوية
-              <select value={priority} onChange={(event) => setPriority(event.target.value as Priority)} className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none focus:border-bank-600 focus:ring-2 focus:ring-bank-100">
-                {priorities.map((item) => (
-                  <option key={item.value} value={item.value}>{item.label}</option>
-                ))}
-              </select>
-            </label>
+                <label className="block space-y-2 text-sm font-medium text-slate-700">
+                  الأولوية
+                  <select value={priority} onChange={(event) => setPriority(event.target.value as Priority)} className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none focus:border-bank-600 focus:ring-2 focus:ring-bank-100">
+                    {priorities.map((item) => (
+                      <option key={item.value} value={item.value}>{item.label}</option>
+                    ))}
+                  </select>
+                </label>
 
-            <div className="grid gap-3 rounded-md border border-bank-100 bg-bank-50/40 p-3 md:grid-cols-2 xl:grid-cols-4">
-              <RequestTypeMeta label="قاعدة المرفقات" value={selectedType.requiresAttachment ? "مرفق مطلوب" : "مرفق اختياري"} tone={selectedType.requiresAttachment ? "amber" : "slate"} />
-              <RequestTypeMeta label="حد المرفقات" value={`${selectedType.maxAttachments ?? 1} ملف / ${selectedType.maxFileSizeMb ?? 10} MB`} />
-              <RequestTypeMeta label="الامتدادات" value={(selectedType.allowedExtensions ?? ["pdf", "png", "jpg", "jpeg"]).join(", ")} />
-              <RequestTypeMeta label="التعيين" value={assignmentStrategyLabel(selectedType.autoAssignStrategy)} />
-              <RequestTypeMeta label="SLA المتوقع" value={selectedTypeSlaText(selectedType)} tone={selectedType.slaResolutionHours || selectedType.slaResponseHours ? "bank" : "slate"} />
-            </div>
+                <div className="rounded-md border border-slate-200 bg-slate-50 p-3 text-sm">
+                  <p className="font-bold text-slate-900">SLA المتوقع</p>
+                  <p className="mt-1 text-slate-500">{selectedTypeSlaText(selectedType)}</p>
+                </div>
+              </div>
+            </FormSection>
 
+            <FormSection title="بيانات النموذج" description={selectedType.fields.length ? "املأ الحقول المطلوبة لهذا النوع من الطلب." : "لا توجد حقول إضافية لهذا النوع."}>
             <div className="grid gap-4 md:grid-cols-2">
-              {selectedType.fields.map((field) => (
+              {selectedType.fields.map((field) => {
+                const value = formData[field.name];
+                return (
                 <label key={field.name} className={`block space-y-2 text-sm font-medium text-slate-700 ${field.colSpan ? "md:col-span-2" : ""}`}>
                   {field.label}
                   {field.kind === "textarea" ? (
-                    <textarea value={formData[field.name] ?? ""} onChange={(event) => updateField(field.name, event.target.value)} required={field.required} placeholder={field.placeholder} rows={4} className="w-full resize-y rounded-md border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-bank-600 focus:ring-2 focus:ring-bank-100" />
+                    <textarea value={fieldValueAsString(value)} onChange={(event) => updateField(field.name, event.target.value)} required={field.required} placeholder={field.placeholder} rows={4} className="w-full resize-y rounded-md border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-bank-600 focus:ring-2 focus:ring-bank-100" />
                   ) : field.kind === "select" ? (
-                    <select value={formData[field.name] ?? field.options?.[0] ?? ""} onChange={(event) => updateField(field.name, event.target.value)} required={field.required} className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none focus:border-bank-600 focus:ring-2 focus:ring-bank-100">
+                    <select value={fieldValueAsString(value) || field.options?.[0] || ""} onChange={(event) => updateField(field.name, event.target.value)} required={field.required} className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none focus:border-bank-600 focus:ring-2 focus:ring-bank-100">
                       {(field.options ?? []).map((option) => (
                         <option key={option} value={option}>{option}</option>
                       ))}
                     </select>
+                  ) : field.kind === "multi_select" ? (
+                    <select
+                      multiple
+                      value={Array.isArray(value) ? value : []}
+                      onChange={(event) => updateField(field.name, Array.from(event.target.selectedOptions).map((option) => option.value))}
+                      required={field.required}
+                      className="min-h-28 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-bank-600 focus:ring-2 focus:ring-bank-100"
+                    >
+                      {(field.options ?? []).map((option) => (
+                        <option key={option} value={option}>{option}</option>
+                      ))}
+                    </select>
+                  ) : field.kind === "checkbox" ? (
+                    <label className="flex h-10 items-center gap-2 rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700">
+                      <input
+                        type="checkbox"
+                        checked={fieldValueAsString(value) === "نعم"}
+                        onChange={(event) => updateField(field.name, event.target.checked ? "نعم" : "لا")}
+                        className="h-4 w-4 rounded border-slate-300 text-bank-700 focus:ring-bank-600"
+                      />
+                      نعم
+                    </label>
                   ) : (
-                    <Input value={formData[field.name] ?? ""} onChange={(event) => updateField(field.name, event.target.value)} required={field.required} placeholder={field.placeholder} type={field.kind === "date" ? "date" : "text"} />
+                    <Input value={fieldValueAsString(value)} onChange={(event) => updateField(field.name, event.target.value)} required={field.required} placeholder={field.placeholder} type={inputTypeForField(field.kind)} />
                   )}
                 </label>
-              ))}
+                );
+              })}
             </div>
+            {selectedType.fields.length === 0 && <p className="rounded-md bg-slate-50 p-4 text-sm text-slate-500">هذا النوع لا يحتوي على حقول إضافية.</p>}
+            </FormSection>
 
-            {selectedType.requiresAttachment && (
+            {typeAllowsAttachments(selectedType) && (
+            <FormSection title="المرفقات" description="تتبع هذه القواعد إعدادات نوع الطلب الحالية.">
+            {selectedType && (
               <label className="block space-y-2 text-sm font-medium text-slate-700">
-                المرفق المطلوب
+                {selectedType.requiresAttachment ? "المرفقات المطلوبة" : "المرفقات"}
                 <input
                   type="file"
                   accept={fileAcceptAttribute(selectedType)}
-                  required
+                  multiple={Boolean(selectedType.allowMultipleAttachments)}
+                  required={selectedType.requiresAttachment && attachments.length === 0 && !editingRequestId}
                   onChange={(event) => {
-                    const file = event.target.files?.[0] || null;
-                    const attachmentError = file ? validateAttachmentForType(file, selectedType) : "";
+                    const selectedFiles = Array.from(event.target.files || []);
+                    const nextFiles = selectedType.allowMultipleAttachments ? selectedFiles : selectedFiles.slice(0, 1);
+                    const attachmentError = validateAttachmentsForType(nextFiles, selectedType);
                     if (attachmentError) {
                       setError(attachmentError);
                       event.target.value = "";
-                      setAttachment(null);
+                      setAttachments([]);
                       return;
                     }
                     setError("");
-                    setAttachment(file);
+                    setAttachments(nextFiles);
                   }}
                   className="block w-full rounded-md border border-dashed border-slate-300 bg-white px-3 py-2 text-sm file:ml-3 file:rounded-md file:border-0 file:bg-bank-50 file:px-3 file:py-1.5 file:text-sm file:font-bold file:text-bank-700"
                 />
+                {attachments.length > 0 && (
+                  <div className="space-y-1 rounded-md border border-slate-200 bg-slate-50 p-3">
+                    {attachments.map((file) => (
+                      <div key={`${file.name}-${file.size}`} className="flex items-center justify-between gap-3 text-xs text-slate-600">
+                        <span className="truncate font-bold text-slate-800">{file.name}</span>
+                        <span>{formatFileSize(file.size)}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
                 <span className="block text-xs font-normal text-slate-500">
-                  الامتدادات المسموحة: {(selectedType.allowedExtensions ?? ["pdf", "png", "jpg", "jpeg"]).join(", ")}. الحد الأقصى: {selectedType.maxFileSizeMb ?? 10} MB.
+                  الامتدادات المسموحة: {(selectedType.allowedExtensions ?? ["pdf", "png", "jpg", "jpeg"]).join(", ")}. الحد الأقصى للملف: {selectedType.maxFileSizeMb ?? 10} MB. عدد الملفات: {selectedType.allowMultipleAttachments ? `حتى ${selectedType.maxAttachments ?? 5}` : "ملف واحد"}.
                 </span>
               </label>
             )}
+            </FormSection>
+            )}
 
-            <label className="block space-y-2 text-sm font-medium text-slate-700">
-              مبرر العمل
-              <textarea value={businessJustification} onChange={(event) => setBusinessJustification(event.target.value)} required rows={4} placeholder="اشرح سبب الطلب والأثر التشغيلي المتوقع" className="w-full resize-y rounded-md border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-bank-600 focus:ring-2 focus:ring-bank-100" />
-            </label>
+            <FormSection title="المراجعة والإرسال" description="أضف مبرر الطلب ثم أرسله إلى مسار الموافقات.">
+              <label className="block space-y-2 text-sm font-medium text-slate-700">
+                مبرر العمل
+                <textarea value={businessJustification} onChange={(event) => setBusinessJustification(event.target.value)} required rows={4} placeholder="اشرح سبب الطلب والأثر التشغيلي المتوقع" className="w-full resize-y rounded-md border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-bank-600 focus:ring-2 focus:ring-bank-100" />
+              </label>
 
-            {requestNotificationControl.show_checkbox && (
-              <label className="flex items-start gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
-                <input
-                  type="checkbox"
-                  checked={requestNotificationControl.allow_toggle ? sendNotification : requestNotificationControl.default_checked}
-                  disabled={!requestNotificationControl.allow_toggle}
-                  onChange={(event) => setSendNotification(event.target.checked)}
-                  className="mt-1 h-4 w-4 rounded border-slate-300 text-bank-700 focus:ring-bank-600 disabled:opacity-60"
-                />
-                <span>
-                  <span className="block font-bold text-slate-900">إرسال إشعار في المراسلات</span>
-                  <span className="mt-1 block text-xs leading-5 text-slate-500">
-                    عند التفعيل سيتم إرسال رسالة تصنيفها إشعار للجهة الأولى في مسار الموافقات.
-                    {!requestNotificationControl.allow_toggle && " هذا الخيار مقفل من إعدادات المراسلات."}
+              {requestNotificationControl.show_checkbox && (
+                <label className="mt-4 flex items-start gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
+                  <input
+                    type="checkbox"
+                    checked={requestNotificationControl.allow_toggle ? sendNotification : requestNotificationControl.default_checked}
+                    disabled={!requestNotificationControl.allow_toggle}
+                    onChange={(event) => setSendNotification(event.target.checked)}
+                    className="mt-1 h-4 w-4 rounded border-slate-300 text-bank-700 focus:ring-bank-600 disabled:opacity-60"
+                  />
+                  <span>
+                    <span className="block font-bold text-slate-900">إرسال إشعار في المراسلات</span>
+                    <span className="mt-1 block text-xs leading-5 text-slate-500">
+                      عند التفعيل سيتم إرسال رسالة تصنيفها إشعار للجهة الأولى في مسار الموافقات.
+                      {!requestNotificationControl.allow_toggle && " هذا الخيار مقفل من إعدادات المراسلات."}
+                    </span>
                   </span>
-                </span>
-              </label>
-            )}
+                </label>
+              )}
+            </FormSection>
 
-            <div className="flex flex-col gap-3 sm:flex-row">
+            <div className="flex flex-col gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="text-xs leading-5 text-slate-500">
+                <p className="font-bold text-slate-700">ملخص سريع</p>
+                <p>{selectedType.label} - {sectionLabels[selectedType.section] || selectedType.section} - {priorities.find((type) => type.value === priority)?.label ?? priority}</p>
+              </div>
+              <div className="flex flex-col gap-3 sm:flex-row">
               <Button type="submit" disabled={isSubmitting} className="gap-2">
                 <Send className="h-4 w-4" />
                 {isSubmitting ? "جاري الإرسال..." : editingRequestId ? "حفظ وإعادة إرسال" : "إرسال الطلب"}
@@ -623,6 +694,7 @@ export function Requests() {
                 <Save className="h-4 w-4" />
                 تفريغ النموذج
               </button>
+              </div>
             </div>
               </form>
             </>
@@ -649,7 +721,7 @@ export function Requests() {
             </label>
           </div>
 
-          <div className="overflow-hidden">
+          <div className="hidden overflow-hidden lg:block">
             <table className="w-full table-fixed text-sm">
               <colgroup>
                 <col className="w-[12%]" />
@@ -760,6 +832,26 @@ export function Requests() {
               </tbody>
             </table>
           </div>
+          <div className="divide-y divide-slate-100 lg:hidden">
+            {items.length === 0 && (
+              <div className="p-6 text-center text-sm text-slate-500">
+                {requestSearch.trim() ? "لا توجد نتائج مطابقة للبحث." : "لا توجد طلبات لعرضها حالياً."}
+              </div>
+            )}
+            {items.map((item) => (
+              <RequestListCard
+                key={item.id}
+                item={item}
+                currentUserId={currentUser?.id}
+                requestTypeLabel={requestTypeLabel(item)}
+                requestSectionLabel={requestSectionLabel(item)}
+                messageEnabled={messageSettings.enable_linked_requests && messageSettings.show_messages_tab_in_request_details}
+                onView={() => navigate(`/requests/${item.id}`)}
+                onEdit={() => beginEditReturnedRequest(item)}
+                onMessages={() => showLinkedMessages(item)}
+              />
+            ))}
+          </div>
           <Pagination page={requestsPage} totalItems={requestListTotal} pageSize={requestPageSize} onPageChange={setRequestsPage} />
         </Card>
 
@@ -840,6 +932,87 @@ function messageTypeLabel(value: string) {
   return labels[value] || "مراسلة داخلية";
 }
 
+function RequestSummaryChip({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+      <p className="text-[11px] font-bold text-slate-500">{label}</p>
+      <p className="mt-1 truncate font-black text-slate-900">{value}</p>
+    </div>
+  );
+}
+
+function FormSection({ title, description, children }: { title: string; description: string; children: ReactNode }) {
+  return (
+    <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="mb-4">
+        <h4 className="font-black text-slate-950">{title}</h4>
+        <p className="mt-1 text-xs leading-5 text-slate-500">{description}</p>
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function RequestListCard({
+  item,
+  currentUserId,
+  requestTypeLabel,
+  requestSectionLabel,
+  messageEnabled,
+  onView,
+  onEdit,
+  onMessages
+}: {
+  item: ServiceRequest;
+  currentUserId?: number;
+  requestTypeLabel: string;
+  requestSectionLabel: string;
+  messageEnabled: boolean;
+  onView: () => void;
+  onEdit: () => void;
+  onMessages: () => void;
+}) {
+  const canEditReturned = item.status === "returned_for_edit" && currentUserId === item.requester?.id;
+  return (
+    <article className="p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="font-black text-bank-700">{item.request_number}</p>
+          <h4 className="mt-1 line-clamp-2 font-bold leading-6 text-slate-950">{item.title || "-"}</h4>
+        </div>
+        <span className={`shrink-0 rounded-full px-2 py-1 text-xs font-bold ${statusTone(item.status)}`}>{statusLabels[item.status] ?? item.status}</span>
+      </div>
+      <div className="mt-3 grid gap-2 text-xs text-slate-600 sm:grid-cols-2">
+        <span className="rounded-md bg-slate-50 p-2"><b>النوع:</b> {requestTypeLabel}</span>
+        <span className="rounded-md bg-slate-50 p-2"><b>القسم:</b> {requestSectionLabel}</span>
+        <span className="rounded-md bg-slate-50 p-2"><b>الأولوية:</b> {priorities.find((type) => type.value === item.priority)?.label ?? item.priority}</span>
+        <span className="rounded-md bg-slate-50 p-2"><b>التاريخ:</b> {formatSystemDate(item.created_at)}</span>
+      </div>
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+        <SLABadge request={item} />
+        <div className="flex gap-2">
+          <button type="button" onClick={onView} className="inline-flex h-9 items-center gap-2 rounded-md border border-bank-100 bg-bank-50 px-3 text-xs font-bold text-bank-700">
+            <Eye className="h-4 w-4" />
+            عرض
+          </button>
+          {canEditReturned && (
+            <button type="button" onClick={onEdit} className="inline-flex h-9 items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 text-xs font-bold text-amber-700">
+              <RotateCcw className="h-4 w-4" />
+              تعديل
+            </button>
+          )}
+          {messageEnabled && (
+            <button type="button" onClick={onMessages} className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-xs font-bold text-slate-700">
+              <MessageSquare className="h-4 w-4" />
+              مراسلات
+            </button>
+          )}
+        </div>
+      </div>
+    </article>
+  );
+}
+
 function normalizePriority(value?: string | null): Priority {
   if (value === "low" || value === "medium" || value === "high" || value === "critical") return value;
   if (value === "normal") return "medium";
@@ -860,18 +1033,19 @@ function selectedTypeSlaText(type: TypeConfig) {
   return [response, resolution].filter(Boolean).join(" / ") || "بدون SLA";
 }
 
-function assignmentStrategyLabel(value?: string) {
-  const labels: Record<string, string> = {
-    none: "بدون تعيين تلقائي",
-    section_manager: "مدير القسم المختص",
-    least_open_requests: "الأقل طلبات مفتوحة",
-    round_robin: "توزيع دوري"
-  };
-  return labels[value || "none"] || "بدون تعيين تلقائي";
+function statusTone(status: string) {
+  if (["rejected", "cancelled"].includes(status)) return "bg-red-50 text-red-700";
+  if (["completed", "closed", "approved"].includes(status)) return "bg-emerald-50 text-emerald-700";
+  if (["pending_approval", "in_implementation", "returned_for_edit"].includes(status)) return "bg-amber-50 text-amber-700";
+  return "bg-slate-100 text-slate-700";
 }
 
 function fileAcceptAttribute(type: TypeConfig) {
   return (type.allowedExtensions ?? ["pdf", "png", "jpg", "jpeg"]).map((extension) => `.${String(extension).replace(/^\./, "")}`).join(",");
+}
+
+function typeAllowsAttachments(type: TypeConfig | null | undefined) {
+  return Boolean(type?.requiresAttachment || type?.allowMultipleAttachments);
 }
 
 function validateAttachmentForType(file: File, type: TypeConfig) {
@@ -887,19 +1061,42 @@ function validateAttachmentForType(file: File, type: TypeConfig) {
   return "";
 }
 
-function RequestTypeMeta({ label, value, tone = "slate" }: { label: string; value: string; tone?: "slate" | "bank" | "amber" }) {
-  const toneClass =
-    tone === "bank"
-      ? "border-bank-100 bg-white text-bank-800"
-      : tone === "amber"
-        ? "border-amber-200 bg-amber-50 text-amber-800"
-        : "border-slate-200 bg-white text-slate-700";
-  return (
-    <div className={`rounded-md border px-3 py-2 ${toneClass}`}>
-      <p className="text-xs font-bold opacity-70">{label}</p>
-      <p className="mt-1 text-sm font-black leading-6">{value}</p>
-    </div>
-  );
+function validateAttachmentsForType(files: File[], type: TypeConfig) {
+  if (!files.length) return "";
+  if (!typeAllowsAttachments(type)) {
+    return "المرفقات غير مفعلة لهذا النوع من الطلبات.";
+  }
+  if (!type.allowMultipleAttachments && files.length > 1) {
+    return "هذا النوع من الطلبات لا يسمح بأكثر من مرفق واحد.";
+  }
+  const maxAttachments = type.maxAttachments ?? (type.allowMultipleAttachments ? 5 : 1);
+  if (files.length > maxAttachments) {
+    return `عدد المرفقات أكبر من الحد المسموح لهذا النوع (${maxAttachments}).`;
+  }
+  for (const file of files) {
+    const fileError = validateAttachmentForType(file, type);
+    if (fileError) return fileError;
+  }
+  return "";
+}
+
+function fieldValueAsString(value: FieldValue | undefined) {
+  if (Array.isArray(value)) return value.join("، ");
+  return value ?? "";
+}
+
+function inputTypeForField(kind?: FieldKind) {
+  if (kind === "date") return "date";
+  if (kind === "datetime") return "datetime-local";
+  if (kind === "number") return "number";
+  if (kind === "email") return "email";
+  if (kind === "phone") return "tel";
+  return "text";
+}
+
+function formatFileSize(value: number) {
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function SLABadge({ request }: { request: ServiceRequest }) {

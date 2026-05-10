@@ -25,7 +25,7 @@ from app.models.messaging_settings import (
     MessagingSettings,
 )
 from app.models.request import ServiceRequest
-from app.models.settings import PortalSetting
+from app.models.settings import PortalSetting, SettingsGeneral
 from app.models.user import Department, User
 
 
@@ -85,6 +85,22 @@ def get_singleton(db: Session, model):
     db.add(item)
     db.flush()
     return item
+
+
+def get_global_upload_max_file_size_mb(db: Session) -> int:
+    general = db.scalar(select(SettingsGeneral).limit(1))
+    try:
+        return max(int((general.upload_max_file_size_mb if general else 10) or 10), 1)
+    except (TypeError, ValueError):
+        return 10
+
+
+def get_effective_message_attachment_max_mb(db: Session, message_max_mb: int | None = None) -> int:
+    try:
+        configured_max = max(int(message_max_mb or 25), 1)
+    except (TypeError, ValueError):
+        configured_max = 25
+    return min(configured_max, get_global_upload_max_file_size_mb(db))
 
 
 def seed_messaging_settings(db: Session) -> None:
@@ -164,6 +180,7 @@ def sync_legacy_message_settings(db: Session) -> None:
     seed_messaging_settings(db)
     general = get_singleton(db, MessagingSettings)
     attachments = get_singleton(db, MessageAttachmentSettings)
+    effective_attachment_max_mb = get_effective_message_attachment_max_mb(db, attachments.max_file_size_mb)
     integration = get_singleton(db, MessageRequestIntegrationSettings)
     notifications = get_singleton(db, MessageNotificationSettings)
     retention = get_singleton(db, MessageRetentionPolicy)
@@ -173,6 +190,8 @@ def sync_legacy_message_settings(db: Session) -> None:
     allow_broadcast = bool(general.allow_broadcast_messages and recipient_value.get("allow_broadcast", False))
     allow_department_broadcast = bool(allow_broadcast and recipient_value.get("allow_send_to_department", True))
     value = {
+        "module_name_ar": general.module_name_ar or "المراسلات الداخلية",
+        "module_name_en": general.module_name_en or "Internal Messaging",
         "enabled": bool(general.enable_messaging),
         "enable_attachments": bool(attachments.allow_message_attachments),
         "enable_drafts": True,
@@ -195,8 +214,11 @@ def sync_legacy_message_settings(db: Session) -> None:
         "enable_message_notifications": bool(notifications.enable_message_notifications),
         "notify_on_new_message": bool(notifications.notify_on_new_message),
         "notify_on_reply": bool(notifications.notify_on_reply),
+        "notify_on_read": bool(notifications.notify_on_read),
+        "notify_on_clarification_request": bool(notifications.notify_on_clarification_request),
+        "notify_on_official_message": bool(notifications.notify_on_official_message),
         "auto_refresh_seconds": 20,
-        "max_attachment_mb": int(attachments.max_file_size_mb or 25),
+        "max_attachment_mb": effective_attachment_max_mb,
         "max_attachments_per_message": int(attachments.max_attachments_per_message or 10),
         "max_recipients": min(int(general.max_recipients or 10), int(recipient_value.get("max_recipients") or general.max_recipients or 10)) if recipient_value else int(general.max_recipients or 10),
         "default_message_type": "internal_correspondence",
@@ -226,7 +248,7 @@ def sync_legacy_message_settings(db: Session) -> None:
         "allow_archiving": bool(general.allow_archiving and retention.allow_archiving),
         "enable_linked_requests": bool(integration.allow_link_to_request),
         "enable_attachments": bool(attachments.allow_message_attachments),
-        "max_attachment_mb": int(attachments.max_file_size_mb or 25),
+        "max_attachment_mb": effective_attachment_max_mb,
         "max_attachments_per_message": int(attachments.max_attachments_per_message or 10),
         "max_recipients": int(general.max_recipients or 10),
     }

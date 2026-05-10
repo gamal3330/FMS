@@ -4,7 +4,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    app_name: str = "QIB IT Service Portal"
+    app_name: str = "QIB Service Portal"
     environment: str = "development"
     api_v1_prefix: str = "/api/v1"
     database_url: str = "postgresql+psycopg://qib:qib@postgres:5432/qib_it_portal"

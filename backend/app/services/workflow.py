@@ -6,23 +6,25 @@ from sqlalchemy.orm import Session
 from app.models.enums import ApprovalAction, RequestStatus, RequestType, UserRole
 from app.models.request import ApprovalStep, RequestApprovalStep, ServiceRequest
 from app.models.settings import WorkflowTemplate, WorkflowTemplateStep
-from app.models.user import User, UserDelegation
+from app.models.user import Department, Role, User, UserDelegation
+
+DEPARTMENT_SPECIALIST_STEP = "department_specialist"
 
 WORKFLOW_CHAINS: dict[RequestType, list[UserRole | str]] = {
-    RequestType.EMAIL: [UserRole.DIRECT_MANAGER, UserRole.IT_MANAGER, "implementation"],
-    RequestType.DOMAIN: [UserRole.DIRECT_MANAGER, UserRole.IT_MANAGER, "implementation"],
-    RequestType.VPN: [UserRole.DIRECT_MANAGER, UserRole.INFOSEC, UserRole.IT_MANAGER, "implementation"],
-    RequestType.INTERNET: [UserRole.DIRECT_MANAGER, UserRole.INFOSEC, UserRole.IT_MANAGER, "implementation"],
+    RequestType.EMAIL: [UserRole.DIRECT_MANAGER, "department_manager", DEPARTMENT_SPECIALIST_STEP],
+    RequestType.DOMAIN: [UserRole.DIRECT_MANAGER, "department_manager", DEPARTMENT_SPECIALIST_STEP],
+    RequestType.VPN: [UserRole.DIRECT_MANAGER, UserRole.INFOSEC, "department_manager", DEPARTMENT_SPECIALIST_STEP],
+    RequestType.INTERNET: [UserRole.DIRECT_MANAGER, UserRole.INFOSEC, "department_manager"],
     RequestType.DATA_COPY: [
         UserRole.DIRECT_MANAGER,
         UserRole.INFOSEC,
-        UserRole.IT_MANAGER,
+        "department_manager",
         UserRole.EXECUTIVE,
-        "execution",
+        DEPARTMENT_SPECIALIST_STEP,
     ],
-    RequestType.NETWORK: [UserRole.DIRECT_MANAGER, UserRole.INFOSEC, UserRole.IT_MANAGER, "implementation"],
-    RequestType.COMPUTER_MOVE: [UserRole.DIRECT_MANAGER, UserRole.IT_MANAGER, "implementation"],
-    RequestType.SUPPORT: [UserRole.IT_STAFF, "implementation"],
+    RequestType.NETWORK: [UserRole.DIRECT_MANAGER, UserRole.INFOSEC, "department_manager", DEPARTMENT_SPECIALIST_STEP],
+    RequestType.COMPUTER_MOVE: [UserRole.DIRECT_MANAGER, "department_manager", DEPARTMENT_SPECIALIST_STEP],
+    RequestType.SUPPORT: [DEPARTMENT_SPECIALIST_STEP],
 }
 
 SLA_HOURS = {
@@ -70,19 +72,80 @@ def active_approval_delegators(db: Session, user: User) -> list[User]:
     ).all()
 
 
+def _role_id_matches(db: Session, user: User, role_id: int | None) -> bool:
+    if not role_id:
+        return False
+    if user.role_id == role_id:
+        return True
+    role = db.get(Role, role_id)
+    return bool(role and role.code and str(user.role) == role.code)
+
+
+def _request_department(db: Session, request: ServiceRequest) -> Department | None:
+    if request.department:
+        return request.department
+    if not request.department_id:
+        return None
+    return db.get(Department, request.department_id)
+
+
+def _user_matches_step(db: Session, request: ServiceRequest, user: User, step: ApprovalStep, *, allow_super_admin: bool = True) -> bool:
+    if allow_super_admin and user.role == UserRole.SUPER_ADMIN:
+        return True
+
+    step_type = str(step.role or "")
+    snapshot_step = workflow_snapshot_step(request, step) or {}
+    approver_user_id = snapshot_step.get("approver_user_id")
+    approver_role_id = snapshot_step.get("approver_role_id")
+
+    if approver_user_id:
+        return user.id == int(approver_user_id)
+
+    if step_type == "specific_user":
+        return False
+
+    if step_type == "specific_role":
+        return _role_id_matches(db, user, int(approver_role_id) if approver_role_id else None)
+
+    if step_type == "specific_department_manager":
+        target_department_id = snapshot_step.get("target_department_id")
+        if not target_department_id:
+            return False
+        department = db.get(Department, int(target_department_id))
+        return bool(department and department.manager_id == user.id)
+
+    if step_type == UserRole.DIRECT_MANAGER.value:
+        return bool(request.requester and request.requester.manager_id == user.id)
+
+    if step_type == "department_manager":
+        department = _request_department(db, request)
+        return bool(department and department.manager_id == user.id)
+
+    if step_type == DEPARTMENT_SPECIALIST_STEP:
+        department = _request_department(db, request)
+        return bool(
+            user.is_active
+            and department
+            and user.department_id == department.id
+            and user.id != department.manager_id
+        )
+
+    if step_type in IMPLEMENTATION_STEP_ROLES and user.role in {UserRole.IT_STAFF, UserRole.IT_MANAGER}:
+        return True
+
+    if step_type == str(user.role):
+        return True
+
+    return False
+
+
 def user_can_act(db: Session, request: ServiceRequest, user: User, step: ApprovalStep) -> bool:
-    if user.role == UserRole.SUPER_ADMIN or step.role == user.role or step.role in IMPLEMENTATION_STEP_ROLES and user.role in {
-        UserRole.IT_STAFF,
-        UserRole.IT_MANAGER,
-    }:
+    if _user_matches_step(db, request, user, step):
         return True
 
     for delegator in active_approval_delegators(db, user):
-        if str(step.role) != str(delegator.role):
-            continue
-        if delegator.role == UserRole.DIRECT_MANAGER:
-            return bool(request.requester and request.requester.manager_id == delegator.id)
-        return True
+        if _user_matches_step(db, request, delegator, step, allow_super_admin=False):
+            return True
     return False
 
 
@@ -169,6 +232,23 @@ def return_workflow_to_step(request: ServiceRequest, target_order: int) -> None:
     request.closed_at = None
 
 
+def sync_snapshot_action(request: ServiceRequest, step: ApprovalStep, actor: User, action: ApprovalAction, note: str | None) -> None:
+    snapshots = sorted(request.approval_snapshots or [], key=lambda item: item.sort_order)
+    current_snapshot = next((item for item in snapshots if item.sort_order == step.step_order), None)
+    if current_snapshot:
+        current_snapshot.status = str(action)
+        current_snapshot.action_by = actor.id
+        current_snapshot.action_at = step.acted_at
+        current_snapshot.comments = note
+
+    if action != ApprovalAction.APPROVED:
+        return
+
+    next_snapshot = next((item for item in snapshots if item.sort_order > step.step_order and item.status in {"waiting", "pending"}), None)
+    if next_snapshot:
+        next_snapshot.status = "pending"
+
+
 def reset_workflow_for_resubmission(request: ServiceRequest) -> None:
     for step in request.approvals:
         step.action = ApprovalAction.PENDING
@@ -203,6 +283,7 @@ def advance_workflow(db: Session, request: ServiceRequest, actor: User, action: 
     pending_step.approver_id = actor.id
     pending_step.note = note
     pending_step.acted_at = datetime.now(timezone.utc)
+    sync_snapshot_action(request, pending_step, actor, action, note)
 
     if action == ApprovalAction.RETURNED_FOR_EDIT:
         if return_target_order:

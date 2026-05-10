@@ -57,6 +57,7 @@ from app.schemas.messaging_settings import (
 )
 from app.services.messaging_settings_service import (
     delete_message_type,
+    get_global_upload_max_file_size_mb,
     get_singleton,
     message_type_used,
     messaging_analytics,
@@ -343,6 +344,12 @@ def get_attachments(db: Session = Depends(get_db), _: User = ViewActor):
 
 @router.put("/attachments", response_model=MessageAttachmentSettingsRead)
 def update_attachments(payload: MessageAttachmentSettingsPayload, request: Request, db: Session = Depends(get_db), actor: User = EditActor):
+    global_max_mb = get_global_upload_max_file_size_mb(db)
+    if payload.max_file_size_mb > global_max_mb:
+        raise HTTPException(
+            status_code=422,
+            detail=f"لا يمكن أن يتجاوز حد مرفقات المراسلات الحد الأقصى العام لرفع الملفات ({global_max_mb} MB).",
+        )
     item = update_singleton(db, MessageAttachmentSettings, payload.model_dump())
     commit_with_audit(db, request, actor, "message_attachment_settings_updated", entity_id=str(item.id), metadata=payload.model_dump())
     db.refresh(item)

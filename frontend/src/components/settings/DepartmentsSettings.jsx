@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { Plus, Search, Trash2 } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { Edit3, Plus, Search, Trash2, UserCheck } from "lucide-react";
 import { api, getErrorMessage } from "../../lib/axios";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -8,6 +8,7 @@ const empty = { name_ar: "", name_en: "", code: "", manager_id: "", is_active: t
 
 export default function DepartmentsSettings({ notify }) {
   const [items, setItems] = useState([]);
+  const [users, setUsers] = useState([]);
   const [form, setForm] = useState(empty);
   const [editingId, setEditingId] = useState(null);
   const [search, setSearch] = useState("");
@@ -15,8 +16,12 @@ export default function DepartmentsSettings({ notify }) {
 
   async function load() {
     try {
-      const { data } = await api.get("/departments", { params: { search: search || undefined } });
-      setItems(data);
+      const [{ data: departments }, usersResponse] = await Promise.all([
+        api.get("/departments", { params: { search: search || undefined } }),
+        api.get("/users").catch(() => ({ data: [] }))
+      ]);
+      setItems(departments);
+      setUsers(Array.isArray(usersResponse.data) ? usersResponse.data : []);
     } catch (error) {
       const message = getErrorMessage(error);
       setError(message);
@@ -27,6 +32,14 @@ export default function DepartmentsSettings({ notify }) {
   useEffect(() => {
     load();
   }, []);
+
+  const usersById = useMemo(() => new Map(users.map((user) => [Number(user.id), user])), [users]);
+  const managerCandidates = useMemo(() => {
+    const managerRoles = new Set(["direct_manager", "it_manager", "executive_management", "super_admin"]);
+    return users
+      .filter((user) => user.is_active && !user.is_locked && managerRoles.has(user.role))
+      .sort((first, second) => String(first.full_name_ar || "").localeCompare(String(second.full_name_ar || ""), "ar"));
+  }, [users]);
 
   async function save(event) {
     event.preventDefault();
@@ -91,8 +104,19 @@ export default function DepartmentsSettings({ notify }) {
           <Field label="رمز الإدارة">
             <Input value={form.code ?? ""} onChange={(event) => setForm({ ...form, code: event.target.value })} placeholder="مثال: hr" required />
           </Field>
-          <Field label="رقم المدير">
-            <Input value={form.manager_id ?? ""} onChange={(event) => setForm({ ...form, manager_id: event.target.value })} placeholder="اختياري" />
+          <Field label="مدير الإدارة">
+            <select
+              value={form.manager_id ?? ""}
+              onChange={(event) => setForm({ ...form, manager_id: event.target.value })}
+              className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-800 outline-none transition focus:border-bank-500 focus:ring-2 focus:ring-bank-100"
+            >
+              <option value="">بدون مدير إدارة</option>
+              {managerCandidates.map((user) => (
+                <option key={user.id} value={user.id}>
+                  {user.full_name_ar || user.email} - {roleLabel(user.role)}
+                </option>
+              ))}
+            </select>
           </Field>
           <label className="flex h-10 items-center gap-2 self-end rounded-md border border-slate-200 bg-white px-3 text-sm font-semibold">
             <input type="checkbox" checked={form.is_active} onChange={(event) => setForm({ ...form, is_active: event.target.checked })} />
@@ -112,20 +136,22 @@ export default function DepartmentsSettings({ notify }) {
         <Input value={search} onChange={(event) => setSearch(event.target.value)} onKeyUp={load} placeholder="البحث عن إدارة" className="pr-10" />
       </div>
       {error && <p className="rounded-md bg-red-50 p-3 text-sm text-red-700">{error}</p>}
-      <Table headers={["اسم الإدارة بالعربية", "اسم الإدارة بالإنجليزية", "رمز الإدارة", "رقم المدير", "الحالة", "الإجراء"]}>
+      <Table headers={["اسم الإدارة بالعربية", "اسم الإدارة بالإنجليزية", "رمز الإدارة", "مدير الإدارة", "الحالة", "الإجراء"]}>
         {items.map((item) => (
           <tr key={item.id}>
             <td className="p-3">{item.name_ar}</td>
             <td className="p-3">{item.name_en}</td>
             <td className="p-3">{item.code}</td>
-            <td className="p-3">{item.manager_id ?? "-"}</td>
+            <td className="p-3">
+              <ManagerCell manager={usersById.get(Number(item.manager_id))} managerId={item.manager_id} />
+            </td>
             <td className="p-3">
               <span className={`rounded-md px-3 py-1 text-xs font-bold ${item.is_active ? "bg-bank-50 text-bank-700" : "bg-slate-100 text-slate-500"}`}>
                 {item.is_active ? "نشطة" : "متوقفة"}
               </span>
             </td>
             <td className="flex gap-2 p-3">
-              <button onClick={() => { setEditingId(item.id); setForm({ ...item, manager_id: item.manager_id ?? "" }); }} className="rounded-md border border-slate-200 px-3 py-1 text-xs font-bold text-slate-700 hover:bg-slate-50">تعديل</button>
+              <button onClick={() => { setEditingId(item.id); setForm({ ...item, manager_id: item.manager_id ?? "" }); }} className="inline-flex items-center gap-1 rounded-md border border-slate-200 px-3 py-1 text-xs font-bold text-slate-700 hover:bg-slate-50"><Edit3 className="h-3 w-3" /> تعديل</button>
               <button onClick={() => remove(item.id)} className="rounded-md border border-red-200 px-3 py-1 text-xs text-red-700 hover:bg-red-50"><Trash2 className="h-3 w-3" /></button>
             </td>
           </tr>
@@ -133,6 +159,38 @@ export default function DepartmentsSettings({ notify }) {
       </Table>
     </div>
   );
+}
+
+function ManagerCell({ manager, managerId }) {
+  if (!managerId) {
+    return <span className="rounded-md bg-amber-50 px-3 py-1 text-xs font-bold text-amber-700">لم يحدد</span>;
+  }
+  if (!manager) {
+    return <span className="rounded-md bg-slate-100 px-3 py-1 text-xs font-bold text-slate-600">مستخدم #{managerId}</span>;
+  }
+  return (
+    <div className="flex items-center gap-2">
+      <span className="flex h-8 w-8 items-center justify-center rounded-md bg-bank-50 text-bank-700">
+        <UserCheck className="h-4 w-4" />
+      </span>
+      <div>
+        <p className="font-bold text-slate-900">{manager.full_name_ar || manager.email}</p>
+        <p className="text-xs text-slate-500">{roleLabel(manager.role)}</p>
+      </div>
+    </div>
+  );
+}
+
+function roleLabel(role) {
+  return {
+    employee: "موظف",
+    direct_manager: "مدير مباشر",
+    it_staff: "مختص تنفيذ",
+    it_manager: "مدير إدارة",
+    information_security: "أمن المعلومات (دور قديم)",
+    executive_management: "الإدارة التنفيذية",
+    super_admin: "مدير النظام"
+  }[role] || role || "-";
 }
 
 function Field({ label, children }) {

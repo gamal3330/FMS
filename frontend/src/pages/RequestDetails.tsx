@@ -6,12 +6,14 @@ import {
   Clock3,
   Download,
   FileText,
+  History,
   Mail,
   MessageSquare,
   Paperclip,
   Printer,
   RefreshCw,
   Send,
+  ShieldCheck,
   Sparkles,
   UserCheck,
   XCircle
@@ -49,6 +51,24 @@ interface MessageSettings {
   show_messages_tab_in_request_details: boolean;
 }
 
+interface RequestHistoryRow {
+  event: string;
+  label: string;
+  status?: string | null;
+  actor_name?: string | null;
+  changed_at?: string | null;
+  comment?: string | null;
+}
+
+interface RequestAuditRow {
+  id: number;
+  action: string;
+  actor_name?: string | null;
+  created_at?: string | null;
+  ip_address?: string | null;
+  metadata?: Record<string, unknown>;
+}
+
 const defaultMessageSettings: MessageSettings = {
   enable_linked_requests: true,
   allow_send_message_from_request: true,
@@ -77,13 +97,15 @@ const priorityLabels: Record<string, string> = {
 
 const roleLabels: Record<string, string> = {
   direct_manager: "المدير المباشر",
-  information_security: "أمن المعلومات",
-  it_manager: "مدير تقنية المعلومات",
-  it_staff: "موظف تنفيذ",
+  department_manager: "مدير الإدارة المختصة",
+  department_specialist: "مختص الإدارة المختصة",
+  information_security: "أمن المعلومات (مرحلة قديمة)",
+  it_manager: "مدير إدارة",
+  it_staff: "مختص تنفيذ",
   executive_management: "الإدارة التنفيذية",
-  implementation_engineer: "مهندس التنفيذ",
-  implementation: "التنفيذ",
-  execution: "التنفيذ"
+  implementation_engineer: "مختص تنفيذ",
+  implementation: "مختص تنفيذ",
+  execution: "مختص تنفيذ"
 };
 
 const actionLabels: Record<string, string> = {
@@ -130,6 +152,8 @@ export function RequestDetails() {
   const navigate = useNavigate();
   const [request, setRequest] = useState<ServiceRequest | null>(null);
   const [messages, setMessages] = useState<LinkedMessage[]>([]);
+  const [statusHistory, setStatusHistory] = useState<RequestHistoryRow[]>([]);
+  const [auditLogs, setAuditLogs] = useState<RequestAuditRow[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
   const [aiDraft, setAiDraft] = useState<{ subject: string; body: string } | null>(null);
@@ -145,10 +169,16 @@ export function RequestDetails() {
     try {
       const nextRequest = await apiFetch<ServiceRequest>(`/requests/${requestId}`);
       setRequest(nextRequest);
+      const [historyRows, auditRows] = await Promise.all([
+        apiFetch<RequestHistoryRow[]>(`/requests/${nextRequest.id}/status-history`).catch(() => []),
+        apiFetch<RequestAuditRow[]>(`/requests/${nextRequest.id}/audit-logs`).catch(() => [])
+      ]);
+      setStatusHistory(historyRows);
+      setAuditLogs(auditRows);
       const nextMessageSettings = await apiFetch<MessageSettings>("/messages/settings").catch(() => defaultMessageSettings);
       setMessageSettings(nextMessageSettings);
       if (nextMessageSettings.enable_linked_requests && nextMessageSettings.show_messages_tab_in_request_details) {
-        const linked = await apiFetch<LinkedMessage[]>(`/messages/request/${nextRequest.id}`).catch(() => []);
+        const linked = await apiFetch<LinkedMessage[]>(`/requests/${nextRequest.id}/messages`).catch(() => []);
         setMessages(linked);
       } else {
         setMessages([]);
@@ -156,6 +186,8 @@ export function RequestDetails() {
     } catch {
       setRequest(null);
       setMessages([]);
+      setStatusHistory([]);
+      setAuditLogs([]);
       setError("تعذر تحميل تفاصيل الطلب.");
     } finally {
       setIsLoading(false);
@@ -167,7 +199,7 @@ export function RequestDetails() {
     loadAiStatus();
   }, [requestId]);
 
-  const timeline = useMemo(() => buildTimeline(request, messages), [request, messages]);
+  const timeline = useMemo(() => buildTimeline(request, messages, statusHistory), [request, messages, statusHistory]);
   const canShowRequestMessages = Boolean(messageSettings.enable_linked_requests && messageSettings.show_messages_tab_in_request_details);
   const canSendFromRequest = Boolean(canShowRequestMessages && messageSettings.allow_send_message_from_request);
   const canUseAiDrafting = Boolean(canShowRequestMessages && aiStatus.is_enabled && aiStatus.allow_message_drafting && aiStatus.show_in_request_messages_tab !== false);
@@ -364,6 +396,53 @@ export function RequestDetails() {
             </div>
           </Card>
           )}
+
+          <Card className="p-5">
+            <SectionTitle icon={History} title="سجل الحالة" />
+            <div className="mt-4 space-y-3">
+              {statusHistory.map((row, index) => (
+                <div key={`${row.event}-${index}`} className="rounded-md border border-slate-200 bg-white p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="font-black text-slate-950">{row.label}</p>
+                    {row.status && <span className={`rounded-full px-3 py-1 text-xs font-bold ${statusTone(row.status)}`}>{actionLabels[row.status] || statusLabels[row.status] || row.status}</span>}
+                  </div>
+                  <p className="mt-2 text-sm text-slate-600">
+                    {row.actor_name ? `بواسطة: ${row.actor_name}` : "بانتظار الإجراء"}
+                    {row.changed_at ? ` - ${formatDate(row.changed_at)}` : ""}
+                  </p>
+                  {row.comment && <p className="mt-2 rounded-md bg-slate-50 p-3 text-sm leading-6 text-slate-600">{row.comment}</p>}
+                </div>
+              ))}
+              {statusHistory.length === 0 && <Empty text="لا يوجد سجل حالة لهذا الطلب." />}
+            </div>
+          </Card>
+
+          <Card className="p-5">
+            <SectionTitle icon={ShieldCheck} title="سجل التدقيق" />
+            <div className="mt-4 overflow-hidden rounded-md border border-slate-200">
+              <table className="w-full text-sm">
+                <thead className="bg-slate-50 text-slate-500">
+                  <tr>
+                    <th className="p-3 text-right">الإجراء</th>
+                    <th className="p-3 text-right">المستخدم</th>
+                    <th className="p-3 text-right">التاريخ</th>
+                    <th className="p-3 text-right">IP</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {auditLogs.map((log) => (
+                    <tr key={log.id}>
+                      <td className="p-3 font-bold text-slate-900">{auditActionLabel(log.action)}</td>
+                      <td className="p-3 text-slate-600">{log.actor_name || "-"}</td>
+                      <td className="p-3 text-slate-600">{formatDate(log.created_at)}</td>
+                      <td className="p-3 text-slate-600">{log.ip_address || "-"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {auditLogs.length === 0 && <Empty text="لا يوجد سجل تدقيق لهذا الطلب." />}
+            </div>
+          </Card>
         </div>
 
         <aside className="space-y-5">
@@ -412,21 +491,31 @@ export function RequestDetails() {
   );
 }
 
-function buildTimeline(request: ServiceRequest | null, messages: LinkedMessage[]) {
+function buildTimeline(request: ServiceRequest | null, messages: LinkedMessage[], statusHistory: RequestHistoryRow[]) {
   if (!request) return [];
+  const historyItems = statusHistory.length > 0
+    ? statusHistory.map((row) => ({
+        title: row.label,
+        description: `${row.actor_name ? `بواسطة ${row.actor_name}` : "بانتظار الإجراء"}${row.comment ? ` - ${row.comment}` : ""}`,
+        date: row.changed_at || request.updated_at,
+        tone: row.status === "approved" ? "success" : row.status === "rejected" || row.status === "returned_for_edit" ? "danger" : "info"
+      }))
+    : [
+        {
+          title: "تم إنشاء الطلب",
+          description: `بواسطة ${request.requester?.full_name_ar || "-"}`,
+          date: request.created_at,
+          tone: "info"
+        },
+        ...[...(request.approvals ?? [])].sort((a, b) => a.step_order - b.step_order).map((step) => ({
+          title: roleLabels[step.role] ?? step.role,
+          description: `${actionLabels[step.action] ?? step.action}${step.approver ? ` بواسطة ${step.approver.full_name_ar}` : ""}${step.note ? ` - ${step.note}` : ""}`,
+          date: step.acted_at || request.updated_at,
+          tone: step.action === "approved" ? "success" : step.action === "rejected" || step.action === "returned_for_edit" ? "danger" : "info"
+        }))
+      ];
   const items = [
-    {
-      title: "تم إنشاء الطلب",
-      description: `بواسطة ${request.requester?.full_name_ar || "-"}`,
-      date: request.created_at,
-      tone: "info"
-    },
-    ...[...(request.approvals ?? [])].sort((a, b) => a.step_order - b.step_order).map((step) => ({
-      title: roleLabels[step.role] ?? step.role,
-      description: `${actionLabels[step.action] ?? step.action}${step.approver ? ` بواسطة ${step.approver.full_name_ar}` : ""}${step.note ? ` - ${step.note}` : ""}`,
-      date: step.acted_at || request.updated_at,
-      tone: step.action === "approved" ? "success" : step.action === "rejected" || step.action === "returned_for_edit" ? "danger" : "info"
-    })),
+    ...historyItems,
     ...messages.slice(0, 6).map((message) => ({
       title: "مراسلة مرتبطة",
       description: `${message.subject} - من ${message.sender_name}`,
@@ -549,6 +638,23 @@ function approvalTone(action: string) {
   if (action === "approved") return "bg-emerald-50 text-emerald-700";
   if (action === "rejected" || action === "returned_for_edit") return "bg-red-50 text-red-700";
   return "bg-slate-100 text-slate-700";
+}
+
+function auditActionLabel(action: string) {
+  const labels: Record<string, string> = {
+    request_created: "إنشاء الطلب",
+    dynamic_request_created: "إنشاء طلب ديناميكي",
+    request_edited: "تعديل الطلب",
+    request_resubmitted: "إعادة إرسال الطلب",
+    request_approved: "موافقة على الطلب",
+    request_rejected: "رفض الطلب",
+    request_returned_for_edit: "إرجاع الطلب للتعديل",
+    request_printed_pdf: "طباعة PDF",
+    attachment_uploaded: "رفع مرفق",
+    attachment_downloaded: "تحميل مرفق",
+    comment_added: "إضافة تعليق"
+  };
+  return labels[action] || action;
 }
 
 function itemTone(tone: string) {
