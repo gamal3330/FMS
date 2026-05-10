@@ -1,7 +1,7 @@
 from app.models.audit import AuditLog
 from app.models.ai import AIFeaturePermission, AIFeedback, AIHealthCheck, AISettings, AIPromptTemplate, AIUsageLog
 from app.models.database import DatabaseBackup, DatabaseBackupSettings, DatabaseJob, DatabaseMaintenanceLog, DatabaseRestoreJob
-from app.models.health import SystemAlert, SystemHealthCheck
+from app.models.health import SystemAlert, SystemHealthAlert, SystemHealthCheck, SystemHealthMetric, SystemHealthSettings
 from app.models.message import InternalMessage, InternalMessageAttachment, InternalMessageRecipient
 from app.models.messaging_settings import (
     MessageAISettings,
@@ -106,7 +106,10 @@ __all__ = [
     "SpecializedSection",
     "ServiceRequest",
     "SystemAlert",
+    "SystemHealthAlert",
     "SystemHealthCheck",
+    "SystemHealthMetric",
+    "SystemHealthSettings",
     "SystemVersion",
     "SlaConfig",
     "SlaRule",

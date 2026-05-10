@@ -233,6 +233,12 @@ def ensure_runtime_columns(db: Session) -> None:
             db.execute(text("ALTER TABLE security_policies ADD COLUMN temporary_password VARCHAR(128) DEFAULT 'Change@12345'"))
             db.execute(text("UPDATE security_policies SET temporary_password = 'Change@12345' WHERE temporary_password IS NULL OR temporary_password = ''"))
             db.commit()
+    if "system_health_checks" in table_names:
+        health_check_columns = {column["name"] for column in inspector.get_columns("system_health_checks")}
+        if "category" not in health_check_columns:
+            db.execute(text("ALTER TABLE system_health_checks ADD COLUMN category VARCHAR(80)"))
+            db.execute(text("UPDATE system_health_checks SET category = COALESCE(category, check_name)"))
+            db.commit()
     if "users" in table_names:
         user_columns = {column["name"] for column in inspector.get_columns("users")}
         user_column_defs = {
