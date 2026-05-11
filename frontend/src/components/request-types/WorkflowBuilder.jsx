@@ -117,9 +117,15 @@ export default function WorkflowBuilder({ requestTypeId, notify, onWorkflowChang
 
   async function remove(id) {
     if (!confirm("هل تريد حذف خطوة الموافقة؟")) return;
-    await api.delete(`/request-types/workflow-steps/${id}`);
-    notify("تم حذف الخطوة");
-    await load();
+    try {
+      await api.delete(`/request-types/workflow-steps/${id}`);
+      notify("تم حذف الخطوة");
+      await load();
+    } catch (error) {
+      const message = getErrorMessage(error);
+      setError(message);
+      notify(message, "error");
+    }
   }
 
   async function reorder(next) {

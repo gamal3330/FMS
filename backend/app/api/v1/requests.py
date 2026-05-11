@@ -14,13 +14,13 @@ from app.api.deps import get_current_user
 from app.core.config import get_settings
 from app.db.session import get_db
 from app.models.audit import AuditLog
-from app.models.enums import ApprovalAction, RequestStatus, RequestType, UserRole
+from app.models.enums import ApprovalAction, Priority, RequestStatus, RequestType, UserRole
 from app.models.message import InternalMessage, InternalMessageRecipient
 from app.models.request import ApprovalStep, Attachment, RequestApprovalStep, RequestComment, ServiceRequest
-from app.models.settings import PortalSetting, RequestTypeField, RequestTypeSetting, SettingsGeneral
+from app.models.settings import PortalSetting, RequestTypeField, RequestTypeSetting, SettingsGeneral, SpecializedSection
 from app.models.user import Department, Role, ScreenPermission, User, UserDelegation
 from app.schemas.message import InternalMessageRead
-from app.schemas.request import ApprovalDecision, AttachmentRead, CommentCreate, ServiceRequestCreate, ServiceRequestRead, ServiceRequestUpdate
+from app.schemas.request import ApprovalDecision, ApprovalStepRead, AttachmentRead, CommentCreate, ServiceRequestCreate, ServiceRequestRead, ServiceRequestUpdate
 from app.services.audit import write_audit
 from app.services.pdf_fonts import register_arabic_pdf_font, rtl_text
 from app.services.pdf_template import (
@@ -60,6 +60,7 @@ from app.api.v1.request_type_management import (
 from app.api.v1.messages import can_access_message, load_message_settings, message_read
 
 router = APIRouter(prefix="/requests", tags=["Service Requests"])
+approvals_router = APIRouter(prefix="/approvals", tags=["Approvals"])
 settings = get_settings()
 
 STATUS_LABELS = {
@@ -976,6 +977,229 @@ def list_requests(
     return enrich_request_list(db, db.scalars(stmt).all(), current_user)
 
 
+def pending_approval_step(service_request: ServiceRequest) -> ApprovalStep | None:
+    return next(
+        (step for step in sorted(service_request.approvals or [], key=lambda item: item.step_order) if step.action == ApprovalAction.PENDING),
+        None,
+    )
+
+
+def approval_request_is_active(service_request: ServiceRequest) -> bool:
+    return str(service_request.status) in {"pending_approval", "in_implementation", "approved"}
+
+
+def approval_step_is_execution(step: ApprovalStep | None) -> bool:
+    return bool(step and str(step.role) in IMPLEMENTATION_STEP_ROLES)
+
+
+def approval_sla_status(service_request: ServiceRequest, now: datetime | None = None) -> str:
+    if not service_request.sla_due_at:
+        return "none"
+    current_time = now or datetime.now(timezone.utc)
+    if current_time.tzinfo is None:
+        current_time = current_time.replace(tzinfo=timezone.utc)
+    due_at = service_request.sla_due_at
+    if due_at.tzinfo is None:
+        due_at = due_at.replace(tzinfo=timezone.utc)
+    if str(service_request.status) in {"closed", "completed", "rejected", "cancelled"}:
+        closed_at = service_request.closed_at
+        if closed_at and closed_at.tzinfo is None:
+            closed_at = closed_at.replace(tzinfo=timezone.utc)
+        return "met" if not closed_at or closed_at <= due_at else "breached"
+    return "overdue" if due_at < current_time else "within"
+
+
+def user_acted_on_request(service_request: ServiceRequest, current_user: User) -> bool:
+    return any(step.approver_id == current_user.id and step.action != ApprovalAction.PENDING for step in service_request.approvals or [])
+
+
+def approval_relevant_to_user(db: Session, service_request: ServiceRequest, current_user: User) -> bool:
+    if can_view_all_requests(db, current_user):
+        return True
+    if service_request.requester_id == current_user.id:
+        return True
+    pending_step = pending_approval_step(service_request)
+    if pending_step and workflow_user_can_act(db, service_request, current_user, pending_step):
+        return True
+    if user_acted_on_request(service_request, current_user):
+        return True
+    if service_request.status == RequestStatus.RETURNED_FOR_EDIT and service_request.requester_id == current_user.id:
+        return True
+    return False
+
+
+def approval_tab_matches(db: Session, service_request: ServiceRequest, current_user: User, tab: str) -> bool:
+    if tab == "all":
+        return True
+    pending_step = pending_approval_step(service_request)
+    can_act = bool(pending_step and workflow_user_can_act(db, service_request, current_user, pending_step))
+    is_execution = approval_step_is_execution(pending_step)
+    now = datetime.now(timezone.utc)
+    if tab == "tracking":
+        return service_request.requester_id == current_user.id
+    if tab == "execution":
+        return can_act and is_execution
+    if tab == "returned":
+        return service_request.status == RequestStatus.RETURNED_FOR_EDIT
+    if tab == "overdue":
+        return approval_sla_status(service_request, now) == "overdue"
+    if tab == "completed":
+        return str(service_request.status) in {"closed", "completed", "rejected", "cancelled"} or user_acted_on_request(service_request, current_user)
+    if tab == "history":
+        return user_acted_on_request(service_request, current_user) or can_view_all_requests(db, current_user)
+    return can_act and not is_execution
+
+
+def approval_filtered_items(
+    db: Session,
+    current_user: User,
+    *,
+    tab: str = "mine",
+    request_number: str | None = None,
+    search: str | None = None,
+    request_type_id: int | None = None,
+    status_filter: RequestStatus | None = None,
+    priority: Priority | None = None,
+    department_id: int | None = None,
+    specialized_section_id: int | None = None,
+    current_step_type: str | None = None,
+    requester_id: int | None = None,
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+    sla_status: str | None = None,
+) -> list[ServiceRequest]:
+    stmt = request_query().order_by(ServiceRequest.created_at.desc())
+    stmt = scoped_requests_stmt(stmt, current_user, db)
+    if request_number:
+        stmt = stmt.where(ServiceRequest.request_number.ilike(f"%{request_number.strip()}%"))
+    if request_type_id:
+        stmt = stmt.where(ServiceRequest.request_type_id == request_type_id)
+    if status_filter:
+        stmt = stmt.where(ServiceRequest.status == status_filter)
+    if priority:
+        stmt = stmt.where(ServiceRequest.priority == priority)
+    if department_id:
+        stmt = stmt.where(ServiceRequest.department_id == department_id)
+    if requester_id:
+        stmt = stmt.where(ServiceRequest.requester_id == requester_id)
+    if date_from:
+        stmt = stmt.where(ServiceRequest.created_at >= date_from)
+    if date_to:
+        stmt = stmt.where(ServiceRequest.created_at <= date_to)
+    if specialized_section_id:
+        section = db.get(SpecializedSection, specialized_section_id)
+        if section:
+            request_section = func.coalesce(
+                ServiceRequest.form_data["assigned_section"].as_string(),
+                ServiceRequest.form_data["administrative_section"].as_string(),
+            )
+            stmt = stmt.where(request_section == section.code)
+
+    items = enrich_request_list(db, db.scalars(stmt).all(), current_user)
+    relevant = [item for item in items if approval_relevant_to_user(db, item, current_user)]
+    if search:
+        term = search.strip().lower()
+        relevant = [
+            item for item in relevant
+            if any(
+                term in str(value or "").lower()
+                for value in (
+                    item.request_number,
+                    item.title,
+                    item.requester.full_name_ar if item.requester else "",
+                    item.requester.full_name_en if item.requester else "",
+                    item.requester.email if item.requester else "",
+                    item.department.name_ar if item.department else "",
+                    (item.form_data or {}).get("assigned_section_label") or (item.form_data or {}).get("administrative_section_label") or "",
+                )
+            )
+        ]
+    if current_step_type:
+        relevant = [item for item in relevant if pending_approval_step(item) and str(pending_approval_step(item).role) == current_step_type]
+    if sla_status:
+        relevant = [item for item in relevant if approval_sla_status(item) == sla_status]
+    return [item for item in relevant if approval_tab_matches(db, item, current_user, tab)]
+
+
+@approvals_router.get("/summary")
+def approvals_summary(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    items = approval_filtered_items(db, current_user, tab="all")
+    today = datetime.now(timezone.utc).date()
+    def acted_today(service_request: ServiceRequest) -> bool:
+        for step in service_request.approvals or []:
+            if step.approver_id != current_user.id or not step.acted_at:
+                continue
+            acted_at = step.acted_at if step.acted_at.tzinfo else step.acted_at.replace(tzinfo=timezone.utc)
+            if acted_at.date() == today:
+                return True
+        return False
+
+    return {
+        "waiting_my_approval": sum(1 for item in items if approval_tab_matches(db, item, current_user, "mine")),
+        "tracking": sum(1 for item in items if approval_tab_matches(db, item, current_user, "tracking")),
+        "waiting_execution": sum(1 for item in items if approval_tab_matches(db, item, current_user, "execution")),
+        "returned_for_edit": sum(1 for item in items if approval_tab_matches(db, item, current_user, "returned")),
+        "overdue": sum(1 for item in items if approval_tab_matches(db, item, current_user, "overdue")),
+        "processed_today": sum(1 for item in items if acted_today(item)),
+    }
+
+
+@approvals_router.get("", response_model=list[ServiceRequestRead])
+def list_approvals(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    tab: str = Query(default="mine"),
+    request_number: str | None = Query(default=None),
+    search: str | None = Query(default=None),
+    request_type_id: int | None = Query(default=None),
+    status_filter: RequestStatus | None = Query(default=None, alias="status"),
+    priority: Priority | None = Query(default=None),
+    department_id: int | None = Query(default=None),
+    specialized_section_id: int | None = Query(default=None),
+    current_step_type: str | None = Query(default=None),
+    requester_id: int | None = Query(default=None),
+    date_from: datetime | None = Query(default=None),
+    date_to: datetime | None = Query(default=None),
+    sla_status: str | None = Query(default=None),
+    page: int | None = Query(default=None, ge=1),
+    per_page: int | None = Query(default=None, ge=1, le=100),
+):
+    items = approval_filtered_items(
+        db,
+        current_user,
+        tab=tab,
+        request_number=request_number,
+        search=search,
+        request_type_id=request_type_id,
+        status_filter=status_filter,
+        priority=priority,
+        department_id=department_id,
+        specialized_section_id=specialized_section_id,
+        current_step_type=current_step_type,
+        requester_id=requester_id,
+        date_from=date_from,
+        date_to=date_to,
+        sla_status=sla_status,
+    )
+    if page and per_page:
+        start = (page - 1) * per_page
+        return items[start : start + per_page]
+    return items
+
+
+@approvals_router.get("/{request_id}", response_model=ServiceRequestRead)
+def get_approval_request(request_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    service_request = db.scalar(request_query().where(ServiceRequest.id == request_id))
+    if not service_request:
+        raise HTTPException(status_code=404, detail="Request not found")
+    ensure_request_access(service_request, current_user, db)
+    if not approval_relevant_to_user(db, service_request, current_user):
+        raise HTTPException(status_code=403, detail="لا تملك صلاحية عرض هذا الطلب في شاشة الموافقات")
+    write_audit(db, "approval_viewed", "service_request", actor=current_user, entity_id=str(service_request.id))
+    db.commit()
+    return enrich_approval_steps(db, service_request, current_user)
+
+
 @router.post("", response_model=ServiceRequestRead, status_code=status.HTTP_201_CREATED)
 def create_request(payload: ServiceRequestCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     if current_user.role == UserRole.EMPLOYEE and not current_user.manager_id:
@@ -1108,6 +1332,26 @@ def get_request_audit_logs(request_id: int, db: Session = Depends(get_db), curre
         }
         for log in logs
     ]
+
+
+@router.get("/{request_id}/approval-history", response_model=list[ApprovalStepRead])
+def get_request_approval_history(request_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    service_request = db.scalar(request_query().where(ServiceRequest.id == request_id))
+    if not service_request:
+        raise HTTPException(status_code=404, detail="Request not found")
+    ensure_request_access(service_request, current_user, db)
+    enriched = enrich_approval_steps(db, service_request, current_user)
+    return sorted(enriched.approvals or [], key=lambda step: step.step_order)
+
+
+@router.get("/{request_id}/workflow-snapshot", response_model=list[ApprovalStepRead])
+def get_request_workflow_snapshot(request_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    service_request = db.scalar(request_query().where(ServiceRequest.id == request_id))
+    if not service_request:
+        raise HTTPException(status_code=404, detail="Request not found")
+    ensure_request_access(service_request, current_user, db)
+    enriched = enrich_approval_steps(db, service_request, current_user)
+    return sorted(enriched.approvals or [], key=lambda step: step.step_order)
 
 
 @router.get("/{request_id}/print.pdf")

@@ -1,30 +1,29 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { Navigate, Route, Routes, useNavigate } from "react-router-dom";
 import { Layout } from "./components/Layout";
-import { Approvals } from "./pages/Approvals";
-import { Dashboard } from "./pages/Dashboard";
 import { Login } from "./pages/Login";
-import MessagesPage from "./pages/MessagesPage";
-import DocumentCategoryPage from "./pages/documents/DocumentCategoryPage";
-import DocumentDetailsPage from "./pages/documents/DocumentDetailsPage";
-import DocumentsHomePage from "./pages/documents/DocumentsHomePage";
-import { ReportsPage } from "./pages/ReportsPage";
-import { RequestDetails } from "./pages/RequestDetails";
-import { Requests } from "./pages/Requests";
-import SettingsPage from "./pages/SettingsPage.jsx";
-import AISettingsPage from "./pages/settings/AISettingsPage.jsx";
-import DatabaseSettingsPage from "./pages/settings/DatabaseSettingsPage.jsx";
-import DepartmentsPage from "./pages/settings/DepartmentsPage.jsx";
-import DocumentSettingsPage from "./pages/settings/DocumentSettingsPage";
-import HealthMonitoringPage from "./pages/settings/HealthMonitoringPage.jsx";
-import LocalUpdatePage from "./pages/settings/LocalUpdatePage.jsx";
-import MessagingSettingsPage from "./pages/settings/MessagingSettingsPage.jsx";
-import RequestTypesPage from "./pages/settings/RequestTypesPage.jsx";
-import SpecializedSectionsPage from "./pages/settings/SpecializedSectionsPage.jsx";
-import UpdateManagementPage from "./pages/settings/UpdateManagementPage.jsx";
-import UsersPage from "./pages/settings/UsersPage.jsx";
 import { apiFetch, CurrentUser } from "./lib/api";
+
+const Dashboard = lazy(() => import("./pages/Dashboard").then((module) => ({ default: module.Dashboard })));
+const Requests = lazy(() => import("./pages/Requests").then((module) => ({ default: module.Requests })));
+const RequestDetails = lazy(() => import("./pages/RequestDetails").then((module) => ({ default: module.RequestDetails })));
+const Approvals = lazy(() => import("./pages/Approvals").then((module) => ({ default: module.Approvals })));
+const ReportsPage = lazy(() => import("./pages/ReportsPage").then((module) => ({ default: module.ReportsPage })));
+const MessagesPage = lazy(() => import("./pages/MessagesPage"));
+const DocumentsHomePage = lazy(() => import("./pages/documents/DocumentsHomePage"));
+const DocumentCategoryPage = lazy(() => import("./pages/documents/DocumentCategoryPage"));
+const DocumentDetailsPage = lazy(() => import("./pages/documents/DocumentDetailsPage"));
+const SettingsPage = lazy(() => import("./pages/SettingsPage.jsx"));
+const AISettingsPage = lazy(() => import("./pages/settings/AISettingsPage.jsx"));
+const DatabaseSettingsPage = lazy(() => import("./pages/settings/DatabaseSettingsPage.jsx"));
+const DepartmentsPage = lazy(() => import("./pages/settings/DepartmentsPage.jsx"));
+const DocumentSettingsPage = lazy(() => import("./pages/settings/DocumentSettingsPage"));
+const HealthMonitoringPage = lazy(() => import("./pages/settings/HealthMonitoringPage.jsx"));
+const MessagingSettingsPage = lazy(() => import("./pages/settings/MessagingSettingsPage.jsx"));
+const RequestTypesPage = lazy(() => import("./pages/settings/RequestTypesPage.jsx"));
+const SpecializedSectionsPage = lazy(() => import("./pages/settings/SpecializedSectionsPage.jsx"));
+const UsersPage = lazy(() => import("./pages/settings/UsersPage.jsx"));
 
 const SCREEN_ROUTES: Record<string, string> = {
   dashboard: "/dashboard",
@@ -126,7 +125,6 @@ function ProtectedApp() {
       "messaging_settings",
       "ai_settings",
       "database_settings",
-      "update_management",
       "document_settings",
       "health_monitoring"
     ].some(canAccessScreen);
@@ -149,82 +147,76 @@ function ProtectedApp() {
           .catch(() => setScreenPermissions(null));
       }}
     >
-      <Routes>
-        <Route path="/dashboard" element={screenElement("dashboard", <Dashboard />)} />
-        <Route path="/requests" element={screenElement("requests", <Requests />)} />
-        <Route path="/requests/new" element={screenElement("requests", <Requests />)} />
-        <Route path="/requests/:requestId" element={screenElement("requests", <RequestDetails />)} />
-        <Route path="/approvals" element={screenElement("approvals", <Approvals />)} />
-        <Route path="/messages/*" element={screenElement("messages", <MessagesPage />)} />
-        <Route path="/documents" element={screenElement("documents", <DocumentsHomePage />)} />
-        <Route path="/documents/categories/:categoryCode" element={screenElement("documents", <DocumentCategoryPage />)} />
-        <Route path="/documents/:documentId" element={screenElement("documents", <DocumentDetailsPage />)} />
-        <Route
-          path="/reports"
-          element={canAccessScreen("reports") ? <ReportsPage /> : <Navigate to={defaultPath()} replace />}
-        />
-        <Route
-          path="/settings"
-          element={canAccessScreen("settings") ? <SettingsPage /> : <Navigate to={defaultPath()} replace />}
-        />
-        <Route
-          path="/settings/ai"
-          element={canAccessScreen("ai_settings") ? <AISettingsPage /> : <Navigate to={defaultPath()} replace />}
-        />
-        <Route
-          path="/settings/database"
-          element={canAccessScreen("database_settings") ? <DatabaseSettingsPage /> : <Navigate to={defaultPath()} replace />}
-        />
-        <Route
-          path="/settings/documents"
-          element={canAccessScreen("document_settings") ? <DocumentSettingsPage /> : <Navigate to={defaultPath()} replace />}
-        />
-        <Route
-          path="/settings/messaging"
-          element={canAccessScreen("messaging_settings") ? <MessagingSettingsPage /> : <Navigate to={defaultPath()} replace />}
-        />
-        <Route
-          path="/settings/updates"
-          element={canAccessScreen("update_management") ? <UpdateManagementPage /> : <Navigate to={defaultPath()} replace />}
-        />
-        <Route
-          path="/settings/updates/local"
-          element={canAccessScreen("update_management") ? <LocalUpdatePage /> : <Navigate to={defaultPath()} replace />}
-        />
-        <Route
-          path="/request-types"
-          element={canAccessScreen("request_types") ? <RequestTypesPage /> : <Navigate to={defaultPath()} replace />}
-        />
-        <Route
-          path="/settings/request-management"
-          element={canAccessScreen("request_types") ? <RequestTypesPage /> : <Navigate to={defaultPath()} replace />}
-        />
-        <Route
-          path="/users"
-          element={canAccessScreen("users") ? <UsersPage /> : <Navigate to={defaultPath()} replace />}
-        />
-        <Route
-          path="/settings/users-permissions"
-          element={canAccessScreen("users") ? <UsersPage /> : <Navigate to={defaultPath()} replace />}
-        />
-        <Route
-          path="/departments"
-          element={canAccessScreen("departments") ? <DepartmentsPage /> : <Navigate to={defaultPath()} replace />}
-        />
-        <Route
-          path="/specialized-sections"
-          element={canAccessScreen("specialized_sections") ? <SpecializedSectionsPage /> : <Navigate to={defaultPath()} replace />}
-        />
-        <Route
-          path="/settings/health-monitoring"
-          element={canAccessScreen("health_monitoring") ? <HealthMonitoringPage /> : <Navigate to={defaultPath()} replace />}
-        />
-        <Route path="/settings/request-types" element={<Navigate to="/settings/request-management" replace />} />
-        <Route path="/settings/users" element={<Navigate to="/settings/users-permissions" replace />} />
-        <Route path="/settings/departments" element={<Navigate to="/departments" replace />} />
-        <Route path="/settings/specialized-sections" element={<Navigate to="/specialized-sections" replace />} />
-        <Route path="*" element={<Navigate to={defaultPath()} replace />} />
-      </Routes>
+      <Suspense fallback={<RouteLoading />}>
+        <Routes>
+          <Route path="/dashboard" element={screenElement("dashboard", <Dashboard />)} />
+          <Route path="/requests" element={screenElement("requests", <Requests />)} />
+          <Route path="/requests/new" element={screenElement("requests", <Requests />)} />
+          <Route path="/requests/:requestId" element={screenElement("requests", <RequestDetails />)} />
+          <Route path="/approvals" element={screenElement("approvals", <Approvals />)} />
+          <Route path="/messages/*" element={screenElement("messages", <MessagesPage />)} />
+          <Route path="/documents" element={screenElement("documents", <DocumentsHomePage />)} />
+          <Route path="/documents/categories/:categoryCode" element={screenElement("documents", <DocumentCategoryPage />)} />
+          <Route path="/documents/:documentId" element={screenElement("documents", <DocumentDetailsPage />)} />
+          <Route
+            path="/reports"
+            element={canAccessScreen("reports") ? <ReportsPage /> : <Navigate to={defaultPath()} replace />}
+          />
+          <Route
+            path="/settings"
+            element={canAccessScreen("settings") ? <SettingsPage /> : <Navigate to={defaultPath()} replace />}
+          />
+          <Route
+            path="/settings/ai"
+            element={canAccessScreen("ai_settings") ? <AISettingsPage /> : <Navigate to={defaultPath()} replace />}
+          />
+          <Route
+            path="/settings/database"
+            element={canAccessScreen("database_settings") ? <DatabaseSettingsPage /> : <Navigate to={defaultPath()} replace />}
+          />
+          <Route
+            path="/settings/documents"
+            element={canAccessScreen("document_settings") ? <DocumentSettingsPage /> : <Navigate to={defaultPath()} replace />}
+          />
+          <Route
+            path="/settings/messaging"
+            element={canAccessScreen("messaging_settings") ? <MessagingSettingsPage /> : <Navigate to={defaultPath()} replace />}
+          />
+          <Route
+            path="/request-types"
+            element={canAccessScreen("request_types") ? <RequestTypesPage /> : <Navigate to={defaultPath()} replace />}
+          />
+          <Route
+            path="/settings/request-management"
+            element={canAccessScreen("request_types") ? <RequestTypesPage /> : <Navigate to={defaultPath()} replace />}
+          />
+          <Route
+            path="/users"
+            element={canAccessScreen("users") ? <UsersPage /> : <Navigate to={defaultPath()} replace />}
+          />
+          <Route
+            path="/settings/users-permissions"
+            element={canAccessScreen("users") ? <UsersPage /> : <Navigate to={defaultPath()} replace />}
+          />
+          <Route
+            path="/departments"
+            element={canAccessScreen("departments") ? <DepartmentsPage /> : <Navigate to={defaultPath()} replace />}
+          />
+          <Route
+            path="/specialized-sections"
+            element={canAccessScreen("specialized_sections") ? <SpecializedSectionsPage /> : <Navigate to={defaultPath()} replace />}
+          />
+          <Route
+            path="/settings/health-monitoring"
+            element={canAccessScreen("health_monitoring") ? <HealthMonitoringPage /> : <Navigate to={defaultPath()} replace />}
+          />
+          <Route path="/settings/request-types" element={<Navigate to="/settings/request-management" replace />} />
+          <Route path="/settings/users" element={<Navigate to="/settings/users-permissions" replace />} />
+          <Route path="/settings/departments" element={<Navigate to="/departments" replace />} />
+          <Route path="/settings/specialized-sections" element={<Navigate to="/specialized-sections" replace />} />
+          <Route path="*" element={<Navigate to={defaultPath()} replace />} />
+        </Routes>
+      </Suspense>
     </Layout>
   );
 }
@@ -236,6 +228,14 @@ function normalizeScreens(screens: string[], availableScreens?: { key: string; l
   const backendKnowsDocuments = availableScreens?.some((screen) => screen.key === "documents");
   if (!backendKnowsDocuments && !next.includes("documents")) next.push("documents");
   return next;
+}
+
+function RouteLoading() {
+  return (
+    <div className="rounded-lg border border-slate-200 bg-white p-5 text-sm font-semibold text-slate-600 shadow-sm" dir="rtl">
+      جاري تحميل الشاشة...
+    </div>
+  );
 }
 
 export default function App() {

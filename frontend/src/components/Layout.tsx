@@ -1,4 +1,4 @@
-import { Activity, BarChart3, Bell, BellRing, BookOpen, Building2, Database, FileText, KeyRound, LayoutDashboard, LogOut, Mail, Moon, Network, PackageCheck, PanelRightClose, PanelRightOpen, ScrollText, Settings, ShieldCheck, Sparkles, Sun, UploadCloud, UserCircle, Users, X } from "lucide-react";
+import { Activity, BarChart3, Bell, BellRing, BookOpen, Building2, Database, FileText, KeyRound, LayoutDashboard, LogOut, Mail, Moon, Network, PanelRightClose, PanelRightOpen, ScrollText, Settings, ShieldCheck, Sparkles, Sun, UserCircle, Users, X } from "lucide-react";
 import { ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { NavLink } from "react-router-dom";
 import { API_BASE, apiFetch, CurrentUser, ServiceRequest } from "../lib/api";
@@ -82,8 +82,6 @@ export function Layout({
     { label: "إعدادات الوثائق", href: "/settings/documents", icon: BookOpen, screenKey: "document_settings" },
     { label: "الذكاء الاصطناعي", href: "/settings/ai", icon: Sparkles, screenKey: "ai_settings" },
     { label: "قاعدة البيانات", href: "/settings/database", icon: Database, screenKey: "database_settings" },
-    { label: "إدارة التحديثات", href: "/settings/updates", icon: PackageCheck, screenKey: "update_management" },
-    { label: "التحديث المحلي", href: "/settings/updates/local", icon: UploadCloud, screenKey: "update_management" },
     { label: "الإعدادات", href: "/settings", icon: Settings, screenKey: "settings" }
   ];
   const nav = [
@@ -443,7 +441,7 @@ export function Layout({
           <div className={`mb-6 flex shrink-0 items-start gap-3 ${sidebarCollapsed ? "justify-center" : "justify-between"}`}>
             <div className={sidebarCollapsed ? "hidden" : "min-w-0"}>
               {logoUrl ? (
-                <img src={resolveAssetUrl(logoUrl)} alt="شعار النظام" className="mb-3 h-12 w-auto max-w-[180px] object-contain" />
+                <img src={resolveAssetUrl(logoUrl)} alt="شعار النظام" className="app-brand-logo mb-3 h-12 w-auto max-w-[180px] object-contain" />
               ) : (
                 <p className="text-xs font-semibold uppercase tracking-widest text-bank-700">QIB</p>
               )}
@@ -467,6 +465,7 @@ export function Layout({
               <NavLink
                 key={label}
                 to={href}
+                end={href.startsWith("/settings") || href === "/departments" || href === "/specialized-sections"}
                 aria-label={label}
                 title={sidebarCollapsed ? label : undefined}
                 className={({ isActive }) =>

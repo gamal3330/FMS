@@ -578,7 +578,7 @@ def apply_health_alerts(db: Session, summary_parts: dict[str, dict]) -> None:
         "storage": ("التخزين والمرفقات", "راجع مساحة القرص ومجلدات الرفع.", "/settings/health-monitoring"),
         "backups": ("النسخ الاحتياطية", "أنشئ نسخة احتياطية أو راجع إعدادات النسخ.", "/settings/database"),
         "errors": ("الأخطاء والسجلات", "راجع آخر الأخطاء لمعالجة السبب.", "/settings/health-monitoring"),
-        "updates": ("التحديثات", "راجع حالة التحديثات والترحيلات.", "/settings/updates"),
+        "updates": ("التحديثات", "راجع حالة التحديثات والترحيلات من شاشة مراقبة صحة النظام.", "/settings/health-monitoring"),
     }
     for key, data in summary_parts.items():
         status = data.get("status", "healthy")

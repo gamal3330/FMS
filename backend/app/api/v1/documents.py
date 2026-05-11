@@ -27,7 +27,7 @@ from app.models.document import (
 from app.models.enums import UserRole
 from app.models.notification import Notification
 from app.models.settings import SettingsGeneral
-from app.models.user import Department, Role, User
+from app.models.user import Department, Role, ScreenPermission, User
 from app.services.audit import write_audit
 from app.services.realtime import notification_manager
 
@@ -38,6 +38,19 @@ PDF_MIME_TYPES = {"application/pdf", "application/x-pdf", "application/octet-str
 PUBLIC_CLASSIFICATIONS = {"public", "internal"}
 RESTRICTED_CLASSIFICATIONS = {"confidential", "top_secret"}
 DOCUMENT_STATUSES = {"active", "archived", "draft"}
+SCREEN_PERMISSION_LEVELS = ["no_access", "view", "create", "edit", "delete", "export", "manage"]
+
+
+def screen_permission_level_allows(level: str | None, capability: str) -> bool:
+    clean_level = level if level in SCREEN_PERMISSION_LEVELS else "no_access"
+    return {
+        "view": clean_level in {"view", "create", "edit", "delete", "export", "manage"},
+        "create": clean_level in {"create", "edit", "delete", "manage"},
+        "edit": clean_level in {"edit", "delete", "manage"},
+        "delete": clean_level in {"delete", "manage"},
+        "export": clean_level in {"export", "manage"},
+        "manage": clean_level == "manage",
+    }.get(capability, False)
 
 
 class CategoryPayload(BaseModel):
@@ -164,8 +177,32 @@ def role_ids_for_user(db: Session, user: User) -> list[int]:
     return ids
 
 
+def has_document_settings_permission(db: Session, user: User, capability: str = "manage") -> bool:
+    if user.role == UserRole.SUPER_ADMIN:
+        return True
+    role_ids = role_ids_for_user(db, user)
+    subject_filters = [ScreenPermission.user_id == user.id]
+    if role_ids:
+        subject_filters.append(ScreenPermission.role_id.in_(role_ids))
+    rows = db.scalars(
+        select(ScreenPermission)
+        .where(
+            ScreenPermission.screen_code.in_(["document_settings", "documents"]),
+            or_(*subject_filters),
+        )
+    ).all()
+    user_rows = [row for row in rows if row.user_id == user.id]
+    effective_rows = user_rows or rows
+    return any(
+        bool(getattr(row, f"can_{capability}", False)) or screen_permission_level_allows(row.permission_level, capability)
+        for row in effective_rows
+    )
+
+
 def is_document_admin(db: Session, user: User) -> bool:
     if user.role == UserRole.SUPER_ADMIN:
+        return True
+    if has_document_settings_permission(db, user, "manage"):
         return True
     role_ids = role_ids_for_user(db, user)
     clauses = [DocumentPermission.can_manage == True]
@@ -198,6 +235,8 @@ def permission_rows_for_document(db: Session, user: User, document: Document) ->
 
 def can_access_document(db: Session, user: User, document: Document, action: str = "view") -> bool:
     if user.role == UserRole.SUPER_ADMIN:
+        return True
+    if has_document_settings_permission(db, user, "manage"):
         return True
     if not document.is_active or document.status == "archived":
         return False
@@ -502,6 +541,48 @@ def list_documents(
 @router.get("/search")
 def search_documents(q: str = Query(default=""), db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     return list_documents(q=q, category_code=None, status_filter=None, classification=None, owner_department_id=None, db=db, current_user=current_user)
+
+
+@router.get("/settings/bootstrap")
+def document_settings_bootstrap(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    require_document_manager(db, current_user)
+    categories = list_categories(include_inactive=True, db=db, current_user=current_user)
+    documents = list_documents(
+        q=None,
+        category_code=None,
+        status_filter=None,
+        classification=None,
+        owner_department_id=None,
+        db=db,
+        current_user=current_user,
+    )
+    departments = db.scalars(select(Department).order_by(Department.name_ar)).all()
+    roles = db.scalars(select(Role).where(Role.is_active == True).order_by(Role.label_ar)).all()
+    permission_rows = db.scalars(
+        select(DocumentPermission).options(
+            selectinload(DocumentPermission.category),
+            selectinload(DocumentPermission.document),
+            selectinload(DocumentPermission.role),
+            selectinload(DocumentPermission.department),
+        )
+    ).all()
+    return {
+        "categories": categories,
+        "documents": documents,
+        "departments": departments,
+        "roles": [
+            {
+                "id": role.id,
+                "name": role.name,
+                "name_ar": role.name_ar or role.label_ar,
+                "label_ar": role.label_ar,
+                "name_en": role.name_en,
+                "code": role.code or role.name,
+            }
+            for role in roles
+        ],
+        "permissions": [permission_summary(row) for row in permission_rows],
+    }
 
 
 

@@ -122,6 +122,14 @@ th, td {
   text-align: left;
 }
 
+.app-brand-logo {
+  display: block;
+}
+
+:root[data-theme="dark"] .app-brand-logo {
+  filter: brightness(0) invert(1) opacity(0.92) drop-shadow(0 2px 8px rgba(0, 0, 0, 0.35));
+}
+
 :root[data-theme="dark"] :where(body, #root, .min-h-screen, main) {
   background-color: var(--app-bg) !important;
   color: var(--app-text) !important;
@@ -137,6 +145,10 @@ th, td {
 
 :root[data-theme="dark"] :where(.bg-slate-50, .bg-slate-100, .bg-gray-50, .bg-gray-100) {
   background-color: rgb(22 33 30 / var(--tw-bg-opacity, 1)) !important;
+}
+
+:root[data-theme="dark"] :where(.bg-slate-50\/95, .bg-slate-50\/90, .bg-slate-50\/80, .bg-slate-50\/70, .bg-slate-50\/60, .bg-slate-50\/50, .bg-slate-100\/95, .bg-slate-100\/90, .bg-slate-100\/80, .bg-slate-100\/70, .bg-slate-100\/60, .bg-slate-100\/50) {
+  background-color: rgb(22 33 30 / 0.88) !important;
 }
 
 :root[data-theme="dark"] :where(.bg-slate-200, .bg-slate-300, .bg-gray-200, .bg-gray-300) {
@@ -217,6 +229,41 @@ th, td {
 
 :root[data-theme="dark"] :where(.text-blue-700, .text-blue-800, .text-blue-900, .text-indigo-700, .text-indigo-800, .text-indigo-900) {
   color: #93c5fd !important;
+}
+
+:root[data-theme="dark"] .message-compose-ai-strip,
+:root[data-theme="dark"] .message-compose-editor-shell,
+:root[data-theme="dark"] .message-compose-toolbar {
+  background-color: var(--app-surface) !important;
+  border-color: var(--app-border) !important;
+}
+
+:root[data-theme="dark"] .message-compose-toolbar {
+  box-shadow: 0 10px 24px rgb(0 0 0 / 0.18);
+}
+
+:root[data-theme="dark"] .message-tool-group,
+:root[data-theme="dark"] .message-signature-button {
+  background-color: var(--app-surface-muted) !important;
+  border-color: var(--app-border-strong) !important;
+}
+
+:root[data-theme="dark"] .message-tool-button {
+  background-color: var(--app-surface-raised) !important;
+  border-color: var(--app-border-strong) !important;
+  color: var(--app-text) !important;
+}
+
+:root[data-theme="dark"] .message-tool-button:hover,
+:root[data-theme="dark"] .message-signature-button:hover {
+  background-color: rgb(var(--bank-100) / 0.38) !important;
+  border-color: rgb(var(--bank-700) / 0.48) !important;
+  color: #9af0bd !important;
+}
+
+:root[data-theme="dark"] .message-rich-editor {
+  background-color: var(--app-surface) !important;
+  color: var(--app-text) !important;
 }
 
 :root[data-theme="dark"] :where(.border-slate-50, .border-slate-100, .border-slate-200, .border-slate-300, .border-gray-100, .border-gray-200, .border-gray-300) {

@@ -1178,12 +1178,23 @@ def delete_workflow_step(step_id: int, db: Session = Depends(get_db), actor: Use
     item = db.get(WorkflowTemplateStep, step_id)
     if not item:
         raise HTTPException(status_code=404, detail="Workflow step not found")
-    active_snapshots = db.scalar(select(func.count()).select_from(RequestApprovalStep).where(RequestApprovalStep.step_name_en == item.step_name_en, RequestApprovalStep.status.in_(["pending", "waiting"]))) or 0
-    if active_snapshots:
-        raise HTTPException(status_code=409, detail="Cannot delete workflow step while active requests are using it")
     template_id = item.workflow_template_id
     template = db.get(WorkflowTemplate, template_id)
+    deleted_order = item.sort_order
     db.delete(item)
+    db.flush()
+    remaining_steps = db.scalars(
+        select(WorkflowTemplateStep)
+        .where(WorkflowTemplateStep.workflow_template_id == template_id)
+        .order_by(WorkflowTemplateStep.sort_order, WorkflowTemplateStep.id)
+    ).all()
+    order_map = {step.sort_order: index for index, step in enumerate(remaining_steps, start=1)}
+    for index, step in enumerate(remaining_steps, start=1):
+        if step.return_to_step_order == deleted_order:
+            step.return_to_step_order = None
+        elif step.return_to_step_order in order_map:
+            step.return_to_step_order = order_map[step.return_to_step_order]
+        step.sort_order = index
     if template and template.request_type_id:
         bump_request_type_version(db, template.request_type_id, actor, "workflow_step_deleted")
     write_audit(db, "workflow_template_step_deleted", "workflow_template_steps", actor=actor, entity_id=str(step_id))

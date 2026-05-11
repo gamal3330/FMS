@@ -679,7 +679,6 @@ function UpdatesTab({ data, loading }) {
       ) : (
         <AlertBox type={data.status}>لا توجد عملية تحديث نشطة حالياً.</AlertBox>
       )}
-      <LinkButton href="/settings/updates">فتح إدارة التحديثات</LinkButton>
     </Panel>
   );
 }

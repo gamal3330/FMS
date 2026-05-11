@@ -9,6 +9,13 @@ import type { DocumentCategory, LibraryDocument } from "../documents/types";
 
 type Department = { id: number; name_ar: string; name_en?: string };
 type Role = { id: number; name_ar?: string; label_ar?: string; code?: string; name?: string };
+type DocumentSettingsBootstrap = {
+  categories: DocumentCategory[];
+  documents: LibraryDocument[];
+  departments: Department[];
+  roles: Role[];
+  permissions: any[];
+};
 
 const tabs = [
   ["categories", "التصنيفات"],
@@ -44,19 +51,15 @@ export default function DocumentSettingsPage() {
 
   async function loadAll() {
     try {
-      const [nextCategories, nextDocuments, nextDepartments, nextRoles] = await Promise.all([
-        apiFetch<DocumentCategory[]>("/documents/categories?include_inactive=true"),
-        apiFetch<LibraryDocument[]>("/documents"),
-        apiFetch<Department[]>("/departments"),
-        apiFetch<Role[]>("/roles")
-      ]);
-      setCategories(nextCategories);
-      setDocuments(nextDocuments);
-      setDepartments(nextDepartments);
-      setRoles(nextRoles);
-      apiFetch<any[]>("/documents/permissions/list").then(setPermissions).catch(() => setPermissions([]));
+      const bootstrap = await apiFetch<DocumentSettingsBootstrap>("/documents/settings/bootstrap");
+      setCategories(bootstrap.categories || []);
+      setDocuments(bootstrap.documents || []);
+      setDepartments(bootstrap.departments || []);
+      setRoles(bootstrap.roles || []);
+      setPermissions(bootstrap.permissions || []);
       setNotice({ type: "success", message: "" });
-    } catch {
+    } catch (error) {
+      console.error("Failed to load document settings", error);
       setNotice({ type: "error", message: "تعذر تحميل إعدادات الوثائق." });
     }
   }

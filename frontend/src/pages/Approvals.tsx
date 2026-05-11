@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import { AlertTriangle, CheckCircle2, Circle, Clock3, Download, ExternalLink, FileCheck2, FileText, Filter, Image as ImageIcon, Paperclip, RefreshCw, RotateCcw, Search, Send, UserCheck, XCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Circle, Clock3, Download, ExternalLink, FileCheck2, FileText, Filter, HelpCircle, Image as ImageIcon, Paperclip, RefreshCw, RotateCcw, Search, Send, UserCheck, XCircle } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { API_BASE, apiFetch, ApprovalAction, ApprovalStep, Attachment, CurrentUser, ServiceRequest } from "../lib/api";
 import { formatSystemDateTime } from "../lib/datetime";
@@ -42,6 +42,7 @@ const roleLabels: Record<string, string> = {
   direct_manager: "المدير المباشر",
   department_manager: "مدير الإدارة المختصة",
   department_specialist: "مختص الإدارة المختصة",
+  specific_department_manager: "مدير إدارة محددة",
   information_security: "أمن المعلومات (مرحلة قديمة)",
   administration_manager: "مدير إدارة",
   it_staff: "مختص تنفيذ",
@@ -86,6 +87,26 @@ const actionLabels: Record<ApprovalAction, string> = {
 
 const approvalsPageSize = 12;
 
+type ApprovalsTab = "mine" | "tracking" | "execution" | "returned" | "overdue" | "completed" | "history";
+
+type ApprovalsSummary = {
+  waiting_my_approval: number;
+  tracking: number;
+  waiting_execution: number;
+  returned_for_edit: number;
+  overdue: number;
+  processed_today: number;
+};
+
+const approvalCardDescriptions: Record<Exclude<ApprovalsTab, "history">, string> = {
+  mine: "الطلبات التي يمكنك اعتمادها الآن",
+  tracking: "طلباتك المقدمة ومسارها الحالي",
+  execution: "خطوات التنفيذ المسندة لك",
+  returned: "طلبات أُعيدت لأصحابها",
+  overdue: "طلبات تجاوزت SLA",
+  completed: "طلبات تمت معالجتها اليوم"
+};
+
 function getCurrentStep(request?: ServiceRequest) {
   return [...(request?.approvals ?? [])].sort((first, second) => first.step_order - second.step_order).find((step) => step.action === "pending") ?? null;
 }
@@ -98,6 +119,92 @@ function assignedSection(request?: ServiceRequest) {
   const key = request?.form_data?.assigned_section || request?.form_data?.administrative_section || "";
   const label = request?.form_data?.assigned_section_label || request?.form_data?.administrative_section_label;
   return label || sectionLabels[key] || "-";
+}
+
+function requestTypeName(request: ServiceRequest) {
+  const snapshot = request.request_type_snapshot ?? {};
+  const snapshotName = typeof snapshot.name_ar === "string" ? snapshot.name_ar : "";
+  return snapshotName || request.form_data?.request_type_label || requestTypeLabels[request.request_type] || request.request_type || "-";
+}
+
+function workflowSectionName(request?: ServiceRequest | null) {
+  const formData = request?.form_data ?? {};
+  const snapshot = request?.request_type_snapshot ?? {};
+  const formSectionKey = formData.assigned_section || formData.administrative_section || "";
+  const snapshotSectionKey = typeof snapshot.assigned_section === "string" ? snapshot.assigned_section : "";
+  const snapshotSectionLabel = typeof snapshot.assigned_section_label === "string" ? snapshot.assigned_section_label : "";
+  const snapshotSpecializedName = typeof snapshot.specialized_section_name === "string" ? snapshot.specialized_section_name : "";
+
+  return (
+    formData.assigned_section_label ||
+    formData.administrative_section_label ||
+    snapshotSpecializedName ||
+    snapshotSectionLabel ||
+    sectionLabels[formSectionKey] ||
+    sectionLabels[snapshotSectionKey] ||
+    ""
+  );
+}
+
+function workflowDepartmentName(request?: ServiceRequest | null) {
+  const formData = request?.form_data ?? {};
+  const snapshot = request?.request_type_snapshot ?? {};
+  const formDepartmentName = typeof formData.assigned_department_name === "string" ? formData.assigned_department_name : "";
+  const snapshotDepartmentName = typeof snapshot.assigned_department_name === "string" ? snapshot.assigned_department_name : "";
+
+  return formDepartmentName || snapshotDepartmentName || request?.department?.name_ar || workflowSectionName(request);
+}
+
+function approvalStepLabel(step?: ApprovalStep | null, request?: ServiceRequest | null) {
+  if (!step) return "-";
+  const departmentName = workflowDepartmentName(request);
+  const sectionName = workflowSectionName(request);
+  if (departmentName && step.role === "department_manager") return `مدير ${departmentName}`;
+  if (sectionName && step.role === "department_specialist") return `مختص ${sectionName}`;
+  if (departmentName && step.role === "specific_department_manager") return `مدير ${departmentName}`;
+  return roleLabels[step.role] ?? step.role;
+}
+
+function slaStatus(request: ServiceRequest) {
+  if (!request.sla_due_at) return "none";
+  const due = new Date(request.sla_due_at).getTime();
+  const now = Date.now();
+  if (["closed", "completed", "rejected", "cancelled"].includes(request.status)) {
+    const closed = request.closed_at ? new Date(request.closed_at).getTime() : now;
+    return closed <= due ? "met" : "breached";
+  }
+  return due < now ? "overdue" : "within";
+}
+
+function slaLabel(request: ServiceRequest) {
+  const status = slaStatus(request);
+  if (status === "overdue") return "متأخر";
+  if (status === "within") return "ضمن الوقت";
+  if (status === "breached") return "تم تجاوزه";
+  if (status === "met") return "ملتزم";
+  return "غير محدد";
+}
+
+function slaTone(request: ServiceRequest) {
+  const status = slaStatus(request);
+  if (status === "overdue" || status === "breached") return "bg-red-50 text-red-700";
+  if (status === "within") return "bg-amber-50 text-amber-700";
+  if (status === "met") return "bg-bank-50 text-bank-700";
+  return "bg-slate-100 text-slate-600";
+}
+
+function waitingTimeLabel(request: ServiceRequest) {
+  const step = getCurrentStep(request);
+  const start = step?.acted_at || request.updated_at || request.created_at;
+  const diffMs = Math.max(0, Date.now() - new Date(start).getTime());
+  const hours = Math.floor(diffMs / 3_600_000);
+  if (hours < 1) return "أقل من ساعة";
+  if (hours < 24) return `${hours} ساعة`;
+  return `${Math.floor(hours / 24)} يوم`;
+}
+
+function isExecutionStep(step: ApprovalStep | null) {
+  return Boolean(step && ["implementation", "execution", "implementation_engineer", "close_request"].includes(step.role));
 }
 
 async function openAttachment(requestId: number, attachment: Attachment) {
@@ -182,8 +289,16 @@ export function Approvals() {
   const [error, setError] = useState("");
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
   const [activeDelegations, setActiveDelegations] = useState<ActiveDelegation[]>([]);
+  const [summary, setSummary] = useState<ApprovalsSummary>({ waiting_my_approval: 0, tracking: 0, waiting_execution: 0, returned_for_edit: 0, overdue: 0, processed_today: 0 });
+  const [activeTab, setActiveTab] = useState<ApprovalsTab>("mine");
   const [search, setSearch] = useState("");
-  const [statusView, setStatusView] = useState<"all" | "pending" | "done">("pending");
+  const [priorityFilter, setPriorityFilter] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
+  const [slaFilter, setSlaFilter] = useState("");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [showFilters, setShowFilters] = useState(false);
+  const [showApprovalPath, setShowApprovalPath] = useState(false);
   const [approvalsPage, setApprovalsPage] = useState(1);
 
   const selectedRequest = useMemo(
@@ -192,9 +307,6 @@ export function Approvals() {
   );
 
   const currentStep = getCurrentStep(selectedRequest);
-  const pendingCount = requests.filter((request) => request.status === "pending_approval").length;
-  const completedCount = requests.filter((request) => ["closed", "completed"].includes(request.status)).length;
-  const actionableCount = requests.filter((request) => isActionableForUser(getCurrentStep(request), currentUser, activeDelegations)).length;
   const canShowDecisionForm = isActionableForUser(currentStep, currentUser, activeDelegations);
   const currentStepCanReject = Boolean(currentStep && currentStep.can_reject !== false);
   const decisionGridClass =
@@ -203,21 +315,8 @@ export function Approvals() {
       : currentStepCanReject || currentStep?.can_return_for_edit
         ? "grid-cols-2"
         : "grid-cols-1";
-  const filteredRequests = useMemo(() => {
-    const term = search.trim().toLowerCase();
-    return requests.filter((request) => {
-      const matchesSearch =
-        !term ||
-        [request.title, request.request_number, request.requester?.full_name_ar, request.request_type, assignedSection(request)]
-          .filter(Boolean)
-          .some((value) => String(value).toLowerCase().includes(term));
-      const matchesStatus =
-        statusView === "all" ||
-        (statusView === "pending" && request.status === "pending_approval") ||
-        (statusView === "done" && request.status !== "pending_approval");
-      return matchesSearch && matchesStatus;
-    });
-  }, [requests, search, statusView, currentUser]);
+  const hasActiveFilters = Boolean(search.trim() || priorityFilter || statusFilter || slaFilter || dateFrom || dateTo);
+  const filteredRequests = useMemo(() => requests, [requests]);
   const paginatedRequests = useMemo(() => {
     const start = (approvalsPage - 1) * approvalsPageSize;
     return filteredRequests.slice(start, start + approvalsPageSize);
@@ -238,12 +337,31 @@ export function Approvals() {
     }
   }, [filteredRequests.length, paginatedRequests, selectedId, approvalsPage]);
 
-  async function loadApprovals() {
+  async function loadSummary() {
+    try {
+      setSummary(await apiFetch<ApprovalsSummary>("/approvals/summary"));
+    } catch {
+      setSummary({ waiting_my_approval: 0, tracking: 0, waiting_execution: 0, returned_for_edit: 0, overdue: 0, processed_today: 0 });
+    }
+  }
+
+  function approvalsQuery() {
+    const params = new URLSearchParams({ tab: activeTab });
+    if (search.trim()) params.set("search", search.trim());
+    if (priorityFilter) params.set("priority", priorityFilter);
+    if (statusFilter) params.set("status", statusFilter);
+    if (slaFilter) params.set("sla_status", slaFilter);
+    if (dateFrom) params.set("date_from", `${dateFrom}T00:00:00`);
+    if (dateTo) params.set("date_to", `${dateTo}T23:59:59`);
+    return params.toString();
+  }
+
+  async function loadApprovals(query = approvalsQuery()) {
     setIsLoading(true);
     setError("");
     try {
-      const data = await apiFetch<ServiceRequest[]>("/requests");
-      const sorted = data.sort((a, b) => Number(b.status === "pending_approval") - Number(a.status === "pending_approval"));
+      const data = await apiFetch<ServiceRequest[]>(`/approvals?${query}`);
+      const sorted = data.sort((a, b) => Number(isActionableForUser(getCurrentStep(b), currentUser, activeDelegations)) - Number(isActionableForUser(getCurrentStep(a), currentUser, activeDelegations)));
       setRequests(sorted);
       setSelectedId((current) => current ?? sorted[0]?.id ?? null);
     } catch {
@@ -256,9 +374,26 @@ export function Approvals() {
 
   useEffect(() => {
     loadApprovals();
+    loadSummary();
     apiFetch<CurrentUser>("/auth/me").then(setCurrentUser).catch(() => setCurrentUser(null));
     apiFetch<ActiveDelegation[]>("/users/delegations/me").then(setActiveDelegations).catch(() => setActiveDelegations([]));
   }, []);
+
+  useEffect(() => {
+    if (currentUser?.role === "employee") {
+      setActiveTab("tracking");
+    }
+  }, [currentUser?.role]);
+
+  useEffect(() => {
+    setShowApprovalPath(false);
+  }, [selectedId]);
+
+  useEffect(() => {
+    setApprovalsPage(1);
+    setSelectedId(null);
+    loadApprovals();
+  }, [activeTab]);
 
   useEffect(() => {
     if ((decision === "rejected" && !currentStepCanReject) || (decision === "returned_for_edit" && !currentStep?.can_return_for_edit)) {
@@ -279,6 +414,17 @@ export function Approvals() {
       setError("هذه المرحلة لا تسمح بالإرجاع للتعديل حسب إعدادات مسار الموافقات.");
       return;
     }
+    if ((decision === "rejected" || decision === "returned_for_edit") && !note.trim()) {
+      setError(decision === "rejected" ? "سبب الرفض مطلوب قبل حفظ القرار." : "ملاحظات الإرجاع للتعديل مطلوبة قبل حفظ القرار.");
+      return;
+    }
+    const confirmationText =
+      decision === "approved"
+        ? "تأكيد الموافقة على هذه المرحلة؟"
+        : decision === "returned_for_edit"
+          ? "تأكيد إرجاع الطلب للتعديل؟"
+          : "تأكيد رفض الطلب؟";
+    if (!window.confirm(confirmationText)) return;
     setIsSubmitting(true);
 
     try {
@@ -289,6 +435,7 @@ export function Approvals() {
       setRequests((current) => current.map((request) => (request.id === updated.id ? updated : request)));
       setSelectedId(updated.id);
       setNote("");
+      loadSummary();
       setMessage(decision === "approved" ? "تمت الموافقة على الخطوة الحالية." : decision === "returned_for_edit" ? "تم إرجاع الطلب للتعديل حسب إعدادات مسار الموافقات." : "تم رفض الطلب وتحديث سجل الموافقات.");
     } catch {
       setError("تعذر تنفيذ قرار الموافقة. تحقق من أن لديك صلاحية على الخطوة الحالية.");
@@ -303,62 +450,102 @@ export function Approvals() {
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div>
             <p className="text-sm font-semibold text-bank-700">الموافقات</p>
-            <h2 className="mt-2 text-2xl font-bold text-slate-950">مراجعة واعتماد طلبات الخدمات</h2>
+            <h2 className="mt-2 text-2xl font-bold text-slate-950">مركز الموافقات والتنفيذ</h2>
             <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">
-              راجع تفاصيل الطلب، تحقق من البيانات والمبررات، ثم اختر الموافقة أو الرفض مع توثيق الملاحظة.
+              راجع الطلبات المسندة لك، اتخذ قرار الموافقة أو التنفيذ، وتابع المسارات المتأخرة والمعادة للتعديل من مكان واحد.
             </p>
           </div>
-          <Button onClick={loadApprovals} disabled={isLoading} className="gap-2 self-start lg:self-auto">
+          <Button onClick={() => { loadApprovals(); loadSummary(); }} disabled={isLoading} className="gap-2 self-start lg:self-auto">
             <RefreshCw className={`h-4 w-4 ${isLoading ? "animate-spin" : ""}`} />
             تحديث الموافقات
           </Button>
         </div>
       </section>
 
-      <section className="grid gap-4 md:grid-cols-3">
-        <Card className="p-5">
-          <p className="text-sm text-slate-500">بانتظار الإجراء</p>
-          <p className="mt-3 text-3xl font-bold text-slate-950">{pendingCount}</p>
-        </Card>
-        <Card className="p-5">
-          <p className="text-sm text-slate-500">يمكنك اتخاذ إجراء عليها</p>
-          <p className="mt-3 text-3xl font-bold text-bank-700">{actionableCount}</p>
-        </Card>
-        <Card className="p-5">
-          <p className="text-sm text-slate-500">طلبات مكتملة أو مغلقة</p>
-          <p className="mt-3 text-3xl font-bold text-slate-950">{completedCount}</p>
-        </Card>
+      <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
+        <SummaryCard label="بانتظار موافقتي" description={approvalCardDescriptions.mine} value={summary.waiting_my_approval} active={activeTab === "mine"} onClick={() => setActiveTab("mine")} />
+        <SummaryCard label="متابعة طلباتي" description={approvalCardDescriptions.tracking} value={summary.tracking} active={activeTab === "tracking"} onClick={() => setActiveTab("tracking")} />
+        <SummaryCard label="بانتظار التنفيذ" description={approvalCardDescriptions.execution} value={summary.waiting_execution} active={activeTab === "execution"} onClick={() => setActiveTab("execution")} />
+        <SummaryCard label="متأخرة" description={approvalCardDescriptions.overdue} value={summary.overdue} active={activeTab === "overdue"} tone="danger" onClick={() => setActiveTab("overdue")} />
+        <SummaryCard label="معادة للتعديل" description={approvalCardDescriptions.returned} value={summary.returned_for_edit} active={activeTab === "returned"} tone="warning" onClick={() => setActiveTab("returned")} />
+        <SummaryCard label="تمت معالجتها اليوم" description={approvalCardDescriptions.completed} value={summary.processed_today} active={activeTab === "completed"} onClick={() => setActiveTab("completed")} />
       </section>
 
-      <section className="grid gap-3 rounded-lg border border-slate-200 bg-white p-4 shadow-sm lg:grid-cols-[1fr_240px]">
-        <div className="relative">
-          <Search className="pointer-events-none absolute right-3 top-2.5 h-4 w-4 text-slate-400" />
-          <input
-            value={search}
-            onChange={(event) => {
-              setSearch(event.target.value);
-              setApprovalsPage(1);
-            }}
-            placeholder="بحث برقم الطلب أو الموظف أو القسم المختص"
-            className="h-10 w-full rounded-md border border-slate-300 bg-white pr-9 pl-3 text-sm outline-none focus:border-bank-600 focus:ring-2 focus:ring-bank-100"
-          />
-        </div>
-        <div className="flex items-center gap-2">
-          <Filter className="h-4 w-4 text-slate-400" />
-          <select
-            value={statusView}
-            onChange={(event) => {
-              setStatusView(event.target.value as "all" | "pending" | "done");
-              setApprovalsPage(1);
-            }}
-            className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm"
-          >
-            <option value="pending">بانتظار الإجراء</option>
-            <option value="all">كل الطلبات</option>
-            <option value="done">المنتهية</option>
+      <div className="flex justify-end">
+        <button
+          type="button"
+          onClick={() => setShowFilters((current) => !current)}
+          className={`inline-flex h-10 items-center gap-2 rounded-md border px-4 text-sm font-bold transition ${
+            showFilters || hasActiveFilters
+              ? "border-bank-200 bg-bank-50 text-bank-800"
+              : "border-slate-200 bg-white text-slate-700 hover:border-bank-200 hover:bg-bank-50"
+          }`}
+        >
+          <Filter className="h-4 w-4" />
+          {showFilters ? "إخفاء الفلاتر" : "إظهار الفلاتر"}
+          {hasActiveFilters && <span className="rounded-full bg-bank-700 px-2 py-0.5 text-xs text-white">مفعلة</span>}
+        </button>
+      </div>
+
+      {showFilters && (
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            setApprovalsPage(1);
+            loadApprovals();
+          }}
+          className="grid gap-3 rounded-lg border border-slate-200 bg-white p-4 shadow-sm lg:grid-cols-[1.4fr_repeat(5,minmax(0,1fr))_auto]"
+        >
+          <div className="relative">
+            <Search className="pointer-events-none absolute right-3 top-2.5 h-4 w-4 text-slate-400" />
+            <input
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="بحث برقم الطلب أو الموظف أو العنوان"
+              className="h-10 w-full rounded-md border border-slate-300 bg-white pr-9 pl-3 text-sm outline-none focus:border-bank-600 focus:ring-2 focus:ring-bank-100"
+            />
+          </div>
+          <select value={priorityFilter} onChange={(event) => setPriorityFilter(event.target.value)} className="h-10 rounded-md border border-slate-300 bg-white px-3 text-sm">
+            <option value="">كل الأولويات</option>
+            <option value="low">منخفضة</option>
+            <option value="medium">متوسطة</option>
+            <option value="high">عالية</option>
+            <option value="critical">حرجة</option>
           </select>
-        </div>
-      </section>
+          <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} className="h-10 rounded-md border border-slate-300 bg-white px-3 text-sm">
+            <option value="">كل الحالات</option>
+            {Object.entries(statusLabels).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
+          </select>
+          <select value={slaFilter} onChange={(event) => setSlaFilter(event.target.value)} className="h-10 rounded-md border border-slate-300 bg-white px-3 text-sm">
+            <option value="">كل SLA</option>
+            <option value="within">ضمن الوقت</option>
+            <option value="overdue">متأخر</option>
+            <option value="met">ملتزم</option>
+            <option value="breached">تم تجاوزه</option>
+          </select>
+          <input type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} className="h-10 rounded-md border border-slate-300 bg-white px-3 text-sm" />
+          <input type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} className="h-10 rounded-md border border-slate-300 bg-white px-3 text-sm" />
+          <div className="flex gap-2">
+            <Button type="submit" className="h-10 gap-2"><Filter className="h-4 w-4" /> تطبيق</Button>
+            <button
+              type="button"
+              onClick={() => {
+                setSearch("");
+                setPriorityFilter("");
+                setStatusFilter("");
+                setSlaFilter("");
+                setDateFrom("");
+                setDateTo("");
+                setApprovalsPage(1);
+                loadApprovals(new URLSearchParams({ tab: activeTab }).toString());
+              }}
+              className="h-10 rounded-md border border-slate-300 px-3 text-sm font-bold text-slate-700 hover:bg-slate-50"
+            >
+              إعادة
+            </button>
+          </div>
+        </form>
+      )}
 
       {error && (
         <div className="flex items-center gap-3 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
@@ -407,11 +594,22 @@ export function Approvals() {
                   </span>
                 </div>
                 <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-500">
-                  <span>{requestTypeLabels[request.request_type] ?? request.request_type}</span>
+                  <span>{requestTypeName(request)}</span>
                   <span>•</span>
                   <span>{priorityLabels[request.priority] ?? request.priority}</span>
                   <span>•</span>
                   <span>{assignedSection(request)}</span>
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${slaTone(request)}`}>
+                    SLA: {slaLabel(request)}
+                  </span>
+                  <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-600">
+                    انتظار: {waitingTimeLabel(request)}
+                  </span>
+                  {isActionableForUser(getCurrentStep(request), currentUser, activeDelegations) && (
+                    <span className="rounded-full bg-bank-50 px-2.5 py-1 text-xs font-bold text-bank-700">يمكنك الإجراء</span>
+                  )}
                 </div>
               </button>
             ))}
@@ -428,20 +626,19 @@ export function Approvals() {
             <>
               <Card className="p-5">
                 <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                  <div>
-                    <p className="text-sm font-semibold text-bank-700">{selectedRequest.request_number}</p>
-                    <h3 className="mt-2 text-xl font-bold text-slate-950">{selectedRequest.title}</h3>
-                    <p className="mt-2 text-sm text-slate-500">
-                      مقدم الطلب: {selectedRequest.requester.full_name_ar} • الإدارة: {selectedRequest.department?.name_ar ?? "-"}
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-sm font-semibold text-bank-700">{selectedRequest.request_number}</span>
+                      <span className="rounded-full bg-bank-50 px-3 py-1 text-xs font-bold text-bank-700">
+                        {statusLabels[selectedRequest.status] ?? selectedRequest.status}
+                      </span>
+                    </div>
+                    <h3 className="mt-2 break-words text-xl font-bold text-slate-950">{selectedRequest.title}</h3>
+                    <p className="mt-2 text-sm leading-6 text-slate-500">
+                      {requestTypeName(selectedRequest)} • مقدم الطلب: {selectedRequest.requester.full_name_ar} • الإدارة: {selectedRequest.department?.name_ar ?? "-"}
                     </p>
                   </div>
-                  <div className="flex flex-wrap gap-2">
-                    <span className="rounded-md bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700">
-                      {requestTypeLabels[selectedRequest.request_type] ?? selectedRequest.request_type}
-                    </span>
-                    <span className="rounded-md bg-bank-50 px-3 py-2 text-sm font-semibold text-bank-700">
-                      {statusLabels[selectedRequest.status] ?? selectedRequest.status}
-                    </span>
+                  <div className="flex shrink-0 flex-wrap gap-2">
                     <button
                       type="button"
                       onClick={() => navigate(`/requests/${selectedRequest.id}`)}
@@ -461,14 +658,29 @@ export function Approvals() {
                   </div>
                 </div>
 
-                <div className="mt-5 grid gap-3 md:grid-cols-4">
-                  <Info label="الأولوية" value={priorityLabels[selectedRequest.priority] ?? selectedRequest.priority} />
-                  <Info label="تاريخ الإنشاء" value={formatDate(selectedRequest.created_at)} />
-                  <Info label="الخطوة الحالية" value={currentStep ? roleLabels[currentStep.role] ?? currentStep.role : "-"} />
-                  <Info label="القسم المختص" value={assignedSection(selectedRequest)} />
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <CompactInfo label="الأولوية" value={priorityLabels[selectedRequest.priority] ?? selectedRequest.priority} />
+                  <CompactInfo label="المرحلة الحالية" value={approvalStepLabel(currentStep, selectedRequest)} tone="bank" />
+                  <CompactInfo label="SLA" value={slaLabel(selectedRequest)} tone={slaStatus(selectedRequest) === "overdue" || slaStatus(selectedRequest) === "breached" ? "danger" : "warning"} />
+                  <CompactInfo label="الانتظار" value={waitingTimeLabel(selectedRequest)} />
+                  <CompactInfo label="القسم المختص" value={assignedSection(selectedRequest)} />
                 </div>
 
-                <ApprovalProgressBar steps={selectedRequest.approvals ?? []} />
+                <div className="mt-4 flex flex-col gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 sm:flex-row sm:items-center sm:justify-between">
+                  <p className="text-sm leading-6 text-slate-600">
+                    المسار مختصر هنا لتقليل التشتيت. يمكن عرض التفاصيل الكاملة عند الحاجة.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setShowApprovalPath((current) => !current)}
+                    className="inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-md border border-bank-100 bg-white px-4 text-sm font-bold text-bank-700 hover:bg-bank-50"
+                  >
+                    <Clock3 className="h-4 w-4" />
+                    {showApprovalPath ? "إخفاء مسار الموافقات" : "عرض مسار الموافقات"}
+                  </button>
+                </div>
+
+                {showApprovalPath && <ApprovalProgressBar request={selectedRequest} steps={selectedRequest.approvals ?? []} />}
 
                 <div className="mt-5 rounded-md bg-slate-50 p-4">
                   <p className="mb-2 text-sm font-semibold text-slate-700">مبرر العمل</p>
@@ -498,10 +710,10 @@ export function Approvals() {
                   <Card className="p-5">
                     <div className="mb-4 flex items-center gap-2">
                       <UserCheck className="h-5 w-5 text-bank-700" />
-                      <h3 className="font-bold text-slate-950">{currentStep && ["implementation", "execution", "implementation_engineer"].includes(currentStep.role) ? "قرار التنفيذ" : "قرار الموافقة"}</h3>
+                      <h3 className="font-bold text-slate-950">{isExecutionStep(currentStep) ? "قرار التنفيذ" : "قرار الموافقة"}</h3>
                     </div>
                     <div className="mb-4 rounded-md border border-bank-100 bg-bank-50 p-3 text-sm text-bank-800">
-                      المرحلة الحالية: <span className="font-bold">{currentStep ? roleLabels[currentStep.role] ?? currentStep.role : "-"}</span>
+                      المرحلة الحالية: <span className="font-bold">{approvalStepLabel(currentStep, selectedRequest)}</span>
                     </div>
                     <form onSubmit={submitDecision} className="space-y-4">
                       <div className={`grid gap-2 ${decisionGridClass}`}>
@@ -566,7 +778,7 @@ export function Approvals() {
                       <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" />
                       <div>
                         <p className="font-bold">الطلب بانتظار مرحلة أخرى</p>
-                        <p className="mt-1">المرحلة الحالية: {roleLabels[currentStep.role] ?? currentStep.role}. لن يظهر زر الإجراء إلا للمستخدم المخول بهذه المرحلة.</p>
+                        <p className="mt-1">المرحلة الحالية: {approvalStepLabel(currentStep, selectedRequest)}. لن يظهر زر الإجراء إلا للمستخدم المخول بهذه المرحلة.</p>
                       </div>
                     </div>
                   </Card>
@@ -582,7 +794,7 @@ export function Approvals() {
                 </div>
                 <div className="space-y-3">
                   {(selectedRequest.approvals ?? []).map((step) => (
-                    <ApprovalTimelineItem key={step.id} step={step} />
+                    <ApprovalTimelineItem key={step.id} request={selectedRequest} step={step} />
                   ))}
                 </div>
               </Card>
@@ -591,6 +803,51 @@ export function Approvals() {
         </div>
       </div>
     </div>
+  );
+}
+
+function SummaryCard({
+  label,
+  description,
+  value,
+  active,
+  tone = "default",
+  onClick
+}: {
+  label: string;
+  description: string;
+  value: number;
+  active?: boolean;
+  tone?: "default" | "warning" | "danger";
+  onClick: () => void;
+}) {
+  const toneClass =
+    tone === "danger"
+      ? active
+        ? "border-red-200 bg-red-50 text-red-800"
+        : "border-slate-200 bg-white text-slate-800 hover:border-red-200 hover:bg-red-50"
+      : tone === "warning"
+        ? active
+          ? "border-amber-200 bg-amber-50 text-amber-800"
+          : "border-slate-200 bg-white text-slate-800 hover:border-amber-200 hover:bg-amber-50"
+        : active
+          ? "border-bank-200 bg-bank-50 text-bank-800"
+          : "border-slate-200 bg-white text-slate-800 hover:border-bank-200 hover:bg-bank-50";
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`rounded-lg border p-4 text-right shadow-sm transition ${toneClass}`}
+    >
+      <span className="flex items-center justify-between gap-2 text-sm font-bold">
+        <span>{label}</span>
+        <span title={description} aria-label={description}>
+          <HelpCircle className="h-4 w-4 opacity-70" aria-hidden="true" />
+        </span>
+      </span>
+      <span className="mt-3 block text-3xl font-black">{value}</span>
+    </button>
   );
 }
 
@@ -631,6 +888,24 @@ function AttachmentsPanel({ request }: { request: ServiceRequest }) {
   );
 }
 
+function CompactInfo({ label, value, tone = "default" }: { label: string; value: string; tone?: "default" | "bank" | "warning" | "danger" }) {
+  const toneClass =
+    tone === "bank"
+      ? "border-bank-100 bg-bank-50 text-bank-800"
+      : tone === "warning"
+        ? "border-amber-100 bg-amber-50 text-amber-800"
+        : tone === "danger"
+          ? "border-red-100 bg-red-50 text-red-700"
+          : "border-slate-200 bg-slate-50 text-slate-700";
+
+  return (
+    <span className={`inline-flex min-h-9 items-center gap-2 rounded-full border px-3 py-1.5 text-sm ${toneClass}`}>
+      <span className="text-xs font-semibold opacity-70">{label}</span>
+      <span className="font-bold">{value}</span>
+    </span>
+  );
+}
+
 function Info({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-md border border-slate-200 bg-white p-3">
@@ -640,7 +915,7 @@ function Info({ label, value }: { label: string; value: string }) {
   );
 }
 
-function ApprovalTimelineItem({ step }: { step: ApprovalStep }) {
+function ApprovalTimelineItem({ request, step }: { request: ServiceRequest; step: ApprovalStep }) {
   const isApproved = step.action === "approved";
   const isRejected = step.action === "rejected";
   const isReturned = step.action === "returned_for_edit";
@@ -656,7 +931,7 @@ function ApprovalTimelineItem({ step }: { step: ApprovalStep }) {
       <div className="min-w-0 flex-1">
         <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
           <p className="font-semibold text-slate-900">
-            {step.step_order}. {roleLabels[step.role] ?? step.role}
+            {step.step_order}. {approvalStepLabel(step, request)}
           </p>
           {!(isApproved || isRejected) && <span className="text-xs text-slate-500">{formatDate(step.acted_at)}</span>}
         </div>
@@ -673,7 +948,7 @@ function ApprovalTimelineItem({ step }: { step: ApprovalStep }) {
   );
 }
 
-function ApprovalProgressBar({ steps }: { steps: ApprovalStep[] }) {
+function ApprovalProgressBar({ request, steps }: { request: ServiceRequest; steps: ApprovalStep[] }) {
   const orderedSteps = [...steps].sort((first, second) => first.step_order - second.step_order);
   const rejectedIndex = orderedSteps.findIndex((step) => step.action === "rejected");
   const returnedIndex = orderedSteps.findIndex((step) => step.action === "returned_for_edit");
@@ -692,11 +967,11 @@ function ApprovalProgressBar({ steps }: { steps: ApprovalStep[] }) {
           <p className="text-sm font-bold text-slate-950">مسار الموافقات</p>
           <p className="mt-1 text-xs text-slate-500">
             {rejectedIndex >= 0
-              ? `تم إيقاف المسار عند مرحلة ${roleLabels[orderedSteps[rejectedIndex].role] ?? orderedSteps[rejectedIndex].role}`
+              ? `تم إيقاف المسار عند مرحلة ${approvalStepLabel(orderedSteps[rejectedIndex], request)}`
               : returnedIndex >= 0
-                ? `تم إرجاع الطلب للتعديل من مرحلة ${roleLabels[orderedSteps[returnedIndex].role] ?? orderedSteps[returnedIndex].role}`
+                ? `تم إرجاع الطلب للتعديل من مرحلة ${approvalStepLabel(orderedSteps[returnedIndex], request)}`
               : currentIndex >= 0
-                ? `الموافقة وصلت إلى مرحلة ${roleLabels[orderedSteps[currentIndex].role] ?? orderedSteps[currentIndex].role}`
+                ? `الموافقة وصلت إلى مرحلة ${approvalStepLabel(orderedSteps[currentIndex], request)}`
                 : "اكتملت جميع مراحل الموافقة"}
           </p>
         </div>
@@ -713,14 +988,14 @@ function ApprovalProgressBar({ steps }: { steps: ApprovalStep[] }) {
         />
         <div className="relative grid" style={{ gridTemplateColumns: `repeat(${orderedSteps.length}, minmax(0, 1fr))` }}>
           {orderedSteps.map((step, index) => (
-            <ProgressStep key={step.id} step={step} index={index} currentIndex={currentIndex} rejectedIndex={rejectedIndex} />
+            <ProgressStep key={step.id} request={request} step={step} index={index} currentIndex={currentIndex} rejectedIndex={rejectedIndex} />
           ))}
         </div>
       </div>
 
       <div className="space-y-3 md:hidden">
         {orderedSteps.map((step, index) => (
-          <ProgressStepMobile key={step.id} step={step} index={index} currentIndex={currentIndex} rejectedIndex={rejectedIndex} />
+          <ProgressStepMobile key={step.id} request={request} step={step} index={index} currentIndex={currentIndex} rejectedIndex={rejectedIndex} />
         ))}
       </div>
     </div>
@@ -728,11 +1003,13 @@ function ApprovalProgressBar({ steps }: { steps: ApprovalStep[] }) {
 }
 
 function ProgressStep({
+  request,
   step,
   index,
   currentIndex,
   rejectedIndex
 }: {
+  request: ServiceRequest;
   step: ApprovalStep;
   index: number;
   currentIndex: number;
@@ -745,18 +1022,20 @@ function ProgressStep({
       <div className={`z-[1] flex h-11 w-11 items-center justify-center rounded-full border-4 bg-white shadow-sm ${state.ring}`}>
         {state.icon}
       </div>
-      <p className={`mt-3 min-h-8 w-full whitespace-normal break-words text-xs font-bold leading-4 ${state.text}`}>{roleLabels[step.role] ?? step.role}</p>
+      <p className={`mt-3 min-h-8 w-full whitespace-normal break-words text-xs font-bold leading-4 ${state.text}`}>{approvalStepLabel(step, request)}</p>
       <p className="mt-1 text-[11px] text-slate-500">{state.label}</p>
     </div>
   );
 }
 
 function ProgressStepMobile({
+  request,
   step,
   index,
   currentIndex,
   rejectedIndex
 }: {
+  request: ServiceRequest;
   step: ApprovalStep;
   index: number;
   currentIndex: number;
@@ -768,7 +1047,7 @@ function ProgressStepMobile({
     <div className="flex items-center gap-3 rounded-md border border-slate-200 p-3">
       <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full border-4 bg-white ${state.ring}`}>{state.icon}</div>
       <div className="min-w-0">
-        <p className={`whitespace-normal break-words text-sm font-bold leading-5 ${state.text}`}>{roleLabels[step.role] ?? step.role}</p>
+        <p className={`whitespace-normal break-words text-sm font-bold leading-5 ${state.text}`}>{approvalStepLabel(step, request)}</p>
         <p className="text-xs text-slate-500">{state.label}</p>
       </div>
     </div>

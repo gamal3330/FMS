@@ -22,7 +22,7 @@ from app.models.request import Attachment, RequestApprovalStep, ServiceRequest
 from app.models.settings import RequestTypeSetting, SettingsGeneral, SpecializedSection
 from app.models.user import ActionPermission, Department, Role, User
 from app.services.audit import write_audit
-from app.services.pdf_fonts import register_arabic_pdf_font
+from app.services.pdf_fonts import register_arabic_pdf_font, rtl_text
 from app.services.pdf_template import (
     draw_cover_header,
     draw_footer,
@@ -205,10 +205,15 @@ def datetime_label(value: datetime | None) -> str:
     return value.strftime("%Y/%m/%d %H:%M")
 
 
+def rtl(value: object) -> str:
+    return rtl_text(value)
+
+
 def request_type_label(item: ServiceRequest, type_map: dict[int, RequestTypeSetting] | None = None) -> str:
-    snapshot = item.request_type_snapshot or {}
-    form_data = item.form_data or {}
-    request_type = type_map.get(item.request_type_id) if type_map and item.request_type_id else None
+    snapshot = getattr(item, "request_type_snapshot", None) or {}
+    form_data = getattr(item, "form_data", None) or {}
+    request_type_id = getattr(item, "request_type_id", None)
+    request_type = type_map.get(request_type_id) if type_map and request_type_id else None
     return (
         str(snapshot.get("name_ar") or "")
         or str(form_data.get("request_type_label") or "")
@@ -219,9 +224,10 @@ def request_type_label(item: ServiceRequest, type_map: dict[int, RequestTypeSett
 
 
 def specialized_section_label(item: ServiceRequest, type_map: dict[int, RequestTypeSetting] | None = None) -> str:
-    snapshot = item.request_type_snapshot or {}
-    form_data = item.form_data or {}
-    request_type = type_map.get(item.request_type_id) if type_map and item.request_type_id else None
+    snapshot = getattr(item, "request_type_snapshot", None) or {}
+    form_data = getattr(item, "form_data", None) or {}
+    request_type_id = getattr(item, "request_type_id", None)
+    request_type = type_map.get(request_type_id) if type_map and request_type_id else None
     return (
         str(snapshot.get("specialized_section_name") or "")
         or str(snapshot.get("assigned_section_label") or "")
@@ -232,15 +238,16 @@ def specialized_section_label(item: ServiceRequest, type_map: dict[int, RequestT
 
 
 def sla_status(item: ServiceRequest) -> str:
-    due = item.sla_due_at
+    due = getattr(item, "sla_due_at", None)
     if not due:
         return "no_sla"
-    status_value = value_of(item.status)
+    status_value = value_of(getattr(item, "status", None))
     now = datetime.now(timezone.utc)
     normalized_due = due if due.tzinfo else due.replace(tzinfo=timezone.utc)
     if status_value in FINAL_REQUEST_STATUSES:
-        if item.closed_at:
-            closed_at = item.closed_at if item.closed_at.tzinfo else item.closed_at.replace(tzinfo=timezone.utc)
+        closed_at_value = getattr(item, "closed_at", None)
+        if closed_at_value:
+            closed_at = closed_at_value if closed_at_value.tzinfo else closed_at_value.replace(tzinfo=timezone.utc)
             return "met" if closed_at <= normalized_due else "breached"
         return "met"
     return "breached" if normalized_due < now else "on_track"
@@ -1169,42 +1176,50 @@ def export_report_response(export_format: str, report_type: str, db: Session, ac
     return StreamingResponse(stream, media_type=media_type, headers={"Content-Disposition": f"attachment; filename={filename}"})
 
 
-def report_rows(items: Iterable[ServiceRequest], type_map: dict[int, RequestTypeSetting]) -> list[list[str]]:
+def report_rows(items: Iterable[ServiceRequest], type_map: dict[int, RequestTypeSetting] | None = None) -> list[list[str]]:
+    type_map = type_map or {}
     rows = []
     for item in items:
         rows.append(
             [
-                str(item.request_number or ""),
-                str(item.title or ""),
+                str(getattr(item, "request_number", "") or ""),
+                str(getattr(item, "title", "") or ""),
                 str(requester_name(item) or ""),
                 str(department_name(item) or ""),
                 str(request_type_label(item, type_map) or ""),
                 str(specialized_section_label(item, type_map) or ""),
                 str(assigned_name(item) or ""),
-                label(item.status, STATUS_LABELS),
-                label(item.priority, PRIORITY_LABELS),
-                datetime_label(item.created_at),
-                datetime_label(item.closed_at),
+                label(getattr(item, "status", None), STATUS_LABELS),
+                label(getattr(item, "priority", None), PRIORITY_LABELS),
+                datetime_label(getattr(item, "created_at", None)),
+                datetime_label(getattr(item, "closed_at", None)),
                 sla_label(sla_status(item)),
             ]
         )
     return rows
 
 
-def build_excel_report(items: Iterable[ServiceRequest], db: Session, actor: User, filters: ReportFilters) -> BytesIO:
+def build_excel_report(
+    items: Iterable[ServiceRequest],
+    db: Session | None = None,
+    actor: User | None = None,
+    filters: ReportFilters | None = None,
+) -> BytesIO:
     from openpyxl import Workbook
     from openpyxl.styles import Alignment, Font, PatternFill
 
     items = list(items)
-    type_map = request_type_map(db, [item.request_type_id for item in items])
+    type_map = request_type_map(db, [getattr(item, "request_type_id", None) for item in items]) if db else {}
+    actor_label = (getattr(actor, "full_name_ar", None) or getattr(actor, "email", None) or "النظام")
+    filters_label = filters.compact() if filters else {}
     workbook = Workbook()
     sheet = workbook.active
     sheet.title = "مركز التقارير"
     sheet.sheet_view.rightToLeft = True
     sheet.freeze_panes = "A5"
     sheet.append(["مركز التقارير - تقرير الطلبات"])
-    sheet.append(["تم الإنشاء بواسطة", actor.full_name_ar or actor.email, "تاريخ الإنشاء", datetime.now(timezone.utc).strftime("%Y/%m/%d %H:%M")])
-    sheet.append(["الفلاتر", str(filters.compact() or "بدون فلاتر")])
+    sheet.append(["تم الإنشاء بواسطة", actor_label, "تاريخ الإنشاء", datetime.now(timezone.utc).strftime("%Y/%m/%d %H:%M")])
+    sheet.append(["الفلاتر", str(filters_label or "بدون فلاتر")])
     sheet.append(EXCEL_HEADERS)
     header_row = 4
     header_alignment = Alignment(horizontal="right", vertical="center", readingOrder=2, wrap_text=True)
@@ -1228,17 +1243,22 @@ def build_excel_report(items: Iterable[ServiceRequest], db: Session, actor: User
     return stream
 
 
-def build_pdf_report(items: Iterable[ServiceRequest], db: Session, actor: User, filters: ReportFilters) -> BytesIO:
+def build_pdf_report(
+    items: Iterable[ServiceRequest],
+    db: Session | None = None,
+    actor: User | None = None,
+    filters: ReportFilters | None = None,
+) -> BytesIO:
     items = list(items)
     stream = BytesIO()
     pdf = canvas.Canvas(stream, pagesize=A4)
     font_name = register_arabic_pdf_font()
-    general = db.scalar(select(SettingsGeneral).limit(1))
+    general = db.scalar(select(SettingsGeneral).limit(1)) if db else None
     theme = pdf_theme(general)
     pdf.setTitle("مركز التقارير - تقرير الطلبات")
     left = 36
     right = A4[0] - 36
-    actor_name = actor.full_name_ar or actor.email
+    actor_name = (getattr(actor, "full_name_ar", None) or getattr(actor, "email", None) or "النظام")
     y = draw_cover_header(
         pdf,
         theme,
@@ -1281,10 +1301,10 @@ def build_pdf_report(items: Iterable[ServiceRequest], db: Session, actor: User, 
             y = draw_table_header(y)
         pdf.setStrokeColorRGB(0.92, 0.94, 0.96)
         pdf.line(left, y - 7, right, y - 7)
-        draw_ltr_text(pdf, font_name, str(item.request_number or "")[:18], right - 95, y + 5, 9, (0.06, 0.09, 0.16))
-        draw_text(pdf, font_name, str(item.title or "-")[:34], right - 112, y + 5, 9, (0.06, 0.09, 0.16))
+        draw_ltr_text(pdf, font_name, str(getattr(item, "request_number", "") or "")[:18], right - 95, y + 5, 9, (0.06, 0.09, 0.16))
+        draw_text(pdf, font_name, str(getattr(item, "title", "") or "-")[:34], right - 112, y + 5, 9, (0.06, 0.09, 0.16))
         draw_text(pdf, font_name, requester_name(item)[:24], right - 274, y + 5, 9, (0.06, 0.09, 0.16))
-        draw_text(pdf, font_name, label(item.status, STATUS_LABELS), right - 402, y + 5, 9, theme.brand_dark)
+        draw_text(pdf, font_name, label(getattr(item, "status", None), STATUS_LABELS), right - 402, y + 5, 9, theme.brand_dark)
         draw_text(pdf, font_name, sla_label(sla_status(item)), left + 92, y + 5, 8, (0.36, 0.42, 0.48))
         y -= 24
     draw_footer(pdf, font_name, f"طُبع بواسطة: {actor_name}", left, right)

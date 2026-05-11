@@ -172,6 +172,11 @@ powershell -ExecutionPolicy Bypass -File scripts/install-local.ps1
 - عرض سجلات وأخطاء النظام في بطاقة السجلات.
 - تسجيل العمليات المهمة في Audit Log.
 
+## وثائق النظام
+
+- [وثيقة النظام الكاملة](docs/QIB_SERVICE_PORTAL_SYSTEM_DOCUMENTATION.md)
+- [مخطط قاعدة البيانات](docs/database-schema.md)
+
 ## هيكل المشروع
 
 ```text

@@ -53,14 +53,13 @@ SCREEN_DEFINITIONS = [
     {"key": "messaging_settings", "label": "إعدادات المراسلات"},
     {"key": "ai_settings", "label": "إعدادات الذكاء الاصطناعي"},
     {"key": "database_settings", "label": "إعدادات قاعدة البيانات"},
-    {"key": "update_management", "label": "إدارة التحديثات"},
     {"key": "health_monitoring", "label": "مراقبة صحة النظام"},
     {"key": "document_settings", "label": "إعدادات الوثائق"},
     {"key": "settings", "label": "الإعدادات"},
 ]
 
 ALL_SCREEN_KEYS = {item["key"] for item in SCREEN_DEFINITIONS}
-MANAGEMENT_SCREEN_KEYS = {"dashboard", "requests", "approvals", "messages", "documents", "reports", "request_types", "users", "departments", "specialized_sections", "messaging_settings", "ai_settings", "database_settings", "update_management", "health_monitoring", "document_settings", "settings"}
+MANAGEMENT_SCREEN_KEYS = {"dashboard", "requests", "approvals", "messages", "documents", "reports", "request_types", "users", "departments", "specialized_sections", "messaging_settings", "ai_settings", "database_settings", "health_monitoring", "document_settings", "settings"}
 EMPLOYEE_SCREEN_KEYS = {"requests", "approvals", "messages", "documents", "reports"}
 DASHBOARD_SCREEN_ROLES = {UserRole.SUPER_ADMIN, UserRole.DEPARTMENT_MANAGER, UserRole.EXECUTIVE}
 ROLE_LABELS = {
@@ -118,8 +117,6 @@ ACTION_DEFINITIONS = [
     {"code": "manage_database", "label": "إدارة قاعدة البيانات", "group": "قاعدة البيانات", "dangerous": True},
     {"code": "restore_database", "label": "استعادة قاعدة البيانات", "group": "قاعدة البيانات", "dangerous": True},
     {"code": "reset_database", "label": "إعادة ضبط قاعدة البيانات", "group": "قاعدة البيانات", "dangerous": True},
-    {"code": "manage_updates", "label": "إدارة التحديثات", "group": "التحديثات", "dangerous": True},
-    {"code": "apply_local_update", "label": "تطبيق تحديث محلي", "group": "التحديثات", "dangerous": True},
     {"code": "manage_ai_settings", "label": "إدارة الذكاء الاصطناعي", "group": "الذكاء الاصطناعي", "dangerous": True},
     {"code": "audit_messages", "label": "تدقيق المراسلات", "group": "المراسلات", "dangerous": True},
     {"code": "view_confidential_messages", "label": "عرض الرسائل السرية", "group": "المراسلات", "dangerous": True},

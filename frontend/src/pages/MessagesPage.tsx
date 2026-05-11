@@ -1909,7 +1909,7 @@ export default function MessagesPage() {
               </div>
 
               {canUseAiDrafting && (
-                <div className="border-t border-slate-100 bg-slate-50/70 px-5 py-3">
+                <div className="message-compose-ai-strip border-t border-slate-100 bg-slate-50/70 px-5 py-3">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div>
                       <p className="text-sm font-black text-slate-800">المساعد الذكي</p>
@@ -1939,8 +1939,8 @@ export default function MessagesPage() {
                 </div>
               )}
 
-              <div className="bg-white">
-                <div className="sticky top-0 z-[1] border-b border-slate-200 bg-white/95 px-5 py-3 shadow-sm backdrop-blur">
+              <div className="message-compose-editor-shell bg-white">
+                <div className="message-compose-toolbar sticky top-0 z-[1] border-b border-slate-200 bg-white/95 px-5 py-3 shadow-sm backdrop-blur">
                   <div className="mb-2 flex items-center justify-between gap-3">
                     <div>
                       <p className="text-xs font-black text-slate-700">أدوات التحرير</p>
@@ -1983,9 +1983,9 @@ export default function MessagesPage() {
                   </ToolGroup>
                   <ToolGroup label="حجم الخط">
                     <ToolButton label="تصغير الخط" icon={ALargeSmall} onClick={() => changeFontSize("small")} />
-                    <button type="button" title="خط عادي" onClick={() => changeFontSize("normal")} className="inline-flex h-8 min-w-8 items-center justify-center rounded-md border border-slate-200 bg-white px-2 text-xs font-black text-slate-700 shadow-sm transition hover:border-bank-200 hover:bg-bank-50 hover:text-bank-800">عادي</button>
-                    <button type="button" title="تكبير الخط" onClick={() => changeFontSize("large")} className="inline-flex h-8 min-w-8 items-center justify-center rounded-md border border-slate-200 bg-white px-2 text-sm font-black text-slate-700 shadow-sm transition hover:border-bank-200 hover:bg-bank-50 hover:text-bank-800">كبير</button>
-                    <button type="button" title="تكبير أكبر" onClick={() => changeFontSize("x-large")} className="inline-flex h-8 min-w-8 items-center justify-center rounded-md border border-slate-200 bg-white px-2 text-base font-black text-slate-700 shadow-sm transition hover:border-bank-200 hover:bg-bank-50 hover:text-bank-800">أكبر</button>
+                    <button type="button" title="خط عادي" onClick={() => changeFontSize("normal")} className="message-tool-button inline-flex h-8 min-w-8 items-center justify-center rounded-md border border-slate-200 bg-white px-2 text-xs font-black text-slate-700 shadow-sm transition hover:border-bank-200 hover:bg-bank-50 hover:text-bank-800">عادي</button>
+                    <button type="button" title="تكبير الخط" onClick={() => changeFontSize("large")} className="message-tool-button inline-flex h-8 min-w-8 items-center justify-center rounded-md border border-slate-200 bg-white px-2 text-sm font-black text-slate-700 shadow-sm transition hover:border-bank-200 hover:bg-bank-50 hover:text-bank-800">كبير</button>
+                    <button type="button" title="تكبير أكبر" onClick={() => changeFontSize("x-large")} className="message-tool-button inline-flex h-8 min-w-8 items-center justify-center rounded-md border border-slate-200 bg-white px-2 text-base font-black text-slate-700 shadow-sm transition hover:border-bank-200 hover:bg-bank-50 hover:text-bank-800">أكبر</button>
                   </ToolGroup>
                   <ToolGroup label="قوائم">
                     <ToolButton label="قائمة نقطية" icon={List} onClick={() => insertList(false)} />
@@ -2004,7 +2004,7 @@ export default function MessagesPage() {
                         title="قوالب جاهزة"
                         onClick={() => setTemplatesOpen((value) => !value)}
                         disabled={messageTemplates.length === 0}
-                        className="inline-flex h-8 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-xs font-bold text-slate-700 hover:border-bank-200 hover:bg-bank-50 hover:text-bank-800 disabled:cursor-not-allowed disabled:opacity-50"
+                        className="message-tool-button inline-flex h-8 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-xs font-bold text-slate-700 hover:border-bank-200 hover:bg-bank-50 hover:text-bank-800 disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         <FileText className="h-4 w-4" />
                         قالب
@@ -2038,7 +2038,7 @@ export default function MessagesPage() {
                         setSignatureDraft(signatureText);
                         setSignatureOpen((value) => !value);
                       }}
-                      className="inline-flex h-[54px] items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 text-xs font-bold text-slate-700 hover:border-bank-200 hover:bg-bank-50 hover:text-bank-800"
+                      className="message-signature-button inline-flex h-[54px] items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 text-xs font-bold text-slate-700 hover:border-bank-200 hover:bg-bank-50 hover:text-bank-800"
                     >
                       <Signature className="h-4 w-4" />
                       إعداد التوقيع
@@ -2329,7 +2329,7 @@ export default function MessagesPage() {
 
 function ToolButton({ label, icon: Icon, onClick, disabled = false }: { label: string; icon: typeof Bold; onClick: () => void; disabled?: boolean }) {
   return (
-    <button type="button" title={label} aria-label={label} onClick={onClick} disabled={disabled} className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-700 shadow-sm transition hover:border-bank-200 hover:bg-bank-50 hover:text-bank-800 focus:outline-none focus:ring-2 focus:ring-bank-100 disabled:cursor-not-allowed disabled:opacity-50">
+    <button type="button" title={label} aria-label={label} onClick={onClick} disabled={disabled} className="message-tool-button inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-700 shadow-sm transition hover:border-bank-200 hover:bg-bank-50 hover:text-bank-800 focus:outline-none focus:ring-2 focus:ring-bank-100 disabled:cursor-not-allowed disabled:opacity-50">
       <Icon className="h-4 w-4" />
     </button>
   );
@@ -2452,7 +2452,7 @@ function MessageListItem({
 
 function ToolGroup({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div className="rounded-md border border-slate-200 bg-slate-50/80 p-1.5">
+    <div className="message-tool-group rounded-md border border-slate-200 bg-slate-50/80 p-1.5">
       <p className="mb-1 px-1 text-[10px] font-bold text-slate-400">{label}</p>
       <div className="flex items-center gap-1">{children}</div>
     </div>

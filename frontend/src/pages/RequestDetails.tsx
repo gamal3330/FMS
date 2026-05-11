@@ -99,6 +99,7 @@ const roleLabels: Record<string, string> = {
   direct_manager: "المدير المباشر",
   department_manager: "مدير الإدارة المختصة",
   department_specialist: "مختص الإدارة المختصة",
+  specific_department_manager: "مدير إدارة محددة",
   information_security: "أمن المعلومات (مرحلة قديمة)",
   administration_manager: "مدير إدارة",
   it_staff: "مختص تنفيذ",
@@ -337,7 +338,7 @@ export function RequestDetails() {
             <SectionTitle icon={UserCheck} title="مسار الموافقات" />
             <div className="mt-5 space-y-3">
               {[...(request.approvals ?? [])].sort((a, b) => a.step_order - b.step_order).map((step) => (
-                <ApprovalStepCard key={step.id} step={step} />
+                <ApprovalStepCard key={step.id} request={request} step={step} />
               ))}
               {(request.approvals ?? []).length === 0 && <Empty text="لا يوجد مسار موافقات مسجل." />}
             </div>
@@ -508,7 +509,7 @@ function buildTimeline(request: ServiceRequest | null, messages: LinkedMessage[]
           tone: "info"
         },
         ...[...(request.approvals ?? [])].sort((a, b) => a.step_order - b.step_order).map((step) => ({
-          title: roleLabels[step.role] ?? step.role,
+          title: approvalStepLabel(step, request),
           description: `${actionLabels[step.action] ?? step.action}${step.approver ? ` بواسطة ${step.approver.full_name_ar}` : ""}${step.note ? ` - ${step.note}` : ""}`,
           date: step.acted_at || request.updated_at,
           tone: step.action === "approved" ? "success" : step.action === "rejected" || step.action === "returned_for_edit" ? "danger" : "info"
@@ -541,6 +542,43 @@ function requestTypeName(request: ServiceRequest) {
   return typeof name === "string" && name ? name : request.form_data?.request_type_label || request.request_type || "-";
 }
 
+function workflowSectionName(request?: ServiceRequest | null) {
+  const formData = request?.form_data ?? {};
+  const snapshot = request?.request_type_snapshot ?? {};
+  const formSectionKey = formData.assigned_section || formData.administrative_section || "";
+  const snapshotSectionKey = typeof snapshot.assigned_section === "string" ? snapshot.assigned_section : "";
+  const snapshotSectionLabel = typeof snapshot.assigned_section_label === "string" ? snapshot.assigned_section_label : "";
+  const snapshotSpecializedName = typeof snapshot.specialized_section_name === "string" ? snapshot.specialized_section_name : "";
+
+  return (
+    formData.assigned_section_label ||
+    formData.administrative_section_label ||
+    snapshotSpecializedName ||
+    snapshotSectionLabel ||
+    sectionLabels[formSectionKey] ||
+    sectionLabels[snapshotSectionKey] ||
+    ""
+  );
+}
+
+function workflowDepartmentName(request?: ServiceRequest | null) {
+  const formData = request?.form_data ?? {};
+  const snapshot = request?.request_type_snapshot ?? {};
+  const formDepartmentName = typeof formData.assigned_department_name === "string" ? formData.assigned_department_name : "";
+  const snapshotDepartmentName = typeof snapshot.assigned_department_name === "string" ? snapshot.assigned_department_name : "";
+
+  return formDepartmentName || snapshotDepartmentName || request?.department?.name_ar || workflowSectionName(request);
+}
+
+function approvalStepLabel(step: ApprovalStep, request?: ServiceRequest | null) {
+  const departmentName = workflowDepartmentName(request);
+  const sectionName = workflowSectionName(request);
+  if (departmentName && step.role === "department_manager") return `مدير ${departmentName}`;
+  if (sectionName && step.role === "department_specialist") return `مختص ${sectionName}`;
+  if (departmentName && step.role === "specific_department_manager") return `مدير ${departmentName}`;
+  return roleLabels[step.role] ?? step.role;
+}
+
 function requestFieldRows(request: ServiceRequest) {
   const formData = request.form_data ?? {};
   const snapshot = [...(request.form_schema_snapshot || [])].sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
@@ -571,12 +609,12 @@ function SectionTitle({ icon: Icon, title }: { icon: typeof FileText; title: str
   );
 }
 
-function ApprovalStepCard({ step }: { step: ApprovalStep }) {
+function ApprovalStepCard({ request, step }: { request: ServiceRequest; step: ApprovalStep }) {
   return (
     <div className="rounded-md border border-slate-200 bg-white p-4">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
-          <p className="font-black text-slate-950">{roleLabels[step.role] ?? step.role}</p>
+          <p className="font-black text-slate-950">{approvalStepLabel(step, request)}</p>
           <p className="mt-1 text-xs text-slate-500">الخطوة {step.step_order}</p>
         </div>
         <span className={`rounded-full px-3 py-1 text-xs font-bold ${approvalTone(step.action)}`}>{actionLabels[step.action] ?? step.action}</span>

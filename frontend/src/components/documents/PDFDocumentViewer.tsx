@@ -35,7 +35,7 @@ export function PDFDocumentViewer({ documentId }: { documentId: number }) {
   }
   return (
     <div className="overflow-hidden rounded-lg border border-slate-200 bg-slate-100">
-      <iframe title="PDF Viewer" src={url} className="h-[72vh] w-full bg-white" />
+      <iframe title="PDF Viewer" src={url} className="h-[82vh] min-h-[760px] w-full bg-white xl:h-[calc(100vh-7rem)] xl:min-h-[940px]" />
     </div>
   );
 }

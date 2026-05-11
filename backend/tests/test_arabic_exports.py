@@ -28,7 +28,7 @@ class ArabicExportTests(unittest.TestCase):
         self.assertEqual(rows[0][1], "طلب صلاحية شبكة")
         self.assertEqual(rows[0][2], "عبدالله باجرش")
         self.assertEqual(rows[0][3], "قسم الشبكات")
-        self.assertEqual(rows[0][5], "بانتظار الموافقة")
+        self.assertEqual(rows[0][7], "بانتظار الموافقة")
 
     def test_excel_export_uses_rtl_sheet_and_right_alignment(self):
         stream = build_excel_report([sample_request()])
@@ -36,12 +36,12 @@ class ArabicExportTests(unittest.TestCase):
         sheet = workbook.active
 
         self.assertTrue(sheet.sheet_view.rightToLeft)
-        self.assertEqual(sheet["A1"].value, "رقم الطلب")
-        self.assertEqual(sheet["B2"].value, "طلب صلاحية شبكة")
-        self.assertEqual(sheet["C2"].value, "عبدالله باجرش")
-        self.assertEqual(sheet["A1"].alignment.horizontal, "right")
-        self.assertEqual(sheet["B2"].alignment.horizontal, "right")
-        self.assertEqual(sheet["B2"].alignment.readingOrder, 2.0)
+        self.assertEqual(sheet["A4"].value, "رقم الطلب")
+        self.assertEqual(sheet["B5"].value, "طلب صلاحية شبكة")
+        self.assertEqual(sheet["C5"].value, "عبدالله باجرش")
+        self.assertEqual(sheet["A4"].alignment.horizontal, "right")
+        self.assertEqual(sheet["B5"].alignment.horizontal, "right")
+        self.assertEqual(sheet["B5"].alignment.readingOrder, 2.0)
 
     def test_pdf_export_is_generated_with_reshaped_arabic(self):
         shaped = rtl("تقرير الطلبات")
