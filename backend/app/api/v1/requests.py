@@ -44,6 +44,7 @@ from app.services.workflow import (
     step_can_reject,
     step_can_return_for_edit,
     user_can_act as workflow_user_can_act,
+    workflow_snapshot_step,
 )
 from app.api.v1.request_type_management import (
     active_version_for_usage,
@@ -78,8 +79,9 @@ PRIORITY_LABELS = {"low": "منخفضة", "medium": "متوسطة", "high": "ع�
 ACTION_LABELS = {"pending": "بانتظار الإجراء", "approved": "تمت الموافقة", "rejected": "تم الرفض", "returned_for_edit": "أعيد للتعديل", "skipped": "تم التجاوز"}
 ROLE_LABELS = {
     "direct_manager": "المدير المباشر",
-    "department_manager": "مدير الإدارة المختصة",
-    "department_specialist": "مختص الإدارة المختصة",
+    "department_manager": "مدير الإدارة",
+    "department_specialist": "مختص الإدارة",
+    "specific_department_manager": "مدير إدارة",
     "information_security": "أمن المعلومات (مرحلة قديمة)",
     "administration_manager": "مدير إدارة",
     "it_staff": "مختص تنفيذ",
@@ -500,6 +502,118 @@ def can_view_request_linked_message(message: InternalMessage, service_request: S
     return False
 
 
+def _workflow_section_name(db: Session, service_request: ServiceRequest) -> str:
+    form_data = service_request.form_data or {}
+    snapshot = service_request.request_type_snapshot or {}
+    section_code = form_data.get("assigned_section") or form_data.get("administrative_section") or snapshot.get("assigned_section")
+    section_label = (
+        form_data.get("assigned_section_label")
+        or form_data.get("administrative_section_label")
+        or snapshot.get("specialized_section_name")
+        or snapshot.get("assigned_section_label")
+    )
+    if section_label:
+        return str(section_label)
+    if section_code:
+        section = db.scalar(select(SpecializedSection).where(SpecializedSection.code == str(section_code)))
+        if section:
+            return section.name_ar
+    return ""
+
+
+def _workflow_department_name(db: Session, service_request: ServiceRequest) -> str:
+    form_data = service_request.form_data or {}
+    snapshot = service_request.request_type_snapshot or {}
+    department_name = form_data.get("assigned_department_name") or snapshot.get("assigned_department_name")
+    if department_name:
+        return str(department_name)
+    department_id = form_data.get("assigned_department_id") or snapshot.get("assigned_department_id")
+    if department_id:
+        try:
+            department = db.get(Department, int(department_id))
+        except (TypeError, ValueError):
+            department = None
+        if department:
+            return department.name_ar
+    section_code = form_data.get("assigned_section") or form_data.get("administrative_section") or snapshot.get("assigned_section")
+    if section_code:
+        section = db.scalar(select(SpecializedSection).where(SpecializedSection.code == str(section_code)))
+        if section and section.department_id:
+            department = db.get(Department, section.department_id)
+            if department:
+                return department.name_ar
+    if service_request.department:
+        return service_request.department.name_ar
+    return _workflow_section_name(db, service_request)
+
+
+def _target_department_name(db: Session, target_department_id: object) -> str:
+    if not target_department_id:
+        return ""
+    try:
+        department = db.get(Department, int(target_department_id))
+    except (TypeError, ValueError):
+        return ""
+    return department.name_ar if department else ""
+
+
+def _target_department_display_name(db: Session, snapshot_step: dict) -> str:
+    target_name = snapshot_step.get("target_department_name")
+    if target_name:
+        return str(target_name)
+    return _target_department_name(db, snapshot_step.get("target_department_id"))
+
+
+def _target_role_name(db: Session, role_id: object) -> str:
+    if not role_id:
+        return ""
+    try:
+        role = db.get(Role, int(role_id))
+    except (TypeError, ValueError):
+        return ""
+    return role.name_ar if role else ""
+
+
+def _target_user_name(db: Session, user_id: object) -> str:
+    if not user_id:
+        return ""
+    try:
+        user = db.get(User, int(user_id))
+    except (TypeError, ValueError):
+        return ""
+    return user.full_name_ar if user else ""
+
+
+def approval_step_display_label(db: Session, service_request: ServiceRequest, step: ApprovalStep) -> str:
+    role_value = str(step.role or "")
+    snapshot_step = workflow_snapshot_step(service_request, step) or {}
+    department_name = _workflow_department_name(db, service_request)
+    section_name = _workflow_section_name(db, service_request)
+
+    if role_value == UserRole.DIRECT_MANAGER.value:
+        return "المدير المباشر"
+    if role_value == "department_manager":
+        return f"مدير {department_name}" if department_name else ROLE_LABELS[role_value]
+    if role_value == DEPARTMENT_SPECIALIST_STEP:
+        return f"مختص {section_name or department_name}" if (section_name or department_name) else ROLE_LABELS[role_value]
+    if role_value in IMPLEMENTATION_STEP_ROLES:
+        return f"مختص {section_name or department_name}" if (section_name or department_name) else ROLE_LABELS.get(role_value, "مختص تنفيذ")
+    if role_value == "specific_department_manager":
+        target_name = _target_department_display_name(db, snapshot_step)
+        return f"مدير {target_name}" if target_name else ROLE_LABELS[role_value]
+    if role_value == "specific_role":
+        role_name = _target_role_name(db, snapshot_step.get("approver_role_id"))
+        return role_name or ROLE_LABELS[role_value]
+    if role_value == "specific_user":
+        user_name = _target_user_name(db, snapshot_step.get("approver_user_id"))
+        return user_name or ROLE_LABELS[role_value]
+    if role_value == UserRole.DEPARTMENT_MANAGER.value:
+        return f"مدير {department_name}" if department_name else ROLE_LABELS.get(role_value, "مدير إدارة")
+    if role_value == UserRole.IT_STAFF.value:
+        return f"مختص {section_name or department_name}" if (section_name or department_name) else ROLE_LABELS.get(role_value, "مختص تنفيذ")
+    return ROLE_LABELS.get(role_value, role_value or "مرحلة موافقة")
+
+
 def enrich_approval_steps(db: Session, service_request: ServiceRequest | None, current_user: User | None = None) -> ServiceRequest | None:
     if not service_request:
         return service_request
@@ -507,6 +621,7 @@ def enrich_approval_steps(db: Session, service_request: ServiceRequest | None, c
         step.can_reject = step.action == ApprovalAction.PENDING and step_can_reject(db, service_request, step)
         step.can_return_for_edit = step.action == ApprovalAction.PENDING and step_can_return_for_edit(db, service_request, step)
         step.can_act = bool(current_user and step.action == ApprovalAction.PENDING and workflow_user_can_act(db, service_request, current_user, step))
+        step.display_label = approval_step_display_label(db, service_request, step)
     return service_request
 
 

@@ -45,19 +45,29 @@ def check_integrity(db: Session, actor: User) -> dict:
     return log_maintenance(db, "check_integrity", "success", "تم تنفيذ فحص اتصال وسلامة أساسي لقواعد PostgreSQL", actor)
 
 
+def execute_maintenance_command(db: Session, command: str) -> None:
+    bind = db.get_bind()
+    with bind.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
+        connection.execute(text(command))
+
+
 def optimize_database(db: Session, actor: User) -> dict:
     engine_name = database_engine_name()
     job = create_job(db, "maintenance", actor, "جاري تحسين قاعدة البيانات")
+    db.commit()
     try:
         if engine_name == "sqlite":
-            db.execute(text("VACUUM"))
+            execute_maintenance_command(db, "VACUUM")
         elif engine_name == "postgresql":
-            db.execute(text("ANALYZE"))
+            execute_maintenance_command(db, "ANALYZE")
         else:
             db.execute(text("SELECT 1"))
+        job = db.merge(job)
         finish_job(db, job, "success", "تم تحسين قاعدة البيانات")
         return log_maintenance(db, "optimize", "success", "تم تحسين قاعدة البيانات", actor, {"job_id": job.id})
     except Exception as exc:
+        db.rollback()
+        job = db.merge(job)
         finish_job(db, job, "failed", str(exc)[:500])
         db.commit()
         raise HTTPException(status_code=500, detail="فشل تحسين قاعدة البيانات") from exc

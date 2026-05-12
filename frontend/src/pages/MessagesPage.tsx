@@ -167,6 +167,8 @@ type MessageSettings = {
   enable_read_receipts: boolean;
   enable_unread_badge: boolean;
   enable_linked_requests: boolean;
+  require_request_for_clarification?: boolean;
+  require_request_for_execution_note?: boolean;
   enable_message_notifications: boolean;
   notify_on_new_message: boolean;
   notify_on_reply: boolean;

@@ -97,9 +97,9 @@ const priorityLabels: Record<string, string> = {
 
 const roleLabels: Record<string, string> = {
   direct_manager: "المدير المباشر",
-  department_manager: "مدير الإدارة المختصة",
-  department_specialist: "مختص الإدارة المختصة",
-  specific_department_manager: "مدير إدارة محددة",
+  department_manager: "مدير الإدارة",
+  department_specialist: "مختص الإدارة",
+  specific_department_manager: "مدير إدارة",
   information_security: "أمن المعلومات (مرحلة قديمة)",
   administration_manager: "مدير إدارة",
   it_staff: "مختص تنفيذ",
@@ -571,6 +571,7 @@ function workflowDepartmentName(request?: ServiceRequest | null) {
 }
 
 function approvalStepLabel(step: ApprovalStep, request?: ServiceRequest | null) {
+  if (step.display_label) return step.display_label;
   const departmentName = workflowDepartmentName(request);
   const sectionName = workflowSectionName(request);
   if (departmentName && step.role === "department_manager") return `مدير ${departmentName}`;

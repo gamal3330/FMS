@@ -78,6 +78,8 @@ MESSAGE_SETTINGS_DEFAULTS = {
     "enable_message_notifications": True,
     "show_messages_tab_in_request_details": True,
     "show_message_count_on_request": True,
+    "require_request_for_clarification": True,
+    "require_request_for_execution_note": True,
     "allow_request_owner_to_view_messages": False,
     "allow_approvers_to_view_request_messages": True,
     "notify_on_new_message": True,
@@ -319,6 +321,8 @@ def load_message_settings(db: Session) -> dict:
         loaded["allow_send_message_from_request"] = bool(integration.allow_send_message_from_request)
         loaded["show_messages_tab_in_request_details"] = bool(integration.show_messages_tab_in_request_details)
         loaded["show_message_count_on_request"] = bool(integration.show_message_count_on_request)
+        loaded["require_request_for_clarification"] = bool(integration.require_request_for_clarification)
+        loaded["require_request_for_execution_note"] = bool(integration.require_request_for_execution_note)
         loaded["allow_request_owner_to_view_messages"] = bool(integration.allow_request_owner_to_view_messages)
         loaded["allow_approvers_to_view_request_messages"] = bool(integration.allow_approvers_to_view_request_messages)
     if notifications is not None:
@@ -476,6 +480,19 @@ def get_structured_message_type(db: Session, value: str | None) -> MessageType |
     return db.scalar(select(MessageType).where(MessageType.code == structured_message_type_code(value)))
 
 
+def message_type_requires_request(db: Session, item: MessageType) -> bool:
+    if not item.requires_request:
+        return False
+    integration = db.scalar(select(MessageRequestIntegrationSettings).limit(1))
+    if not integration:
+        return bool(item.requires_request)
+    if item.code in {"clarification_request", "clarification_response"}:
+        return bool(integration.require_request_for_clarification)
+    if item.code == "execution_note":
+        return bool(integration.require_request_for_execution_note)
+    return bool(item.requires_request)
+
+
 def load_message_types(db: Session) -> list[dict]:
     rows = db.scalars(select(MessageType).order_by(MessageType.sort_order, MessageType.id)).all()
     if rows:
@@ -487,7 +504,7 @@ def load_message_types(db: Session) -> list[dict]:
                 "color": item.color,
                 "icon": item.icon,
                 "is_official": bool(item.is_official),
-                "requires_request": bool(item.requires_request),
+                "requires_request": message_type_requires_request(db, item),
                 "requires_attachment": bool(item.requires_attachment),
                 "show_in_pdf": bool(item.show_in_pdf),
                 "allow_reply": bool(item.allow_reply),
@@ -821,7 +838,7 @@ def validate_message_type_rules(db: Session, message_type: str, related_request_
         return
     if not configured_type.is_active:
         raise HTTPException(status_code=403, detail="تصنيف الرسالة غير مفعل")
-    if configured_type.requires_request and not related_request_id:
+    if message_type_requires_request(db, configured_type) and not related_request_id:
         raise HTTPException(status_code=422, detail=f"تصنيف {configured_type.name_ar} يتطلب ربط الرسالة بطلب")
     if configured_type.requires_attachment and attachment_count <= 0:
         raise HTTPException(status_code=422, detail=f"تصنيف {configured_type.name_ar} يتطلب إضافة مرفق")

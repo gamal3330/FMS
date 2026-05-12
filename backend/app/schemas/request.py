@@ -27,6 +27,7 @@ class ApprovalStepRead(BaseModel):
     id: int
     step_order: int
     role: str
+    display_label: str | None = None
     action: ApprovalAction
     can_reject: bool = True
     can_return_for_edit: bool = False

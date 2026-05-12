@@ -99,6 +99,8 @@ class MessageSettingsRead(BaseModel):
     allow_send_message_from_request: bool = True
     show_messages_tab_in_request_details: bool = True
     show_message_count_on_request: bool = True
+    require_request_for_clarification: bool = True
+    require_request_for_execution_note: bool = True
     allow_request_owner_to_view_messages: bool = False
     allow_approvers_to_view_request_messages: bool = True
     enable_message_notifications: bool = True

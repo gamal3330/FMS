@@ -31,6 +31,7 @@ export interface ApprovalStep {
   id: number;
   step_order: number;
   role: string;
+  display_label?: string | null;
   action: ApprovalAction;
   can_reject?: boolean;
   can_return_for_edit?: boolean;

@@ -172,8 +172,11 @@ def workflow_snapshot(db: Session, request_type_id: int) -> list[dict]:
             "step_name_en": step.step_name_en,
             "step_type": step.step_type,
             "approver_role_id": step.approver_role_id,
+            "approver_role_name": db.get(Role, step.approver_role_id).name_ar if step.approver_role_id and db.get(Role, step.approver_role_id) else None,
             "approver_user_id": step.approver_user_id,
+            "approver_user_name": db.get(User, step.approver_user_id).full_name_ar if step.approver_user_id and db.get(User, step.approver_user_id) else None,
             "target_department_id": step.target_department_id,
+            "target_department_name": db.get(Department, step.target_department_id).name_ar if step.target_department_id and db.get(Department, step.target_department_id) else None,
             "is_mandatory": step.is_mandatory,
             "can_reject": step.can_reject,
             "can_return_for_edit": step.can_return_for_edit,
@@ -193,8 +196,11 @@ def build_version_snapshot(db: Session, request_type: RequestTypeSetting) -> dic
         .where(RequestTypeField.request_type_id == request_type.id, RequestTypeField.is_active == True)
         .order_by(RequestTypeField.sort_order)
     ).all()
+    snapshot = request_type_snapshot(request_type)
+    snapshot["assigned_department_name"] = department_label(db, request_type.assigned_department_id)
+    snapshot["specialized_section_name"] = section_label(db, request_type.assigned_section)
     return {
-        "request_type": request_type_snapshot(request_type),
+        "request_type": snapshot,
         "fields": form_schema_snapshot(fields),
         "workflow": workflow_snapshot(db, request_type.id),
     }
@@ -1361,6 +1367,16 @@ def section_department_id(db: Session, code: str | None) -> int | None:
     return section.department_id if section else None
 
 
+def department_label(db: Session, department_id: object) -> str:
+    if not department_id:
+        return ""
+    try:
+        department = db.get(Department, int(department_id))
+    except (TypeError, ValueError):
+        return ""
+    return department.name_ar if department else ""
+
+
 def sla_due_from_request_type_config(request_type_config: dict) -> datetime | None:
     hours = request_type_config.get("sla_resolution_hours") or request_type_config.get("sla_response_hours")
     if hours in (None, ""):
@@ -1451,6 +1467,8 @@ def submit_dynamic_request(payload: RequestSubmitPayload, db: Session = Depends(
     if not assigned_department_id:
         assigned_department_id = section_department_id(db, assigned_section)
     assigned_to_id = resolve_assigned_user_id(db, request_type_config, assigned_section)
+    assigned_section_label = section_label(db, assigned_section)
+    assigned_department_name = department_label(db, assigned_department_id)
     if not assigned_section and not assigned_department_id:
         raise HTTPException(status_code=409, detail="نوع الطلب غير مرتبط بقسم مختص")
     if not workflow_steps:
@@ -1470,10 +1488,11 @@ def submit_dynamic_request(payload: RequestSubmitPayload, db: Session = Depends(
         "request_type_code": request_type_config.get("code") or request_type.code,
         "request_type_label": request_type_config.get("name_ar") or request_type.name_ar,
         "administrative_section": assigned_section,
-        "administrative_section_label": section_label(db, assigned_section),
+        "administrative_section_label": assigned_section_label,
         "assigned_section": assigned_section,
-        "assigned_section_label": section_label(db, assigned_section),
+        "assigned_section_label": assigned_section_label,
         "assigned_department_id": assigned_department_id,
+        "assigned_department_name": assigned_department_name,
     }
     service_request = ServiceRequest(
         request_number=next_request_number(db),
@@ -1488,7 +1507,13 @@ def submit_dynamic_request(payload: RequestSubmitPayload, db: Session = Depends(
         status=RequestStatus.PENDING_APPROVAL,
         priority=priority,
         form_data=form_data,
-        request_type_snapshot={**request_type_config, "assigned_department_id": assigned_department_id, "workflow": workflow_steps},
+        request_type_snapshot={
+            **request_type_config,
+            "assigned_department_id": assigned_department_id,
+            "assigned_department_name": assigned_department_name,
+            "specialized_section_name": assigned_section_label,
+            "workflow": workflow_steps,
+        },
         form_schema_snapshot=fields,
         business_justification=payload.business_justification,
         sla_due_at=sla_due_from_request_type_config(request_type_config),
