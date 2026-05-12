@@ -401,12 +401,12 @@ function VersionsPanel({ documents, selectedDocumentId, setSelectedDocumentId, o
 }
 
 function PermissionsPanel({ categories, documents, departments, roles, permissions, onSaved, notify }: { categories: DocumentCategory[]; documents: LibraryDocument[]; departments: Department[]; roles: Role[]; permissions: any[]; onSaved: () => void; notify: (value: { type: "success" | "error"; message: string }) => void }) {
-  const [form, setForm] = useState({ category_id: "", document_id: "", role_id: "", department_id: "", can_view: true, can_download: true, can_print: true, can_manage: false });
+  const [form, setForm] = useState({ category_id: "", document_id: "", role_id: "", department_id: "", can_view: true, can_download: false, can_print: false, can_manage: false });
   const [editingId, setEditingId] = useState<number | null>(null);
 
   function resetForm() {
     setEditingId(null);
-    setForm({ category_id: "", document_id: "", role_id: "", department_id: "", can_view: true, can_download: true, can_print: true, can_manage: false });
+    setForm({ category_id: "", document_id: "", role_id: "", department_id: "", can_view: true, can_download: false, can_print: false, can_manage: false });
   }
 
   function editPermission(permission: any) {
@@ -417,8 +417,8 @@ function PermissionsPanel({ categories, documents, departments, roles, permissio
       role_id: permission.role_id ? String(permission.role_id) : "",
       department_id: permission.department_id ? String(permission.department_id) : "",
       can_view: Boolean(permission.can_view),
-      can_download: Boolean(permission.can_download),
-      can_print: Boolean(permission.can_print),
+      can_download: false,
+      can_print: false,
       can_manage: Boolean(permission.can_manage)
     });
     window.setTimeout(() => document.getElementById("document-permission-form")?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
@@ -429,7 +429,7 @@ function PermissionsPanel({ categories, documents, departments, roles, permissio
     try {
       await apiFetch(editingId ? `/documents/permissions/${editingId}` : "/documents/permissions", {
         method: editingId ? "PUT" : "POST",
-        body: JSON.stringify(emptyToNull(form))
+        body: JSON.stringify(emptyToNull({ ...form, can_download: false, can_print: false }))
       });
       notify({ type: "success", message: editingId ? "تم تحديث صلاحية الوثائق." : "تم حفظ صلاحية الوثائق." });
       resetForm();
@@ -458,9 +458,23 @@ function PermissionsPanel({ categories, documents, departments, roles, permissio
         <Field label="الوثيقة"><Select value={form.document_id} onChange={(value) => setForm({ ...form, document_id: value, category_id: "" })} options={documents.map((d) => [String(d.id), d.title_ar])} placeholder="اختياري" /></Field>
         <Field label="الدور"><Select value={form.role_id} onChange={(value) => setForm({ ...form, role_id: value })} options={roles.map((r) => [String(r.id), r.name_ar || r.label_ar || r.code || r.name || String(r.id)])} placeholder="اختياري" /></Field>
         <Field label="الإدارة"><Select value={form.department_id} onChange={(value) => setForm({ ...form, department_id: value })} options={departments.map((d) => [String(d.id), d.name_ar])} placeholder="اختياري" /></Field>
-        {(["can_view", "can_download", "can_print", "can_manage"] as const).map((key) => (
-          <label key={key} className="flex h-11 items-center gap-3 rounded-md border border-slate-200 px-3 text-sm font-bold text-slate-700"><input type="checkbox" checked={Boolean(form[key])} onChange={(e) => setForm({ ...form, [key]: e.target.checked })} /> {permissionLabel(key)}</label>
-        ))}
+        {(["can_view", "can_download", "can_print", "can_manage"] as const).map((key) => {
+          const disabledGlobally = key === "can_download" || key === "can_print";
+          return (
+            <label key={key} className={`flex h-11 items-center gap-3 rounded-md border border-slate-200 px-3 text-sm font-bold ${disabledGlobally ? "bg-slate-50 text-slate-400" : "text-slate-700"}`}>
+              <input
+                type="checkbox"
+                disabled={disabledGlobally}
+                checked={disabledGlobally ? false : Boolean(form[key])}
+                onChange={(e) => setForm({ ...form, [key]: e.target.checked })}
+              />
+              {permissionLabel(key)}
+            </label>
+          );
+        })}
+        <div className="md:col-span-4 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-bold text-amber-800">
+          التحميل والطباعة معطلان حاليًا على جميع الوثائق من سياسة النظام. يسمح النظام بالعرض فقط حسب الصلاحية.
+        </div>
         <button className="inline-flex h-11 items-center justify-center gap-2 rounded-md bg-bank-600 px-5 text-sm font-black text-white"><LockKeyhole className="h-4 w-4" /> {editingId ? "تحديث الصلاحية" : "حفظ الصلاحية"}</button>
         {editingId && <button type="button" onClick={resetForm} className="inline-flex h-11 items-center justify-center gap-2 rounded-md border border-slate-200 px-5 text-sm font-bold text-slate-700">إلغاء التعديل</button>}
       </form>

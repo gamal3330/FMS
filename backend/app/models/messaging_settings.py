@@ -19,6 +19,7 @@ class MessagingSettings(Base):
     allow_archiving: Mapped[bool] = mapped_column(Boolean, default=True)
     enable_read_receipts: Mapped[bool] = mapped_column(Boolean, default=True)
     enable_unread_badge: Mapped[bool] = mapped_column(Boolean, default=True)
+    enable_templates: Mapped[bool] = mapped_column(Boolean, default=True)
     default_priority: Mapped[str] = mapped_column(String(30), default="normal")
     max_recipients: Mapped[int] = mapped_column(Integer, default=10)
     allow_multiple_recipients: Mapped[bool] = mapped_column(Boolean, default=True)

@@ -39,6 +39,8 @@ PUBLIC_CLASSIFICATIONS = {"public", "internal"}
 RESTRICTED_CLASSIFICATIONS = {"confidential", "top_secret"}
 DOCUMENT_STATUSES = {"active", "archived", "draft"}
 SCREEN_PERMISSION_LEVELS = ["no_access", "view", "create", "edit", "delete", "export", "manage"]
+DOCUMENT_DOWNLOADS_ENABLED = False
+DOCUMENT_PRINTING_ENABLED = False
 
 
 def screen_permission_level_allows(level: str | None, capability: str) -> bool:
@@ -93,8 +95,8 @@ class PermissionPayload(BaseModel):
     role_id: int | None = None
     department_id: int | None = None
     can_view: bool = True
-    can_download: bool = True
-    can_print: bool = True
+    can_download: bool = False
+    can_print: bool = False
     can_manage: bool = False
 
 
@@ -234,6 +236,10 @@ def permission_rows_for_document(db: Session, user: User, document: Document) ->
 
 
 def can_access_document(db: Session, user: User, document: Document, action: str = "view") -> bool:
+    if action == "download" and not DOCUMENT_DOWNLOADS_ENABLED:
+        return False
+    if action == "print" and not DOCUMENT_PRINTING_ENABLED:
+        return False
     if user.role == UserRole.SUPER_ADMIN:
         return True
     if has_document_settings_permission(db, user, "manage"):
@@ -259,6 +265,10 @@ def can_access_document(db: Session, user: User, document: Document, action: str
 
 
 def require_document_access(db: Session, user: User, document: Document, action: str = "view") -> None:
+    if action == "download" and not DOCUMENT_DOWNLOADS_ENABLED:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="تحميل الوثائق معطل من سياسة النظام")
+    if action == "print" and not DOCUMENT_PRINTING_ENABLED:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="طباعة الوثائق معطلة من سياسة النظام")
     if not can_access_document(db, user, document, action):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="لا تملك صلاحية الوصول إلى هذه الوثيقة")
 
@@ -393,8 +403,8 @@ def permission_summary(row: DocumentPermission) -> dict:
         "role_id": row.role_id,
         "department_id": row.department_id,
         "can_view": row.can_view,
-        "can_download": row.can_download,
-        "can_print": row.can_print,
+        "can_download": bool(row.can_download and DOCUMENT_DOWNLOADS_ENABLED),
+        "can_print": bool(row.can_print and DOCUMENT_PRINTING_ENABLED),
         "can_manage": row.can_manage,
         "created_at": row.created_at,
         "updated_at": row.updated_at,
@@ -1005,10 +1015,13 @@ def create_permission(payload: PermissionPayload, request: Request, db: Session 
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="يجب تحديد تصنيف أو وثيقة")
     if not any([payload.role_id, payload.department_id]):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="يجب تحديد دور أو إدارة")
-    row = DocumentPermission(**payload.model_dump())
+    data = payload.model_dump()
+    data["can_download"] = False
+    data["can_print"] = False
+    row = DocumentPermission(**data)
     db.add(row)
     db.flush()
-    write_audit(db, "document_permission_changed", "document_permission", actor=current_user, entity_id=str(row.id), ip_address=client_ip(request), user_agent=request_user_agent(request), metadata=payload.model_dump())
+    write_audit(db, "document_permission_changed", "document_permission", actor=current_user, entity_id=str(row.id), ip_address=client_ip(request), user_agent=request_user_agent(request), metadata=data)
     db.commit()
     db.refresh(row)
     return permission_summary(
@@ -1035,10 +1048,13 @@ def update_permission(permission_id: int, payload: PermissionPayload, request: R
     if not row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="صلاحية الوثيقة غير موجودة")
     old_value = permission_summary(row)
-    for key, value in payload.model_dump().items():
+    data = payload.model_dump()
+    data["can_download"] = False
+    data["can_print"] = False
+    for key, value in data.items():
         setattr(row, key, value)
     db.flush()
-    write_audit(db, "document_permission_changed", "document_permission", actor=current_user, entity_id=str(row.id), ip_address=client_ip(request), user_agent=request_user_agent(request), metadata={"old": old_value, "new": payload.model_dump()})
+    write_audit(db, "document_permission_changed", "document_permission", actor=current_user, entity_id=str(row.id), ip_address=client_ip(request), user_agent=request_user_agent(request), metadata={"old": old_value, "new": data})
     db.commit()
     return permission_summary(
         db.scalar(

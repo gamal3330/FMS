@@ -30,7 +30,8 @@ from app.models.settings import PortalSetting
 from app.models.user import User
 from app.schemas.message import InternalMessageCreate, InternalMessageDraftUpsert, InternalMessageForward, InternalMessageRead, InternalMessageReply, MessageAttachmentRead, MessageBulkAction, MessageCapabilitiesRead, MessageClassificationRead, MessageCounters, MessageReadReceipt, MessageSettingsRead, MessageSettingsUpdate, MessageSignatureRead, MessageSignatureUpdate, MessageTemplateRead, MessageTemplatesUpdate, MessageTypeRead, MessageTypesUpdate, MessageUserRead
 from app.services.audit import write_audit
-from app.services.messaging_settings_service import get_effective_message_attachment_max_mb
+from app.services.messaging_settings_service import ensure_messaging_settings_schema, get_effective_message_attachment_max_mb
+from app.services.official_messages import can_manage_official_assets, has_action_permission
 from app.services.realtime import message_notification_payload, notification_manager
 from app.services.virus_scan import scan_file_or_raise
 
@@ -192,8 +193,20 @@ def ensure_message_runtime_columns(db: Session) -> None:
         if "classification_code" not in columns:
             db.execute(text("ALTER TABLE internal_messages ADD COLUMN classification_code VARCHAR(80) DEFAULT 'internal'"))
             db.execute(text("UPDATE internal_messages SET classification_code = 'internal' WHERE classification_code IS NULL OR classification_code = ''"))
+        official_columns = {
+            "is_official": "BOOLEAN DEFAULT FALSE",
+            "official_reference_number": "VARCHAR(80)",
+            "include_in_request_pdf": "BOOLEAN DEFAULT FALSE",
+            "official_pdf_document_id": "INTEGER",
+            "official_status": "VARCHAR(40) DEFAULT 'sent'",
+        }
+        for column_name, definition in official_columns.items():
+            if column_name not in columns:
+                db.execute(text(f"ALTER TABLE internal_messages ADD COLUMN {column_name} {definition}"))
         db.execute(text('CREATE INDEX IF NOT EXISTS "idx_internal_messages_priority_created" ON "internal_messages" (priority, created_at)'))
         db.execute(text('CREATE INDEX IF NOT EXISTS "idx_internal_messages_classification_created" ON "internal_messages" (classification_code, created_at)'))
+        db.execute(text('CREATE INDEX IF NOT EXISTS "idx_internal_messages_is_official_created" ON "internal_messages" (is_official, created_at)'))
+        db.execute(text('CREATE INDEX IF NOT EXISTS "idx_internal_messages_official_reference" ON "internal_messages" (official_reference_number)'))
         db.commit()
         _MESSAGE_RUNTIME_COLUMNS_READY = True
     except Exception:
@@ -265,6 +278,7 @@ def message_settings_setting(db: Session) -> PortalSetting | None:
 
 def load_message_settings(db: Session) -> dict:
     ensure_message_runtime_columns(db)
+    ensure_messaging_settings_schema(db)
     setting = message_settings_setting(db)
     value = setting.setting_value if setting and isinstance(setting.setting_value, dict) else {}
     loaded = {**MESSAGE_SETTINGS_DEFAULTS, **value}
@@ -286,6 +300,7 @@ def load_message_settings(db: Session) -> dict:
         loaded["allow_multiple_recipients"] = bool(general.allow_multiple_recipients)
         loaded["enable_read_receipts"] = bool(general.enable_read_receipts)
         loaded["enable_unread_badge"] = bool(general.enable_unread_badge)
+        loaded["enable_templates"] = bool(general.enable_templates)
         loaded["enable_circulars"] = bool(general.allow_broadcast_messages)
         loaded["enable_department_broadcasts"] = bool(general.allow_broadcast_messages)
         loaded["default_priority"] = general.default_priority or loaded.get("default_priority") or "normal"
@@ -634,6 +649,11 @@ def message_read(message: InternalMessage, current_user: User, recipient_state: 
         recipient_names=[recipient.recipient.full_name_ar for recipient in message.recipients if recipient.recipient],
         related_request_id=message.related_request_id,
         related_request_number=message.related_request.request_number if getattr(message, "related_request", None) else None,
+        is_official=bool(getattr(message, "is_official", False) or structured_message_type_code(message.message_type) == "official_message"),
+        official_reference_number=getattr(message, "official_reference_number", None),
+        include_in_request_pdf=bool(getattr(message, "include_in_request_pdf", False)),
+        official_pdf_document_id=getattr(message, "official_pdf_document_id", None),
+        official_status=getattr(message, "official_status", None),
         is_read=True if message.sender_id == current_user.id else bool(recipient_state and recipient_state.is_read),
         is_archived=bool(message.is_sender_archived) if message.sender_id == current_user.id else bool(recipient_state and recipient_state.is_archived),
         is_draft=bool(message.is_draft),
@@ -654,6 +674,7 @@ def can_access_message(message: InternalMessage, user: User) -> bool:
 
 
 def load_message_with_access(db: Session, message_id: int, current_user: User) -> InternalMessage:
+    ensure_message_runtime_columns(db)
     message = db.scalar(
         select(InternalMessage)
         .options(
@@ -789,6 +810,8 @@ def authorize_message_type(db: Session, user: User, value: str | None, message_s
     settings_value = message_settings or load_message_settings(db)
     if message_type == "circular" and not can_send_circular(settings_value, user):
         raise HTTPException(status_code=403, detail="لا تملك صلاحية إرسال التعاميم")
+    if structured_message_type_code(message_type) == "official_message" and not has_action_permission(db, user, "create_official_message", default=can_manage_official_assets(user)):
+        raise HTTPException(status_code=403, detail="لا تملك صلاحية إنشاء مراسلة رسمية")
     return message_type
 
 
@@ -867,6 +890,8 @@ def create_message_record(
         message_uid=generate_message_uid(db),
         sender_id=current_user.id,
         message_type=authorized_message_type,
+        is_official=structured_message_type_code(authorized_message_type) == "official_message",
+        official_status="sent" if structured_message_type_code(authorized_message_type) == "official_message" else None,
         priority=normalize_message_priority(priority, message_settings),
         classification_code=normalize_message_classification(db, classification_code),
         subject=subject.strip(),
@@ -1357,6 +1382,8 @@ def create_draft(payload: InternalMessageDraftUpsert, db: Session = Depends(get_
         message_uid=generate_message_uid(db),
         sender_id=current_user.id,
         message_type=authorize_message_type(db, current_user, payload.message_type),
+        is_official=structured_message_type_code(payload.message_type) == "official_message",
+        official_status="draft" if structured_message_type_code(payload.message_type) == "official_message" else None,
         priority=normalize_message_priority(payload.priority, message_settings),
         classification_code=normalize_message_classification(db, payload.classification_code),
         subject=payload.subject.strip(),
@@ -1399,6 +1426,8 @@ async def create_draft_with_attachments(
         message_uid=generate_message_uid(db),
         sender_id=current_user.id,
         message_type=authorize_message_type(db, current_user, message_type),
+        is_official=structured_message_type_code(message_type) == "official_message",
+        official_status="draft" if structured_message_type_code(message_type) == "official_message" else None,
         priority=normalize_message_priority(priority, message_settings),
         classification_code=normalize_message_classification(db, classification_code),
         subject=subject.strip(),
@@ -1430,6 +1459,8 @@ def update_draft(draft_id: int, payload: InternalMessageDraftUpsert, db: Session
         raise HTTPException(status_code=403, detail="المراسلات العامة غير مفعلة. يجب ربط المسودة بطلب")
     draft.subject = payload.subject.strip()
     draft.message_type = authorize_message_type(db, current_user, payload.message_type, message_settings)
+    draft.is_official = structured_message_type_code(draft.message_type) == "official_message"
+    draft.official_status = "draft" if draft.is_official else None
     draft.priority = normalize_message_priority(payload.priority, message_settings)
     draft.classification_code = normalize_message_classification(db, payload.classification_code)
     draft.body = payload.body.strip()
@@ -1462,6 +1493,8 @@ def send_draft(draft_id: int, payload: InternalMessageDraftUpsert, db: Session =
     validate_message_type_rules(db, authorized_message_type, resolved_related_request_id, len(draft.attachments))
     draft.subject = subject
     draft.message_type = authorized_message_type
+    draft.is_official = structured_message_type_code(authorized_message_type) == "official_message"
+    draft.official_status = "sent" if draft.is_official else None
     draft.priority = normalize_message_priority(payload.priority, message_settings)
     draft.classification_code = normalize_message_classification(db, payload.classification_code)
     draft.body = body

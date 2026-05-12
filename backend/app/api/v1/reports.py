@@ -22,6 +22,7 @@ from app.models.request import Attachment, RequestApprovalStep, ServiceRequest
 from app.models.settings import RequestTypeSetting, SettingsGeneral, SpecializedSection
 from app.models.user import ActionPermission, Department, Role, User
 from app.services.audit import write_audit
+from app.services.messaging_settings_service import ensure_messaging_settings_schema
 from app.services.pdf_fonts import register_arabic_pdf_font, rtl_text
 from app.services.pdf_template import (
     draw_cover_header,
@@ -820,6 +821,7 @@ def messaging_reports(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=25, ge=1, le=100),
 ):
+    ensure_messaging_settings_schema(db)
     settings = db.scalar(select(MessagingSettings).limit(1))
     if settings and not settings.enable_messaging:
         return {"disabled": True, "message": "نظام المراسلات غير مفعل", "summary": {}, "items": [], "pagination": {"page": page, "page_size": page_size, "total": 0}}

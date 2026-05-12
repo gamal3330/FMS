@@ -238,6 +238,20 @@ export default function MessagingSettingsPage() {
     await saveSection("security", "/settings/messaging/security", payload);
   }
 
+  async function saveTemplatesFeature() {
+    setSaving("templates-feature");
+    try {
+      const { data: response } = await api.put("/settings/messaging", data.general);
+      setData((current) => ({ ...current, general: response }));
+      notify(response.enable_templates ? "تم تفعيل قوالب الرسائل" : "تم تعطيل قوالب الرسائل");
+      await load();
+    } catch (error) {
+      notify(getErrorMessage(error), "error");
+    } finally {
+      setSaving("");
+    }
+  }
+
   async function saveType() {
     if (!typeModal) return;
     setSaving("type");
@@ -534,6 +548,25 @@ export default function MessagingSettingsPage() {
 
           {active === "templates" && (
             <Section title="قوالب الرسائل" description="قوالب يمكن استخدامها في شاشة إرسال الرسائل والرسائل الآلية للطلبات.">
+              <div className="rounded-lg border border-bank-100 bg-bank-50 p-4">
+                <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
+                  <Toggle
+                    label="تفعيل خدمة قوالب الرسائل في شاشة إنشاء الرسالة"
+                    checked={data.general?.enable_templates !== false}
+                    disabled={!canEdit}
+                    onChange={(value) => update("general", "enable_templates", value)}
+                  />
+                  <Button type="button" disabled={!canEdit || saving === "templates-feature"} onClick={saveTemplatesFeature}>
+                    <Save className="h-4 w-4" />
+                    {saving === "templates-feature" ? "جاري الحفظ..." : "حفظ حالة الخدمة"}
+                  </Button>
+                </div>
+                {data.general?.enable_templates === false && (
+                  <p className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-bold text-amber-800">
+                    الخدمة معطلة حالياً، لذلك لن يظهر زر القوالب داخل شاشة إنشاء الرسالة.
+                  </p>
+                )}
+              </div>
               <div className="flex justify-end"><Button type="button" disabled={!canEdit} onClick={() => setTemplateModal(defaultTemplate)}><Plus className="h-4 w-4" />إضافة قالب</Button></div>
               <SimpleTable headers={["القالب", "نوع الرسالة", "الحالة", "الإجراءات"]} rows={data.templates.map((item) => [
                 <div><p className="font-black">{item.name}</p><p className="text-xs text-slate-500">{item.subject_template}</p></div>,

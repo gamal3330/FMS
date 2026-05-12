@@ -17,6 +17,7 @@ class MessagingSettingsPayload(BaseModel):
     allow_archiving: bool = True
     enable_read_receipts: bool = True
     enable_unread_badge: bool = True
+    enable_templates: bool = True
     default_priority: str = Field(default="normal", pattern="^(normal|high|urgent)$")
     max_recipients: int = Field(default=10, ge=1, le=1000)
     allow_multiple_recipients: bool = True

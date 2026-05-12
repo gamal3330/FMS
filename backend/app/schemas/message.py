@@ -245,6 +245,11 @@ class InternalMessageRead(BaseModel):
     recipient_names: list[str] = Field(default_factory=list)
     related_request_id: int | None = None
     related_request_number: str | None = None
+    is_official: bool = False
+    official_reference_number: str | None = None
+    include_in_request_pdf: bool = False
+    official_pdf_document_id: int | None = None
+    official_status: str | None = None
     is_read: bool = True
     is_archived: bool = False
     is_draft: bool = False

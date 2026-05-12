@@ -19,7 +19,7 @@ export function PDFDocumentViewer({ documentId }: { documentId: number }) {
       })
       .then((blob) => {
         objectUrl = URL.createObjectURL(blob);
-        setUrl(objectUrl);
+        setUrl(`${objectUrl}#toolbar=0&navpanes=0&scrollbar=1`);
       })
       .catch(() => setError("تعذر تحميل ملف PDF للمعاينة."));
     return () => {

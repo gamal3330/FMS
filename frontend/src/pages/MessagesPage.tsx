@@ -37,7 +37,6 @@ import {
   Search,
   Send,
   SendHorizonal,
-  Signature,
   Sparkles,
   Strikethrough,
   Trash2,
@@ -79,6 +78,11 @@ type InternalMessage = {
   recipient_names: string[];
   related_request_id?: number | null;
   related_request_number?: string | null;
+  is_official?: boolean;
+  official_reference_number?: string | null;
+  include_in_request_pdf?: boolean;
+  official_pdf_document_id?: number | null;
+  official_status?: string | null;
   is_read: boolean;
   is_archived: boolean;
   is_draft: boolean;
@@ -146,7 +150,6 @@ type MessageSettings = {
   enable_attachments: boolean;
   enable_drafts: boolean;
   enable_templates: boolean;
-  enable_signatures: boolean;
   allow_archiving: boolean;
   allow_general_messages: boolean;
   allow_replies: boolean;
@@ -186,6 +189,51 @@ type MessageCapabilities = {
   can_use_templates: boolean;
 };
 
+type OfficialLetterhead = {
+  id: number;
+  name_ar: string;
+  name_en?: string | null;
+  code: string;
+  is_default?: boolean;
+  is_active?: boolean;
+};
+
+type OfficialSignature = {
+  id: number;
+  signature_label?: string | null;
+  is_verified: boolean;
+  is_active: boolean;
+};
+
+type OfficialStamp = {
+  id: number;
+  name_ar: string;
+  code: string;
+  is_active: boolean;
+};
+
+type OfficialMessageSettings = {
+  default_letterhead_template_id?: number | null;
+  enable_official_letterhead?: boolean;
+  allow_unverified_signature: boolean;
+  include_official_messages_in_request_pdf: boolean;
+};
+
+type OfficialOptions = {
+  letterhead_template_id: number | null;
+  official_reference_number: string;
+  correspondence_type: string;
+  include_signature: boolean;
+  signature_id: number | null;
+  include_stamp: boolean;
+  stamp_id: number | null;
+  include_in_request_pdf: boolean;
+  show_sender_department: boolean;
+  show_recipients: boolean;
+  show_generated_by: boolean;
+  show_generated_at: boolean;
+};
+
 type AIStatus = {
   is_enabled: boolean;
   allow_message_drafting: boolean;
@@ -220,7 +268,6 @@ const defaultMessageSettings: MessageSettings = {
   enable_attachments: true,
   enable_drafts: true,
   enable_templates: true,
-  enable_signatures: true,
   allow_archiving: true,
   allow_general_messages: true,
   allow_replies: true,
@@ -257,6 +304,20 @@ const defaultMessageCapabilities: MessageCapabilities = {
   can_send_circular: true,
   can_send_department_broadcast: true,
   can_use_templates: true
+};
+const defaultOfficialOptions: OfficialOptions = {
+  letterhead_template_id: null,
+  official_reference_number: "",
+  correspondence_type: "خطاب رسمي",
+  include_signature: false,
+  signature_id: null,
+  include_stamp: false,
+  stamp_id: null,
+  include_in_request_pdf: true,
+  show_sender_department: true,
+  show_recipients: true,
+  show_generated_by: true,
+  show_generated_at: true
 };
 const defaultMessageTypeOptions = [
   { value: "internal_correspondence", label: "مراسلة داخلية" },
@@ -320,10 +381,14 @@ export default function MessagesPage() {
   const [editingDraftId, setEditingDraftId] = useState<number | null>(null);
   const [forwardSource, setForwardSource] = useState<InternalMessage | null>(null);
   const [replySource, setReplySource] = useState<InternalMessage | null>(null);
-  const [signatureText, setSignatureText] = useState("");
-  const [signatureDraft, setSignatureDraft] = useState("");
-  const [signatureOpen, setSignatureOpen] = useState(false);
-  const [isSignatureSaving, setIsSignatureSaving] = useState(false);
+  const [officialLetterheads, setOfficialLetterheads] = useState<OfficialLetterhead[]>([]);
+  const [officialSignatures, setOfficialSignatures] = useState<OfficialSignature[]>([]);
+  const [officialStamps, setOfficialStamps] = useState<OfficialStamp[]>([]);
+  const [officialSettings, setOfficialSettings] = useState<OfficialMessageSettings>({ enable_official_letterhead: true, allow_unverified_signature: false, include_official_messages_in_request_pdf: true });
+  const [officialOptions, setOfficialOptions] = useState<OfficialOptions>(defaultOfficialOptions);
+  const [officialPreviewUrl, setOfficialPreviewUrl] = useState("");
+  const [isOfficialPreviewLoading, setIsOfficialPreviewLoading] = useState(false);
+  const [isOfficialGenerating, setIsOfficialGenerating] = useState(false);
   const [hasMore, setHasMore] = useState(false);
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [mailPanelCollapsed, setMailPanelCollapsed] = useState(false);
@@ -382,6 +447,9 @@ export default function MessagesPage() {
   const requestLinkingBlocked = Boolean(form.related_request_id.trim() && !messageSettings.enable_linked_requests);
   const requestLinkRequired = Boolean(!messageSettings.allow_general_messages || selectedFormMessageType?.requires_request);
   const attachmentRequired = Boolean(selectedFormMessageType?.requires_attachment);
+  const isOfficialCompose = Boolean(selectedFormMessageType?.is_official || form.message_type === "official_correspondence");
+  const officialLetterheadEnabled = officialSettings.enable_official_letterhead !== false;
+  const canUseOfficialLetterhead = Boolean(isOfficialCompose && officialLetterheadEnabled);
   const canUseAiDrafting = Boolean(aiStatus.is_enabled && aiStatus.allow_message_drafting && aiStatus.show_in_compose_message !== false);
   const canUseAiSummaries = Boolean(aiStatus.is_enabled && aiStatus.allow_summarization && aiStatus.show_in_message_details !== false);
   const canUseAiReplies = Boolean(aiStatus.is_enabled && aiStatus.allow_reply_suggestion && aiStatus.show_in_message_details !== false);
@@ -463,12 +531,18 @@ export default function MessagesPage() {
     loadMessageSettings();
     loadMessageCapabilities();
     loadCounters();
-    loadSignature();
     loadTemplates();
     loadTypes();
     loadClassifications();
     loadAiStatus();
+    loadOfficialAssets();
   }, []);
+
+  useEffect(() => {
+    if (officialOptions.letterhead_template_id || officialLetterheads.length === 0) return;
+    const defaultId = officialSettings.default_letterhead_template_id || officialLetterheads.find((item) => item.is_default)?.id || officialLetterheads[0]?.id || null;
+    if (defaultId) setOfficialOptions((current) => ({ ...current, letterhead_template_id: defaultId }));
+  }, [officialLetterheads, officialSettings.default_letterhead_template_id, officialOptions.letterhead_template_id]);
 
   useEffect(() => {
     if (searchParams.get("compose") === "1") return;
@@ -573,9 +647,15 @@ export default function MessagesPage() {
       ...current,
       classification_code: messageClassificationOptions.some((option) => option.code === current.classification_code)
         ? current.classification_code
-        : messageClassificationOptions.find((option) => option.code === defaultMessageClassification)?.code || messageClassificationOptions[0].code
+      : messageClassificationOptions.find((option) => option.code === defaultMessageClassification)?.code || messageClassificationOptions[0].code
     }));
   }, [messageClassificationOptions]);
+
+  useEffect(() => {
+    return () => {
+      if (officialPreviewUrl) URL.revokeObjectURL(officialPreviewUrl);
+    };
+  }, [officialPreviewUrl]);
 
   async function loadMessageDetails(messageId: number) {
     try {
@@ -624,7 +704,12 @@ export default function MessagesPage() {
       setError("هذا النوع من الرسائل يتطلب إضافة مرفق.");
       return;
     }
+    if (canUseOfficialLetterhead && !officialOptions.letterhead_template_id) {
+      setError("اختر قالب الترويسة قبل إرسال المراسلة الرسمية.");
+      return;
+    }
     try {
+      let sentMessage: InternalMessage | null = null;
       if (replySource) {
         if (!messageSettings.allow_replies) {
           setError("الرد على الرسائل معطل من إعدادات المراسلات.");
@@ -637,9 +722,9 @@ export default function MessagesPage() {
           data.append("classification_code", form.classification_code);
           data.append("body", form.body);
           attachments.forEach((file) => data.append("attachments", file));
-          await apiFetch<InternalMessage>(`/messages/${replySource.id}/reply-with-attachments`, { method: "POST", body: data });
+          sentMessage = await apiFetch<InternalMessage>(`/messages/${replySource.id}/reply-with-attachments`, { method: "POST", body: data });
         } else {
-          await apiFetch<InternalMessage>(`/messages/${replySource.id}/reply`, {
+          sentMessage = await apiFetch<InternalMessage>(`/messages/${replySource.id}/reply`, {
             method: "POST",
             body: JSON.stringify({ body: form.body, message_type: form.message_type, priority: form.priority, classification_code: form.classification_code })
           });
@@ -649,12 +734,12 @@ export default function MessagesPage() {
           setError("تحويل الرسائل معطل من إعدادات المراسلات.");
           return;
         }
-        await apiFetch<InternalMessage>(`/messages/${forwardSource.id}/forward`, {
+        sentMessage = await apiFetch<InternalMessage>(`/messages/${forwardSource.id}/forward`, {
           method: "POST",
           body: JSON.stringify({ recipient_ids: form.recipient_ids, message_type: form.message_type, priority: form.priority, classification_code: form.classification_code, note: form.body.trim() || undefined })
         });
       } else if (editingDraftId) {
-        await apiFetch<InternalMessage>(`/messages/drafts/${editingDraftId}/send`, {
+        sentMessage = await apiFetch<InternalMessage>(`/messages/drafts/${editingDraftId}/send`, {
           method: "POST",
           body: JSON.stringify(form)
         });
@@ -669,15 +754,19 @@ export default function MessagesPage() {
         data.append("body", form.body);
         if (relatedRequestId) data.append("related_request_id", relatedRequestId);
         attachments.forEach((file) => data.append("attachments", file));
-        await apiFetch<InternalMessage>("/messages/with-attachments", { method: "POST", body: data });
+        sentMessage = await apiFetch<InternalMessage>("/messages/with-attachments", { method: "POST", body: data });
       } else {
         const relatedRequestId = form.related_request_id.trim() || undefined;
-        await apiFetch<InternalMessage>("/messages", {
+        sentMessage = await apiFetch<InternalMessage>("/messages", {
           method: "POST",
           body: JSON.stringify({ ...form, related_request_id: relatedRequestId })
         });
       }
+      if (sentMessage && canUseOfficialLetterhead) {
+        await generateOfficialPdf(sentMessage);
+      }
       setForm({ recipient_ids: [], message_type: messageSettings.default_message_type || defaultMessageType, priority: messageSettings.default_priority || "normal", classification_code: defaultMessageClassification, subject: "", body: "", related_request_id: "" });
+      setOfficialOptions((current) => ({ ...defaultOfficialOptions, letterhead_template_id: current.letterhead_template_id || null, include_in_request_pdf: officialSettings.include_official_messages_in_request_pdf }));
       setSelectedDepartmentIds([]);
       setDepartmentRecipientIds([]);
       setAttachments([]);
@@ -746,6 +835,7 @@ export default function MessagesPage() {
 
   function clearComposeForm() {
     setForm({ recipient_ids: [], message_type: messageSettings.default_message_type || defaultMessageType, priority: messageSettings.default_priority || "normal", classification_code: defaultMessageClassification, subject: "", body: "", related_request_id: "" });
+    setOfficialOptions((current) => ({ ...defaultOfficialOptions, letterhead_template_id: current.letterhead_template_id, include_in_request_pdf: officialSettings.include_official_messages_in_request_pdf }));
     setSelectedDepartmentIds([]);
     setDepartmentRecipientIds([]);
     setAttachments([]);
@@ -919,16 +1009,6 @@ export default function MessagesPage() {
     }
   }
 
-  async function loadSignature() {
-    try {
-      const data = await apiFetch<{ signature: string }>("/messages/signature");
-      setSignatureText(data.signature || "");
-      setSignatureDraft(data.signature || "");
-    } catch {
-      undefined;
-    }
-  }
-
   async function loadTemplates() {
     try {
       setMessageTemplates(await apiFetch<MessageTemplate[]>("/messages/templates"));
@@ -981,6 +1061,118 @@ export default function MessagesPage() {
     }
   }
 
+  async function loadOfficialAssets() {
+    const [letterheads, signatures, stamps, settingsData] = await Promise.allSettled([
+      apiFetch<OfficialLetterhead[]>("/settings/official-letterheads"),
+      apiFetch<OfficialSignature[]>("/signatures/me"),
+      apiFetch<OfficialStamp[]>("/settings/official-stamps"),
+      apiFetch<OfficialMessageSettings>("/settings/official-messages")
+    ]);
+    if (letterheads.status === "fulfilled") setOfficialLetterheads(letterheads.value.filter((item) => item.is_active !== false));
+    if (signatures.status === "fulfilled") setOfficialSignatures(signatures.value.filter((item) => item.is_active !== false));
+    if (stamps.status === "fulfilled") setOfficialStamps(stamps.value.filter((item) => item.is_active !== false));
+    if (settingsData.status === "fulfilled") {
+      setOfficialSettings(settingsData.value);
+      setOfficialOptions((current) => ({
+        ...current,
+        letterhead_template_id: current.letterhead_template_id || settingsData.value.default_letterhead_template_id || null,
+        include_in_request_pdf: Boolean(settingsData.value.include_official_messages_in_request_pdf)
+      }));
+    }
+  }
+
+  function officialPayload(overrides: Partial<OfficialOptions> = {}) {
+    const value = { ...officialOptions, ...overrides };
+    return {
+      letterhead_template_id: value.letterhead_template_id,
+      official_reference_number: value.official_reference_number.trim() || undefined,
+      correspondence_type: value.correspondence_type.trim() || undefined,
+      include_signature: value.include_signature,
+      signature_id: value.include_signature ? value.signature_id : undefined,
+      include_stamp: value.include_stamp,
+      stamp_id: value.include_stamp ? value.stamp_id : undefined,
+      include_in_request_pdf: Boolean(value.include_in_request_pdf && form.related_request_id.trim()),
+      show_sender_department: value.show_sender_department,
+      show_recipients: value.show_recipients,
+      show_generated_by: value.show_generated_by,
+      show_generated_at: value.show_generated_at
+    };
+  }
+
+  async function previewOfficialPdf() {
+    setError("");
+    setFeedback("");
+    if (!canUseOfficialLetterhead) return;
+    if (!form.subject.trim() || !form.body.trim()) {
+      setError("اكتب الموضوع ونص الخطاب قبل معاينة PDF.");
+      return;
+    }
+    if (!officialOptions.letterhead_template_id) {
+      setError("اختر قالب الترويسة قبل معاينة الخطاب الرسمي.");
+      return;
+    }
+    setIsOfficialPreviewLoading(true);
+    try {
+      const token = localStorage.getItem("qib_token");
+      const response = await fetch(`${API_BASE}/messages/official/preview-pdf`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {})
+        },
+        body: JSON.stringify({
+          ...officialPayload(),
+          recipient_ids: form.recipient_ids,
+          related_request_id: form.related_request_id.trim() || undefined,
+          subject: form.subject,
+          body: form.body
+        })
+      });
+      if (!response.ok) throw new Error(await response.text());
+      const blob = await response.blob();
+      if (officialPreviewUrl) URL.revokeObjectURL(officialPreviewUrl);
+      setOfficialPreviewUrl(URL.createObjectURL(blob));
+    } catch (error) {
+      const detail = error instanceof Error ? extractApiError(error.message) || error.message : "";
+      setError(detail || "تعذر إنشاء معاينة الخطاب الرسمي.");
+    } finally {
+      setIsOfficialPreviewLoading(false);
+    }
+  }
+
+  async function generateOfficialPdf(message: InternalMessage) {
+    if (!canUseOfficialLetterhead) return;
+    setIsOfficialGenerating(true);
+    try {
+      await apiFetch(`/messages/${message.id}/official/generate-pdf`, {
+        method: "POST",
+        body: JSON.stringify(officialPayload())
+      });
+    } finally {
+      setIsOfficialGenerating(false);
+    }
+  }
+
+  async function downloadOfficialPdf(message: InternalMessage) {
+    try {
+      const token = localStorage.getItem("qib_token");
+      const response = await fetch(`${API_BASE}/messages/${message.id}/official/pdf/download`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {}
+      });
+      if (!response.ok) throw new Error(await response.text());
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${message.message_uid || message.id}-official.pdf`;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      const detail = error instanceof Error ? extractApiError(error.message) : "";
+      setError(detail || "تعذر تحميل الخطاب الرسمي.");
+    }
+  }
+
   function messageTypeLabel(value: string) {
     return getMessageTypeLabel(value, messageTypeOptions);
   }
@@ -999,25 +1191,6 @@ export default function MessagesPage() {
     }));
     setTemplatesOpen(false);
     window.requestAnimationFrame(() => bodyRef.current?.focus());
-  }
-
-  async function saveSignature() {
-    setIsSignatureSaving(true);
-    setError("");
-    try {
-      const data = await apiFetch<{ signature: string }>("/messages/signature", {
-        method: "PUT",
-        body: JSON.stringify({ signature: signatureDraft })
-      });
-      setSignatureText(data.signature || "");
-      setSignatureDraft(data.signature || "");
-      setSignatureOpen(false);
-      setFeedback("تم حفظ التوقيع.");
-    } catch {
-      setError("تعذر حفظ التوقيع.");
-    } finally {
-      setIsSignatureSaving(false);
-    }
   }
 
   function beginForward(message: InternalMessage) {
@@ -1103,6 +1276,7 @@ export default function MessagesPage() {
     setMailPanelCollapsed(true);
     window.dispatchEvent(new CustomEvent("qib-sidebar-collapse", { detail: { collapsed: true } }));
     setForm({ recipient_ids: [], message_type: messageSettings.default_message_type || defaultMessageType, priority: messageSettings.default_priority || "normal", classification_code: defaultMessageClassification, subject: "", body: "", related_request_id: "" });
+    setOfficialOptions((current) => ({ ...defaultOfficialOptions, letterhead_template_id: current.letterhead_template_id, include_in_request_pdf: officialSettings.include_official_messages_in_request_pdf }));
     setSelectedTemplateKey("");
     setSelectedDepartmentIds([]);
     setDepartmentRecipientIds([]);
@@ -1363,15 +1537,6 @@ export default function MessagesPage() {
     const url = window.prompt("أدخل الرابط", "https://");
     if (!url) return;
     editorCommand("createLink", url);
-  }
-
-  function insertSignature() {
-    if (!signatureText.trim()) {
-      setSignatureOpen(true);
-      setFeedback("أضف توقيعك أولاً ثم اضغط إدراج التوقيع.");
-      return;
-    }
-    insertHtml(`<br><br>${escapeHtml(signatureText.trim()).replace(/\n/g, "<br>")}<br>`);
   }
 
   function undoText() {
@@ -1808,6 +1973,140 @@ export default function MessagesPage() {
                         )}
                       </div>
                     )}
+                    {canUseOfficialLetterhead && !replySource && !forwardSource && (
+                      <div className="rounded-md border border-bank-200 bg-bank-50/70 p-4">
+                        <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+                          <div>
+                            <p className="text-sm font-black text-bank-900">المراسلات الرسمية بترويسة البنك</p>
+                            <p className="mt-1 text-xs leading-5 text-bank-800/80">سيتم إنشاء PDF رسمي للترويسة بعد الإرسال، ويمكنك معاينته قبل الإرسال.</p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={previewOfficialPdf}
+                            disabled={isOfficialPreviewLoading}
+                            className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-bank-200 bg-white px-4 text-sm font-bold text-bank-800 hover:bg-bank-50 disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            <FileText className="h-4 w-4" />
+                            {isOfficialPreviewLoading ? "جار إنشاء المعاينة..." : "معاينة الخطاب الرسمي"}
+                          </button>
+                        </div>
+                        <div className="mt-4 grid gap-3 lg:grid-cols-3">
+                          <label className="block space-y-2 text-sm font-bold text-slate-700">
+                            قالب الترويسة
+                            <select
+                              value={officialOptions.letterhead_template_id || ""}
+                              onChange={(event) => setOfficialOptions((current) => ({ ...current, letterhead_template_id: event.target.value ? Number(event.target.value) : null }))}
+                              className="h-11 w-full rounded-md border border-bank-100 bg-white px-3 text-sm font-semibold outline-none focus:border-bank-600 focus:ring-2 focus:ring-bank-100"
+                            >
+                              <option value="">اختر قالب الترويسة</option>
+                              {officialLetterheads.map((template) => (
+                                <option key={template.id} value={template.id}>
+                                  {template.name_ar}{template.is_default ? " - الافتراضي" : ""}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <label className="block space-y-2 text-sm font-bold text-slate-700">
+                            نوع الخطاب
+                            <input
+                              value={officialOptions.correspondence_type}
+                              onChange={(event) => setOfficialOptions((current) => ({ ...current, correspondence_type: event.target.value }))}
+                              className="h-11 w-full rounded-md border border-bank-100 bg-white px-3 text-sm font-semibold outline-none focus:border-bank-600 focus:ring-2 focus:ring-bank-100"
+                              placeholder="خطاب رسمي"
+                            />
+                          </label>
+                          <label className="block space-y-2 text-sm font-bold text-slate-700">
+                            الرقم المرجعي
+                            <input
+                              value={officialOptions.official_reference_number}
+                              onChange={(event) => setOfficialOptions((current) => ({ ...current, official_reference_number: event.target.value }))}
+                              className="h-11 w-full rounded-md border border-bank-100 bg-white px-3 text-sm font-semibold outline-none focus:border-bank-600 focus:ring-2 focus:ring-bank-100"
+                              placeholder="اختياري"
+                            />
+                          </label>
+                        </div>
+                        <div className="mt-3 grid gap-3 lg:grid-cols-3">
+                          <label className="flex min-h-11 items-center justify-between gap-3 rounded-md border border-bank-100 bg-white px-3 text-sm font-bold text-slate-700">
+                            <span>إظهار إدارة المرسل</span>
+                            <input type="checkbox" checked={officialOptions.show_sender_department} onChange={(event) => setOfficialOptions((current) => ({ ...current, show_sender_department: event.target.checked }))} />
+                          </label>
+                          <label className="flex min-h-11 items-center justify-between gap-3 rounded-md border border-bank-100 bg-white px-3 text-sm font-bold text-slate-700">
+                            <span>إظهار المستلمين</span>
+                            <input type="checkbox" checked={officialOptions.show_recipients} onChange={(event) => setOfficialOptions((current) => ({ ...current, show_recipients: event.target.checked }))} />
+                          </label>
+                          <label className={`flex min-h-11 items-center justify-between gap-3 rounded-md border px-3 text-sm font-bold ${form.related_request_id.trim() && officialSettings.include_official_messages_in_request_pdf ? "border-bank-100 bg-white text-slate-700" : "border-slate-200 bg-slate-50 text-slate-400"}`}>
+                            <span>تضمين في PDF الطلب</span>
+                            <input
+                              type="checkbox"
+                              checked={officialOptions.include_in_request_pdf && Boolean(form.related_request_id.trim())}
+                              disabled={!form.related_request_id.trim() || !officialSettings.include_official_messages_in_request_pdf}
+                              onChange={(event) => setOfficialOptions((current) => ({ ...current, include_in_request_pdf: event.target.checked }))}
+                            />
+                          </label>
+                        </div>
+                        <div className="mt-3 grid gap-3 lg:grid-cols-2">
+                          <div className="rounded-md border border-bank-100 bg-white p-3">
+                            <label className="flex items-center justify-between gap-3 text-sm font-bold text-slate-700">
+                              <span>تضمين التوقيع</span>
+                              <input
+                                type="checkbox"
+                                checked={officialOptions.include_signature}
+                                disabled={officialSignatures.length === 0}
+                                onChange={(event) => setOfficialOptions((current) => ({ ...current, include_signature: event.target.checked, signature_id: event.target.checked ? current.signature_id || officialSignatures[0]?.id || null : null }))}
+                              />
+                            </label>
+                            {officialOptions.include_signature && (
+                              <select
+                                value={officialOptions.signature_id || ""}
+                                onChange={(event) => setOfficialOptions((current) => ({ ...current, signature_id: event.target.value ? Number(event.target.value) : null }))}
+                                className="mt-3 h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm font-semibold outline-none focus:border-bank-600 focus:ring-2 focus:ring-bank-100"
+                              >
+                                <option value="">اختر التوقيع</option>
+                                {officialSignatures.map((signature) => (
+                                  <option key={signature.id} value={signature.id}>
+                                    {signature.signature_label || `توقيع رقم ${signature.id}`}{signature.is_verified ? " - موثق" : " - غير موثق"}
+                                  </option>
+                                ))}
+                              </select>
+                            )}
+                            {officialSignatures.length === 0 && <p className="mt-2 text-xs text-slate-500">لا يوجد توقيع صورة مرفوع لهذا المستخدم.</p>}
+                          </div>
+                          <div className="rounded-md border border-bank-100 bg-white p-3">
+                            <label className="flex items-center justify-between gap-3 text-sm font-bold text-slate-700">
+                              <span>تضمين الختم</span>
+                              <input
+                                type="checkbox"
+                                checked={officialOptions.include_stamp}
+                                disabled={officialStamps.length === 0}
+                                onChange={(event) => setOfficialOptions((current) => ({ ...current, include_stamp: event.target.checked, stamp_id: event.target.checked ? current.stamp_id || officialStamps[0]?.id || null : null }))}
+                              />
+                            </label>
+                            {officialOptions.include_stamp && (
+                              <select
+                                value={officialOptions.stamp_id || ""}
+                                onChange={(event) => setOfficialOptions((current) => ({ ...current, stamp_id: event.target.value ? Number(event.target.value) : null }))}
+                                className="mt-3 h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm font-semibold outline-none focus:border-bank-600 focus:ring-2 focus:ring-bank-100"
+                              >
+                                <option value="">اختر الختم</option>
+                                {officialStamps.map((stamp) => (
+                                  <option key={stamp.id} value={stamp.id}>{stamp.name_ar}</option>
+                                ))}
+                              </select>
+                            )}
+                            {officialStamps.length === 0 && <p className="mt-2 text-xs text-slate-500">لا توجد أختام رسمية مفعلة.</p>}
+                          </div>
+                        </div>
+                        {officialPreviewUrl && (
+                          <div className="mt-4 overflow-hidden rounded-md border border-bank-100 bg-white">
+                            <div className="flex items-center justify-between gap-2 border-b border-slate-100 px-3 py-2">
+                              <p className="text-sm font-black text-slate-800">معاينة PDF</p>
+                              <button type="button" onClick={() => setOfficialPreviewUrl("")} className="h-8 rounded-md border border-slate-200 bg-white px-3 text-xs font-bold text-slate-600 hover:bg-slate-50">إغلاق المعاينة</button>
+                            </div>
+                            <iframe src={officialPreviewUrl} title="معاينة الخطاب الرسمي" className="h-[520px] w-full bg-white" />
+                          </div>
+                        )}
+                      </div>
+                    )}
                     {replySource ? (
                       <div className="rounded-md border border-sky-100 bg-sky-50 px-4 py-3 text-sm leading-6 text-sky-900">
                         <p className="font-bold">سيتم الرد على أطراف المحادثة تلقائياً</p>
@@ -2028,48 +2327,10 @@ export default function MessagesPage() {
                         </div>
                       )}
                     </div>}
-                    {messageSettings.enable_signatures && <ToolButton label="توقيع" icon={Signature} onClick={insertSignature} />}
                     <ToolButton label="مسح التنسيق" icon={Eraser} onClick={clearFormatting} />
                   </ToolGroup>
-                  {messageSettings.enable_signatures && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSignatureDraft(signatureText);
-                        setSignatureOpen((value) => !value);
-                      }}
-                      className="message-signature-button inline-flex h-[54px] items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 text-xs font-bold text-slate-700 hover:border-bank-200 hover:bg-bank-50 hover:text-bank-800"
-                    >
-                      <Signature className="h-4 w-4" />
-                      إعداد التوقيع
-                    </button>
-                  )}
                   </div>
                 </div>
-                {messageSettings.enable_signatures && signatureOpen && (
-                  <div className="border-b border-slate-100 bg-slate-50 px-5 py-4">
-                    <div className="grid gap-3 lg:grid-cols-[1fr_auto] lg:items-end">
-                      <label className="block space-y-2 text-sm font-bold text-slate-700">
-                        توقيع البريد
-                        <textarea
-                          value={signatureDraft}
-                          onChange={(event) => setSignatureDraft(event.target.value)}
-                          rows={4}
-                          placeholder={"مثال:\nتحياتي،\nعبدالله باجرش\nالإدارة المختصة"}
-                          className="w-full resize-y rounded-md border border-slate-300 bg-white px-3 py-2 text-sm leading-6 outline-none focus:border-bank-600 focus:ring-2 focus:ring-bank-100"
-                        />
-                      </label>
-                      <div className="flex gap-2">
-                        <button type="button" onClick={saveSignature} disabled={isSignatureSaving} className="h-10 rounded-md bg-bank-700 px-4 text-sm font-bold text-white hover:bg-bank-800 disabled:opacity-60">
-                          {isSignatureSaving ? "جاري الحفظ..." : "حفظ"}
-                        </button>
-                        <button type="button" onClick={() => setSignatureOpen(false)} className="h-10 rounded-md border border-slate-300 bg-white px-4 text-sm font-bold text-slate-700 hover:bg-slate-50">
-                          إغلاق
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                )}
                 <div
                   ref={bodyRef}
                   contentEditable
@@ -2120,9 +2381,9 @@ export default function MessagesPage() {
                       حفظ مسودة
                     </button>
                   )}
-                  <Button type="submit" className="h-11 gap-2 px-6">
+                  <Button type="submit" disabled={isOfficialGenerating} className="h-11 gap-2 px-6">
                     <SendHorizonal className="h-4 w-4" />
-                    {replySource ? "إرسال الرد" : editingDraftId ? "إرسال المسودة" : "إرسال"}
+                    {isOfficialGenerating ? "جار إنشاء الخطاب..." : replySource ? "إرسال الرد" : editingDraftId ? "إرسال المسودة" : "إرسال"}
                   </Button>
                   <button
                     type="button"
@@ -2155,7 +2416,8 @@ export default function MessagesPage() {
                         </span>
                       )}
                       <span style={messageTypeBadgeStyle(selectedMessageType)} className="rounded-full border border-slate-200 bg-slate-100 px-3 py-1 text-xs font-bold text-slate-700">{messageTypeLabel(selected.message_type)}</span>
-                      {selectedMessageType?.is_official && <span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-bold text-blue-700">رسمية</span>}
+                      {(selectedMessageType?.is_official || selected.is_official) && <span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-bold text-blue-700">مراسلة رسمية</span>}
+                      {selected.official_reference_number && <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-700">مرجع: {selected.official_reference_number}</span>}
                       {selectedMessageType?.show_in_pdf && <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-bold text-emerald-700">تظهر في PDF</span>}
                       <span className={`rounded-full px-3 py-1 text-xs font-bold ${messagePriorityBadgeClass(selected.priority)}`}>{messagePriorityLabel(selected.priority)}</span>
                       <span className={`rounded-full px-3 py-1 text-xs font-bold ${messageClassificationBadgeClass(selectedClassification)}`}>{messageClassificationLabel(selected.classification_code, messageClassificationOptions)}</span>
@@ -2237,6 +2499,18 @@ export default function MessagesPage() {
                           فتح الطلب
                         </button>
                       )}
+                      {(selectedMessageType?.is_official || selected.is_official) && (
+                        <button
+                          type="button"
+                          onClick={() => downloadOfficialPdf(selected)}
+                          disabled={!selected.official_pdf_document_id}
+                          className="inline-flex h-10 items-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-3 text-sm font-bold text-blue-800 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-60"
+                          title={selected.official_pdf_document_id ? "تحميل PDF الرسمي" : "لم يتم إنشاء PDF رسمي بعد"}
+                        >
+                          <Download className="h-4 w-4" />
+                          PDF الرسمي
+                        </button>
+                      )}
                       {messageSettings.allow_archiving && (
                         <button type="button" onClick={archiveSelected} className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50">
                           <Archive className="h-4 w-4" />
@@ -2263,6 +2537,28 @@ export default function MessagesPage() {
                   />
                 )}
                 {canUseAiSummaries && <AISummaryBox messageId={selected.id} buttonLabel="تلخيص الرسالة" compact />}
+                {(selectedMessageType?.is_official || selected.is_official) && (
+                  <div className="rounded-md border border-blue-100 bg-blue-50 p-4 text-sm text-blue-900">
+                    <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+                      <div>
+                        <p className="font-black">بيانات الخطاب الرسمي</p>
+                        <p className="mt-1 text-xs leading-5 text-blue-800">
+                          {selected.official_pdf_document_id ? "تم إنشاء ملف PDF رسمي لهذه المراسلة." : "لم يتم إنشاء ملف PDF رسمي لهذه المراسلة بعد."}
+                          {selected.include_in_request_pdf ? " سيتم تضمينه في PDF الطلب عند الطباعة حسب الصلاحيات." : ""}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => downloadOfficialPdf(selected)}
+                        disabled={!selected.official_pdf_document_id}
+                        className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-blue-200 bg-white px-4 text-sm font-bold text-blue-800 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        <Download className="h-4 w-4" />
+                        تحميل الخطاب الرسمي
+                      </button>
+                    </div>
+                  </div>
+                )}
                 <div
                   className="min-h-[260px] rounded-md bg-slate-50 p-4 text-sm leading-7 text-slate-700"
                   dangerouslySetInnerHTML={{ __html: selected.body ? sanitizeMessageHtml(selected.body) : selected.is_draft ? "لا يوجد محتوى في المسودة بعد." : "" }}

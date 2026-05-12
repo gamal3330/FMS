@@ -5,7 +5,7 @@ import re
 from typing import Any
 
 from fastapi import HTTPException, status
-from sqlalchemy import func, select
+from sqlalchemy import func, inspect, select, text
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.ai import AISettings
@@ -103,7 +103,23 @@ def get_effective_message_attachment_max_mb(db: Session, message_max_mb: int | N
     return min(configured_max, get_global_upload_max_file_size_mb(db))
 
 
+def ensure_messaging_settings_schema(db: Session) -> None:
+    bind = db.get_bind()
+    inspector = inspect(bind)
+    if "messaging_settings" not in inspector.get_table_names():
+        return
+    columns = {column["name"] for column in inspector.get_columns("messaging_settings")}
+    if "enable_templates" in columns:
+        return
+    if bind.dialect.name == "sqlite":
+        db.execute(text("ALTER TABLE messaging_settings ADD COLUMN enable_templates BOOLEAN DEFAULT 1"))
+    else:
+        db.execute(text("ALTER TABLE messaging_settings ADD COLUMN enable_templates BOOLEAN DEFAULT TRUE"))
+    db.flush()
+
+
 def seed_messaging_settings(db: Session) -> None:
+    ensure_messaging_settings_schema(db)
     get_singleton(db, MessagingSettings)
     get_singleton(db, MessageNotificationSettings)
     attachment_settings = get_singleton(db, MessageAttachmentSettings)
@@ -195,7 +211,7 @@ def sync_legacy_message_settings(db: Session) -> None:
         "enabled": bool(general.enable_messaging),
         "enable_attachments": bool(attachments.allow_message_attachments),
         "enable_drafts": True,
-        "enable_templates": True,
+        "enable_templates": bool(general.enable_templates),
         "enable_signatures": True,
         "allow_archiving": bool(general.allow_archiving and retention.allow_archiving),
         "enable_circulars": allow_broadcast,

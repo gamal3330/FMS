@@ -21,6 +21,7 @@ const DepartmentsPage = lazy(() => import("./pages/settings/DepartmentsPage.jsx"
 const DocumentSettingsPage = lazy(() => import("./pages/settings/DocumentSettingsPage"));
 const HealthMonitoringPage = lazy(() => import("./pages/settings/HealthMonitoringPage.jsx"));
 const MessagingSettingsPage = lazy(() => import("./pages/settings/MessagingSettingsPage.jsx"));
+const OfficialCorrespondenceSettingsPage = lazy(() => import("./pages/settings/OfficialCorrespondenceSettingsPage"));
 const RequestTypesPage = lazy(() => import("./pages/settings/RequestTypesPage.jsx"));
 const SpecializedSectionsPage = lazy(() => import("./pages/settings/SpecializedSectionsPage.jsx"));
 const UsersPage = lazy(() => import("./pages/settings/UsersPage.jsx"));
@@ -182,6 +183,19 @@ function ProtectedApp() {
             path="/settings/messaging"
             element={canAccessScreen("messaging_settings") ? <MessagingSettingsPage /> : <Navigate to={defaultPath()} replace />}
           />
+          <Route
+            path="/settings/official-letterheads"
+            element={canAccessScreen("messaging_settings") ? <OfficialCorrespondenceSettingsPage /> : <Navigate to={defaultPath()} replace />}
+          />
+          <Route
+            path="/settings/official-stamps"
+            element={canAccessScreen("messaging_settings") ? <OfficialCorrespondenceSettingsPage initialTab="stamps" /> : <Navigate to={defaultPath()} replace />}
+          />
+          <Route
+            path="/settings/signatures"
+            element={canAccessScreen("messaging_settings") ? <OfficialCorrespondenceSettingsPage initialTab="signatures" /> : <Navigate to={defaultPath()} replace />}
+          />
+          <Route path="/profile/signature" element={<OfficialCorrespondenceSettingsPage initialTab="my-signature" />} />
           <Route
             path="/request-types"
             element={canAccessScreen("request_types") ? <RequestTypesPage /> : <Navigate to={defaultPath()} replace />}

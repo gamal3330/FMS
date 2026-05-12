@@ -3,7 +3,16 @@ from app.models.ai import AIFeaturePermission, AIFeedback, AIHealthCheck, AISett
 from app.models.database import DatabaseBackup, DatabaseBackupSettings, DatabaseJob, DatabaseMaintenanceLog, DatabaseRestoreJob
 from app.models.document import Document, DocumentAccessLog, DocumentAcknowledgement, DocumentCategory, DocumentPermission, DocumentVersion, RequestTypeDocument
 from app.models.health import SystemAlert, SystemHealthAlert, SystemHealthCheck, SystemHealthMetric, SystemHealthSettings
-from app.models.message import InternalMessage, InternalMessageAttachment, InternalMessageRecipient
+from app.models.message import (
+    InternalMessage,
+    InternalMessageAttachment,
+    InternalMessageRecipient,
+    OfficialLetterheadTemplate,
+    OfficialMessageDocument,
+    OfficialMessageSettings,
+    OfficialStamp,
+    UserSignature,
+)
 from app.models.messaging_settings import (
     MessageAISettings,
     MessageAttachmentSettings,
@@ -85,6 +94,10 @@ __all__ = [
     "InternalMessage",
     "InternalMessageAttachment",
     "InternalMessageRecipient",
+    "OfficialLetterheadTemplate",
+    "OfficialMessageDocument",
+    "OfficialMessageSettings",
+    "OfficialStamp",
     "MessageAISettings",
     "MessageAttachmentSettings",
     "MessageAutoRule",
@@ -132,6 +145,7 @@ __all__ = [
     "UpdatePackage",
     "UpdateSettings",
     "User",
+    "UserSignature",
     "UserDelegation",
     "UserImportBatch",
     "UserImportError",

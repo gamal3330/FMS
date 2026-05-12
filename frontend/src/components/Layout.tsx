@@ -79,6 +79,7 @@ export function Layout({
     { label: "الأقسام المختصة", href: "/specialized-sections", icon: Network, screenKey: "specialized_sections" },
     { label: "مراقبة صحة النظام", href: "/settings/health-monitoring", icon: Activity, screenKey: "health_monitoring" },
     { label: "إعدادات المراسلات", href: "/settings/messaging", icon: Mail, screenKey: "messaging_settings" },
+    { label: "الترويسات الرسمية", href: "/settings/official-letterheads", icon: FileText, screenKey: "messaging_settings" },
     { label: "إعدادات الوثائق", href: "/settings/documents", icon: BookOpen, screenKey: "document_settings" },
     { label: "الذكاء الاصطناعي", href: "/settings/ai", icon: Sparkles, screenKey: "ai_settings" },
     { label: "قاعدة البيانات", href: "/settings/database", icon: Database, screenKey: "database_settings" },
