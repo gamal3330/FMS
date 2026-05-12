@@ -453,6 +453,8 @@ export default function MessagesPage() {
   const canUseAiDrafting = Boolean(aiStatus.is_enabled && aiStatus.allow_message_drafting && aiStatus.show_in_compose_message !== false);
   const canUseAiSummaries = Boolean(aiStatus.is_enabled && aiStatus.allow_summarization && aiStatus.show_in_message_details !== false);
   const canUseAiReplies = Boolean(aiStatus.is_enabled && aiStatus.allow_reply_suggestion && aiStatus.show_in_message_details !== false);
+  const composeBodyText = useMemo(() => messageBodyPreview(form.body), [form.body]);
+  const composeBodyWords = useMemo(() => composeBodyText.split(/\s+/).filter(Boolean).length, [composeBodyText]);
 
   function openMailbox(nextMailbox: Mailbox) {
     setMailbox(nextMailbox);
@@ -2238,109 +2240,133 @@ export default function MessagesPage() {
                 </div>
               )}
 
-              <div className="message-compose-editor-shell bg-white">
+              <div className="message-compose-editor-shell overflow-hidden bg-white">
+                <div className="message-editor-header border-b border-slate-200 bg-slate-50/70 px-5 py-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-black text-slate-900">محرر نص الرسالة</p>
+                      <p className="mt-1 text-xs leading-5 text-slate-500">اكتب الرسالة ونسقها قبل الإرسال. المعاينة النهائية تظهر في تفاصيل الرسالة بعد الحفظ.</p>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="message-editor-pill">{composeBodyText.length.toLocaleString("ar")} حرف</span>
+                      <span className="message-editor-pill">{composeBodyWords.toLocaleString("ar")} كلمة</span>
+                      {messageSettings.enable_attachments && <span className="message-editor-pill">{attachments.length.toLocaleString("ar")} مرفق</span>}
+                      {messageSettings.enable_attachments && (
+                        <label className="inline-flex h-10 cursor-pointer items-center gap-2 rounded-md bg-bank-700 px-4 text-sm font-bold text-white shadow-sm transition hover:bg-bank-800">
+                          <Paperclip className="h-4 w-4" />
+                          إرفاق ملف
+                          <input
+                            type="file"
+                            multiple={messageSettings.max_attachments_per_message > 1}
+                            accept={(messageSettings.allowed_extensions || []).map((extension) => `.${extension}`).join(",")}
+                            onChange={(event) => {
+                              addAttachments(event.target.files);
+                              event.currentTarget.value = "";
+                            }}
+                            className="hidden"
+                          />
+                        </label>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
                 <div className="message-compose-toolbar sticky top-0 z-[1] border-b border-slate-200 bg-white/95 px-5 py-3 shadow-sm backdrop-blur">
-                  <div className="mb-2 flex items-center justify-between gap-3">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
                     <div>
                       <p className="text-xs font-black text-slate-700">أدوات التحرير</p>
                       <p className="text-[11px] text-slate-400">حدد النص ثم اختر الإجراء المطلوب</p>
                     </div>
-                    {messageSettings.enable_attachments && (
-                      <label className="inline-flex h-9 cursor-pointer items-center gap-2 rounded-md bg-bank-700 px-3 text-xs font-bold text-white shadow-sm hover:bg-bank-800">
-                        <Paperclip className="h-4 w-4" />
-                        إرفاق ملف
-                        <input
-                          type="file"
-                          multiple={messageSettings.max_attachments_per_message > 1}
-                          accept={(messageSettings.allowed_extensions || []).map((extension) => `.${extension}`).join(",")}
-                          onChange={(event) => {
-                            addAttachments(event.target.files);
-                            event.currentTarget.value = "";
-                          }}
-                          className="hidden"
-                        />
-                      </label>
-                    )}
-                  </div>
-                  <div className="flex flex-wrap items-stretch gap-2">
-                  <ToolGroup label="تحكم">
-                    <ToolButton label="تراجع" icon={Undo} onClick={undoText} />
-                    <ToolButton label="إعادة" icon={Redo2} onClick={redoText} />
-                  </ToolGroup>
-                  <ToolGroup label="العناوين">
-                    <ToolButton label="عنوان رئيسي" icon={Heading1} onClick={() => prefixLines("# ", "عنوان رئيسي")} />
-                    <ToolButton label="عنوان فرعي" icon={Heading2} onClick={() => prefixLines("## ", "عنوان فرعي")} />
-                    <ToolButton label="اقتباس" icon={Quote} onClick={() => prefixLines("> ")} />
-                    <ToolButton label="فاصل" icon={Minus} onClick={insertDivider} />
-                  </ToolGroup>
-                  <ToolGroup label="تنسيق">
-                    <ToolButton label="غامق" icon={Bold} onClick={() => editorCommand("bold")} />
-                    <ToolButton label="مائل" icon={Italic} onClick={() => editorCommand("italic")} />
-                    <ToolButton label="تحته خط" icon={Underline} onClick={() => editorCommand("underline")} />
-                    <ToolButton label="يتوسطه خط" icon={Strikethrough} onClick={() => editorCommand("strikeThrough")} />
-                    <ToolButton label="رابط" icon={Link} onClick={insertLink} />
-                  </ToolGroup>
-                  <ToolGroup label="حجم الخط">
-                    <ToolButton label="تصغير الخط" icon={ALargeSmall} onClick={() => changeFontSize("small")} />
-                    <button type="button" title="خط عادي" onClick={() => changeFontSize("normal")} className="message-tool-button inline-flex h-8 min-w-8 items-center justify-center rounded-md border border-slate-200 bg-white px-2 text-xs font-black text-slate-700 shadow-sm transition hover:border-bank-200 hover:bg-bank-50 hover:text-bank-800">عادي</button>
-                    <button type="button" title="تكبير الخط" onClick={() => changeFontSize("large")} className="message-tool-button inline-flex h-8 min-w-8 items-center justify-center rounded-md border border-slate-200 bg-white px-2 text-sm font-black text-slate-700 shadow-sm transition hover:border-bank-200 hover:bg-bank-50 hover:text-bank-800">كبير</button>
-                    <button type="button" title="تكبير أكبر" onClick={() => changeFontSize("x-large")} className="message-tool-button inline-flex h-8 min-w-8 items-center justify-center rounded-md border border-slate-200 bg-white px-2 text-base font-black text-slate-700 shadow-sm transition hover:border-bank-200 hover:bg-bank-50 hover:text-bank-800">أكبر</button>
-                  </ToolGroup>
-                  <ToolGroup label="قوائم">
-                    <ToolButton label="قائمة نقطية" icon={List} onClick={() => insertList(false)} />
-                    <ToolButton label="قائمة مرقمة" icon={ListOrdered} onClick={() => insertList(true)} />
-                    <ToolButton label="قائمة مهام" icon={ListChecks} onClick={insertTaskList} />
-                  </ToolGroup>
-                  <ToolGroup label="محاذاة">
-                    <ToolButton label="محاذاة يمين" icon={AlignRight} onClick={() => alignSelection("right")} />
-                    <ToolButton label="محاذاة وسط" icon={AlignCenter} onClick={() => alignSelection("center")} />
-                    <ToolButton label="محاذاة يسار" icon={AlignLeft} onClick={() => alignSelection("left")} />
-                  </ToolGroup>
-                  <ToolGroup label="إدراج">
-                    {messageSettings.enable_templates && messageCapabilities.can_use_templates && <div className="relative">
-                      <button
-                        type="button"
-                        title="قوالب جاهزة"
-                        onClick={() => setTemplatesOpen((value) => !value)}
-                        disabled={messageTemplates.length === 0}
-                        className="message-tool-button inline-flex h-8 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-xs font-bold text-slate-700 hover:border-bank-200 hover:bg-bank-50 hover:text-bank-800 disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        <FileText className="h-4 w-4" />
-                        قالب
-                      </button>
-                      {templatesOpen && (
-                        <div className="absolute right-0 top-10 z-20 w-[min(26rem,calc(100vw-2rem))] overflow-hidden rounded-md border border-slate-200 bg-white text-right shadow-lg">
-                          <div className="border-b border-slate-100 bg-slate-50 px-3 py-2 text-xs font-bold text-slate-500">اختر قالباً لتعبئة الرسالة</div>
-                          <div className="max-h-72 overflow-y-auto p-1">
-                            {messageTemplates.map((template) => (
-                              <button
-                                key={template.key}
-                                type="button"
-                                onClick={() => applyTemplate(template.key)}
-                                className={`block w-full min-w-0 rounded-md px-3 py-2 text-right text-sm hover:bg-bank-50 ${selectedTemplateKey === template.key ? "bg-bank-50 text-bank-800" : "text-slate-700"}`}
-                              >
-                                <span className="block max-w-full truncate font-bold">{template.label}</span>
-                                <span className="mt-1 block max-w-full truncate text-xs leading-5 text-slate-500">{template.subject || messageTypeLabel(template.message_type)}</span>
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                    </div>}
-                    <ToolButton label="مسح التنسيق" icon={Eraser} onClick={clearFormatting} />
-                  </ToolGroup>
+                    <div className="flex flex-wrap items-stretch gap-2">
+                      <ToolGroup label="تحكم">
+                        <ToolButton label="تراجع" icon={Undo} onClick={undoText} />
+                        <ToolButton label="إعادة" icon={Redo2} onClick={redoText} />
+                      </ToolGroup>
+                      <ToolGroup label="عناوين">
+                        <ToolButton label="عنوان رئيسي" icon={Heading1} onClick={() => prefixLines("# ", "عنوان رئيسي")} />
+                        <ToolButton label="عنوان فرعي" icon={Heading2} onClick={() => prefixLines("## ", "عنوان فرعي")} />
+                        <ToolButton label="اقتباس" icon={Quote} onClick={() => prefixLines("> ")} />
+                        <ToolButton label="فاصل" icon={Minus} onClick={insertDivider} />
+                      </ToolGroup>
+                      <ToolGroup label="تنسيق">
+                        <ToolButton label="غامق" icon={Bold} onClick={() => editorCommand("bold")} />
+                        <ToolButton label="مائل" icon={Italic} onClick={() => editorCommand("italic")} />
+                        <ToolButton label="تحته خط" icon={Underline} onClick={() => editorCommand("underline")} />
+                        <ToolButton label="يتوسطه خط" icon={Strikethrough} onClick={() => editorCommand("strikeThrough")} />
+                        <ToolButton label="رابط" icon={Link} onClick={insertLink} />
+                      </ToolGroup>
+                      <ToolGroup label="حجم الخط">
+                        <ToolButton label="تصغير الخط" icon={ALargeSmall} onClick={() => changeFontSize("small")} />
+                        <button type="button" title="خط عادي" onClick={() => changeFontSize("normal")} className="message-tool-button inline-flex h-8 min-w-8 items-center justify-center rounded-md border border-slate-200 bg-white px-2 text-xs font-black text-slate-700 shadow-sm transition hover:border-bank-200 hover:bg-bank-50 hover:text-bank-800">عادي</button>
+                        <button type="button" title="تكبير الخط" onClick={() => changeFontSize("large")} className="message-tool-button inline-flex h-8 min-w-8 items-center justify-center rounded-md border border-slate-200 bg-white px-2 text-sm font-black text-slate-700 shadow-sm transition hover:border-bank-200 hover:bg-bank-50 hover:text-bank-800">كبير</button>
+                        <button type="button" title="تكبير أكبر" onClick={() => changeFontSize("x-large")} className="message-tool-button inline-flex h-8 min-w-8 items-center justify-center rounded-md border border-slate-200 bg-white px-2 text-base font-black text-slate-700 shadow-sm transition hover:border-bank-200 hover:bg-bank-50 hover:text-bank-800">أكبر</button>
+                      </ToolGroup>
+                      <ToolGroup label="قوائم">
+                        <ToolButton label="قائمة نقطية" icon={List} onClick={() => insertList(false)} />
+                        <ToolButton label="قائمة مرقمة" icon={ListOrdered} onClick={() => insertList(true)} />
+                        <ToolButton label="قائمة مهام" icon={ListChecks} onClick={insertTaskList} />
+                      </ToolGroup>
+                      <ToolGroup label="محاذاة">
+                        <ToolButton label="محاذاة يمين" icon={AlignRight} onClick={() => alignSelection("right")} />
+                        <ToolButton label="محاذاة وسط" icon={AlignCenter} onClick={() => alignSelection("center")} />
+                        <ToolButton label="محاذاة يسار" icon={AlignLeft} onClick={() => alignSelection("left")} />
+                      </ToolGroup>
+                      <ToolGroup label="إدراج">
+                        {messageSettings.enable_templates && messageCapabilities.can_use_templates && <div className="relative">
+                          <button
+                            type="button"
+                            title="قوالب جاهزة"
+                            onClick={() => setTemplatesOpen((value) => !value)}
+                            disabled={messageTemplates.length === 0}
+                            className="message-tool-button inline-flex h-8 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-xs font-bold text-slate-700 hover:border-bank-200 hover:bg-bank-50 hover:text-bank-800 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            <FileText className="h-4 w-4" />
+                            قالب
+                          </button>
+                          {templatesOpen && (
+                            <div className="message-template-menu absolute right-0 top-10 z-20 w-[min(26rem,calc(100vw-2rem))] overflow-hidden rounded-md border border-slate-200 bg-white text-right shadow-lg">
+                              <div className="message-template-menu-header border-b border-slate-100 bg-slate-50 px-3 py-2 text-xs font-bold text-slate-500">اختر قالباً لتعبئة الرسالة</div>
+                              <div className="max-h-72 overflow-y-auto p-1">
+                                {messageTemplates.map((template) => (
+                                  <button
+                                    key={template.key}
+                                    type="button"
+                                    onClick={() => applyTemplate(template.key)}
+                                    className={`message-template-option block w-full min-w-0 rounded-md px-3 py-2 text-right text-sm hover:bg-bank-50 ${selectedTemplateKey === template.key ? "bg-bank-50 text-bank-800" : "text-slate-700"}`}
+                                  >
+                                    <span className="block max-w-full truncate font-bold">{template.label}</span>
+                                    <span className="mt-1 block max-w-full truncate text-xs leading-5 text-slate-500">{template.subject || messageTypeLabel(template.message_type)}</span>
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>}
+                        <ToolButton label="مسح التنسيق" icon={Eraser} onClick={clearFormatting} />
+                      </ToolGroup>
+                    </div>
                   </div>
                 </div>
-                <div
-                  ref={bodyRef}
-                  contentEditable
-                  role="textbox"
-                  aria-label="نص الرسالة"
-                  data-placeholder="اكتب رسالتك هنا..."
-                  onInput={syncEditorBody}
-                  onBlur={syncEditorBody}
-                  className="message-rich-editor min-h-[420px] w-full overflow-y-auto border-0 bg-white px-6 py-5 text-sm leading-8 text-slate-800 outline-none focus:ring-0"
-                />
+
+                <div className="message-editor-canvas bg-slate-50/60 p-4 sm:p-6">
+                  <div
+                    ref={bodyRef}
+                    contentEditable
+                    role="textbox"
+                    aria-label="نص الرسالة"
+                    dir="rtl"
+                    lang="ar"
+                    data-placeholder="اكتب رسالتك هنا..."
+                    onInput={syncEditorBody}
+                    onBlur={syncEditorBody}
+                    className="message-rich-editor message-editor-page mx-auto min-h-[360px] w-full max-w-5xl overflow-y-auto rounded-lg border border-slate-200 bg-white px-6 py-6 text-base leading-8 text-slate-800 outline-none transition focus:border-bank-300 focus:ring-4 focus:ring-bank-100/70"
+                  />
+                </div>
+
+                <div className="message-editor-statusbar flex flex-wrap items-center justify-between gap-2 border-t border-slate-200 bg-white px-5 py-3 text-xs font-bold text-slate-500">
+                  <span>{selectedFormMessageType?.label || "مراسلة داخلية"} · {selectedFormClassification?.name_ar || "داخلي"}</span>
+                  <span>{composeBodyText ? "جاهزة للمراجعة قبل الإرسال" : "لم يتم إدخال نص الرسالة بعد"}</span>
+                </div>
               </div>
 
               <div className="bg-slate-50 p-5">

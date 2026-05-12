@@ -115,7 +115,7 @@ export function Login({ onLogin }: { onLogin: (token: string) => void }) {
           <form onSubmit={submit} className="w-full max-w-sm space-y-6">
             <div>
               {logoUrl ? (
-                <img src={resolveAssetUrl(logoUrl)} alt="شعار النظام" className="mb-5 h-14 w-auto max-w-[180px] object-contain" />
+                <img src={resolveAssetUrl(logoUrl)} alt="شعار النظام" className="app-brand-logo mb-5 h-14 w-auto max-w-[180px] object-contain" />
               ) : (
                 <div className="mb-5 flex h-12 w-12 items-center justify-center rounded-md bg-bank-700 text-white">
                   <LockKeyhole className="h-6 w-6" />
