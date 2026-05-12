@@ -757,8 +757,14 @@ def seed_database(db: Session) -> None:
     try:
         from app.services.messaging_settings_service import seed_messaging_settings, sync_legacy_message_settings
 
+        if db.bind and db.bind.dialect.name != "sqlite":
+            db.execute(text("SET LOCAL lock_timeout = '3s'"))
+            db.execute(text("SET LOCAL statement_timeout = '10s'"))
+        logger.info("Startup: seeding messaging settings")
         seed_messaging_settings(db)
+        logger.info("Startup: syncing legacy messaging settings")
         sync_legacy_message_settings(db)
+        logger.info("Startup: messaging settings ready")
     except Exception:
         db.rollback()
         logger.exception("Startup: messaging settings seed failed; continuing startup")
