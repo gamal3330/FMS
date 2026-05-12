@@ -104,6 +104,8 @@ def resolve_upload_path(path_value: str | None) -> Path | None:
 
 def ensure_official_message_runtime(db: Session) -> None:
     global _OFFICIAL_RUNTIME_READY
+    if _OFFICIAL_RUNTIME_READY:
+        return
     bind = db.get_bind()
     try:
         Base.metadata.create_all(
