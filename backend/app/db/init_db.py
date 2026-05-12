@@ -1,4 +1,5 @@
 from datetime import datetime
+import logging
 
 from sqlalchemy import func, inspect, select, text
 from sqlalchemy.orm import Session
@@ -12,6 +13,7 @@ from app.models.settings import RequestTypeField, RequestTypeSetting, RequestTyp
 from app.models.user import Department, Role, User
 
 settings = get_settings()
+logger = logging.getLogger("uvicorn.error")
 
 DEFAULT_DEPARTMENTS = [
     ("تقنية المعلومات", "Information Technology", "IT"),
@@ -752,8 +754,12 @@ def seed_database(db: Session) -> None:
     seed_request_types(db)
     seed_request_type_versions(db)
     seed_document_categories(db)
-    from app.services.messaging_settings_service import seed_messaging_settings, sync_legacy_message_settings
+    try:
+        from app.services.messaging_settings_service import seed_messaging_settings, sync_legacy_message_settings
 
-    seed_messaging_settings(db)
-    sync_legacy_message_settings(db)
+        seed_messaging_settings(db)
+        sync_legacy_message_settings(db)
+    except Exception:
+        db.rollback()
+        logger.exception("Startup: messaging settings seed failed; continuing startup")
     db.commit()
