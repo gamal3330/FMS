@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
+import logging
 import time
 
 from app.api.v1.router import api_router
@@ -13,6 +14,7 @@ from app.services.database_backup_scheduler import start_backup_scheduler
 from app.services.update_manager import ensure_current_version, read_current_version_file
 
 settings = get_settings()
+logger = logging.getLogger("uvicorn.error")
 
 app = FastAPI(
     title=settings.app_name,
@@ -36,15 +38,22 @@ app.include_router(api_router, prefix="/api")
 
 @app.on_event("startup")
 def startup() -> None:
+    logger.info("Startup: creating database tables")
     Base.metadata.create_all(bind=engine)
+    logger.info("Startup: database tables ready")
     db = SessionLocal()
     try:
+        logger.info("Startup: seeding database")
         seed_database(db)
+        logger.info("Startup: ensuring current version")
         ensure_current_version(db)
         db.commit()
+        logger.info("Startup: seed and version checks complete")
     finally:
         db.close()
+    logger.info("Startup: starting backup scheduler")
     start_backup_scheduler()
+    logger.info("Startup: complete")
 
 
 @app.get("/", tags=["Health"])
