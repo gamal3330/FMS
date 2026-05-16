@@ -14,8 +14,8 @@ export function Pagination({ page, totalItems, pageSize, onPageChange }: Paginat
   const lastItem = Math.min(totalItems, page * pageSize);
 
   return (
-    <div className="flex flex-col gap-3 border-t border-slate-100 p-4 text-sm sm:flex-row sm:items-center sm:justify-between" dir="rtl">
-      <p className="text-slate-500">
+    <div className="flex flex-col gap-3 border-t border-slate-100 p-4 text-sm sm:flex-row sm:items-center sm:justify-between dark:border-emerald-900/40" dir="rtl">
+      <p className="text-slate-500 dark:text-slate-300">
         عرض {firstItem} - {lastItem} من {totalItems}
       </p>
       <div className="flex flex-wrap items-center gap-2">
@@ -23,13 +23,13 @@ export function Pagination({ page, totalItems, pageSize, onPageChange }: Paginat
           type="button"
           onClick={() => onPageChange(Math.max(1, page - 1))}
           disabled={page <= 1}
-          className="h-9 rounded-md border border-slate-300 px-3 font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+          className="h-9 rounded-md border border-slate-300 px-3 font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-emerald-900/50 dark:bg-[#0b1f19] dark:text-slate-100 dark:hover:bg-emerald-950/40"
         >
           السابق
         </button>
         {pages.map((item, index) =>
           item === "..." ? (
-            <span key={`${item}-${index}`} className="px-2 text-slate-400">...</span>
+            <span key={`${item}-${index}`} className="px-2 text-slate-400 dark:text-slate-500">...</span>
           ) : (
             <button
               key={item}
@@ -38,7 +38,7 @@ export function Pagination({ page, totalItems, pageSize, onPageChange }: Paginat
               className={`h-9 min-w-9 rounded-md border px-3 font-bold ${
                 item === page
                   ? "border-bank-600 bg-bank-600 text-white"
-                  : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                  : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50 dark:border-emerald-900/50 dark:bg-[#0b1f19] dark:text-slate-100 dark:hover:bg-emerald-950/40"
               }`}
             >
               {item}
@@ -49,7 +49,7 @@ export function Pagination({ page, totalItems, pageSize, onPageChange }: Paginat
           type="button"
           onClick={() => onPageChange(Math.min(totalPages, page + 1))}
           disabled={page >= totalPages}
-          className="h-9 rounded-md border border-slate-300 px-3 font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+          className="h-9 rounded-md border border-slate-300 px-3 font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-emerald-900/50 dark:bg-[#0b1f19] dark:text-slate-100 dark:hover:bg-emerald-950/40"
         >
           التالي
         </button>

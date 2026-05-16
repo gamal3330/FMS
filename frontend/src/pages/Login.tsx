@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useState } from "react";
 import { Eye, EyeOff, Landmark, LockKeyhole } from "lucide-react";
-import { API_BASE } from "../lib/api";
+import { API_BASE, IS_DOTNET_API } from "../lib/api";
 import { applyBrandColor, applyBranding, applyStoredFavicon } from "../lib/branding";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
@@ -21,7 +21,7 @@ export function Login({ onLogin }: { onLogin: (token: string) => void }) {
   const [logoUrl, setLogoUrl] = useState(() => localStorage.getItem("qib_logo_url") || "");
   const [email, setEmail] = useState("admin@qib.internal-bank.qa");
   const [loginIdentifierMode, setLoginIdentifierMode] = useState<PublicProfile["login_identifier_mode"]>("email_or_employee_id");
-  const [password, setPassword] = useState("Admin@12345");
+  const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
@@ -59,7 +59,7 @@ export function Login({ onLogin }: { onLogin: (token: string) => void }) {
       const response = await fetch(`${API_BASE}/auth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password })
+        body: JSON.stringify({ email, identifier: email, password })
       });
 
       if (!response.ok) {
@@ -68,9 +68,14 @@ export function Login({ onLogin }: { onLogin: (token: string) => void }) {
       }
 
       const data = await response.json();
-      onLogin(data.access_token);
+      const token = data.access_token || data.accessToken;
+      if (!token) {
+        setError("لم يرجع الخادم رمز دخول صالحاً.");
+        return;
+      }
+      onLogin(token);
     } catch {
-      setError("الخادم الخلفي غير متصل حالياً. شغّل backend على المنفذ 8000 ثم حاول مرة أخرى.");
+      setError(IS_DOTNET_API ? "خادم .NET غير متصل حالياً. شغّل .NET API على المنفذ 8088 ثم حاول مرة أخرى." : "الخادم الخلفي غير متصل حالياً. شغّل backend على المنفذ 8000 ثم حاول مرة أخرى.");
     } finally {
       setIsLoading(false);
     }

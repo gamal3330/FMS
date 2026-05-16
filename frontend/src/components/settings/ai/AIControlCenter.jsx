@@ -21,6 +21,8 @@ import { api, getErrorMessage } from "../../../lib/axios";
 import { formatSystemDateTime } from "../../../lib/datetime";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
+import { Pagination } from "../../ui/Pagination";
+import { useAutoPagination } from "../../ui/useAutoPagination";
 
 const aiTabs = [
   ["general", "الإعدادات العامة", Bot],
@@ -81,6 +83,17 @@ function mergeSettings(data) {
   return { ...defaultSettings, ...(data || {}), api_key: "" };
 }
 
+function getRoleCode(user) {
+  if (!user) return "";
+  if (typeof user.role === "string") return user.role;
+  return user.role?.code || user.role_code || "";
+}
+
+function hasAnyPermission(user, codes) {
+  const permissions = Array.isArray(user?.permissions) ? user.permissions : [];
+  return codes.some((code) => permissions.includes(code));
+}
+
 export default function AIControlCenter({ notify }) {
   const [active, setActive] = useState("general");
   const [currentUser, setCurrentUser] = useState(null);
@@ -100,7 +113,10 @@ export default function AIControlCenter({ notify }) {
     loading: false
   });
 
-  const isSuperAdmin = currentUser?.role === "super_admin";
+  const roleCode = getRoleCode(currentUser);
+  const canManageAi =
+    roleCode === "super_admin" ||
+    hasAnyPermission(currentUser, ["settings.manage", "manage_ai_settings", "ai.manage", "ai_settings.manage"]);
 
   async function load() {
     setLoading(true);
@@ -243,9 +259,9 @@ export default function AIControlCenter({ notify }) {
         </div>
       </div>
 
-      {!isSuperAdmin && (
+      {!canManageAi && (
         <WarningBox>
-          لديك صلاحية عرض فقط. تعديل الإعدادات الحساسة متاح لمدير النظام فقط.
+          لديك صلاحية عرض فقط. تعديل الإعدادات الحساسة متاح لمن يملك صلاحية إدارة الإعدادات.
         </WarningBox>
       )}
       <SimpleError error={error} />
@@ -269,22 +285,22 @@ export default function AIControlCenter({ notify }) {
       {active === "general" && (
         <SettingsCard title="الإعدادات العامة" description="تحكم في تشغيل المساعد وطريقة ظهوره للمستخدمين.">
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-            <Toggle label="تفعيل المساعد الذكي" checked={settings.is_enabled} disabled={!isSuperAdmin} onChange={(value) => updateSettings("is_enabled", value)} />
-            <Toggle label="إظهار تنبيه مراجعة المستخدم" checked={settings.show_human_review_disclaimer} disabled={!isSuperAdmin} onChange={(value) => updateSettings("show_human_review_disclaimer", value)} />
-            <SelectField label="وضع التشغيل" value={settings.mode} disabled={!isSuperAdmin} onChange={(value) => updateSettings("mode", value)} options={[["disabled", "معطل"], ["pilot", "تجريبي"], ["enabled", "مفعل"]]} />
-            <SelectField label="اللغة الافتراضية" value={settings.default_language} disabled={!isSuperAdmin} onChange={(value) => updateSettings("default_language", value)} options={[["ar", "العربية"], ["en", "الإنجليزية"]]} />
-            <TextField label="اسم المساعد" value={settings.assistant_name} disabled={!isSuperAdmin} onChange={(value) => updateSettings("assistant_name", value)} />
-            <TextField label="الحد الأقصى لطول النص" type="number" min="100" max="50000" value={settings.max_input_chars} disabled={!isSuperAdmin} onChange={(value) => updateSettings("max_input_chars", value)} />
-            <TextField label="مهلة الاستجابة بالثواني" type="number" value={settings.timeout_seconds} disabled={!isSuperAdmin} onChange={(value) => updateSettings("timeout_seconds", value)} />
+            <Toggle label="تفعيل المساعد الذكي" checked={settings.is_enabled} disabled={!canManageAi} onChange={(value) => updateSettings("is_enabled", value)} />
+            <Toggle label="إظهار تنبيه مراجعة المستخدم" checked={settings.show_human_review_disclaimer} disabled={!canManageAi} onChange={(value) => updateSettings("show_human_review_disclaimer", value)} />
+            <SelectField label="وضع التشغيل" value={settings.mode} disabled={!canManageAi} onChange={(value) => updateSettings("mode", value)} options={[["disabled", "معطل"], ["pilot", "تجريبي"], ["enabled", "مفعل"]]} />
+            <SelectField label="اللغة الافتراضية" value={settings.default_language} disabled={!canManageAi} onChange={(value) => updateSettings("default_language", value)} options={[["ar", "العربية"], ["en", "الإنجليزية"]]} />
+            <TextField label="اسم المساعد" value={settings.assistant_name} disabled={!canManageAi} onChange={(value) => updateSettings("assistant_name", value)} />
+            <TextField label="الحد الأقصى لطول النص" type="number" min="100" max="50000" value={settings.max_input_chars} disabled={!canManageAi} onChange={(value) => updateSettings("max_input_chars", value)} />
+            <TextField label="مهلة الاستجابة بالثواني" type="number" value={settings.timeout_seconds} disabled={!canManageAi} onChange={(value) => updateSettings("timeout_seconds", value)} />
             <label className="space-y-2 text-sm font-bold text-slate-700 md:col-span-2 xl:col-span-4">
               وصف المساعد
-              <textarea disabled={!isSuperAdmin} value={settings.assistant_description || ""} onChange={(event) => updateSettings("assistant_description", event.target.value)} className="min-h-24 w-full rounded-md border border-slate-300 bg-white p-3 text-sm leading-7 outline-none focus:border-bank-600 focus:ring-2 focus:ring-bank-100 disabled:bg-slate-50" />
+              <textarea disabled={!canManageAi} value={settings.assistant_description || ""} onChange={(event) => updateSettings("assistant_description", event.target.value)} className="min-h-24 w-full rounded-md border border-slate-300 bg-white p-3 text-sm leading-7 outline-none focus:border-bank-600 focus:ring-2 focus:ring-bank-100 disabled:bg-slate-50" />
             </label>
             <div className="md:col-span-2 xl:col-span-4">
               <TextArea
                 label="تعليمات النظام للمساعد"
                 value={settings.system_prompt || ""}
-                disabled={!isSuperAdmin}
+                disabled={!canManageAi}
                 rows={7}
                 onChange={(value) => updateSettings("system_prompt", value)}
               />
@@ -293,7 +309,7 @@ export default function AIControlCenter({ notify }) {
               </p>
             </div>
           </div>
-          <SaveBar onSave={saveSettings} onRefresh={load} disabled={!isSuperAdmin || saving} saving={saving} />
+          <SaveBar onSave={saveSettings} onRefresh={load} disabled={!canManageAi || saving} saving={saving} />
         </SettingsCard>
       )}
 
@@ -301,32 +317,32 @@ export default function AIControlCenter({ notify }) {
         <SettingsCard title="مزود النموذج" description="الاتصال بالنموذج يتم من Backend فقط، ولا يتم كشف مفاتيح الخدمة للمتصفح.">
           <WarningBox>عند استخدام Ollama داخل Docker قد تحتاج إلى استخدام الرابط: http://host.docker.internal:11434 بدلاً من localhost.</WarningBox>
           <div className="grid gap-4 md:grid-cols-2">
-            <SelectField label="نوع المزود" value={settings.provider} disabled={!isSuperAdmin} onChange={(value) => updateSettings("provider", value)} options={[["local_ollama", "Ollama محلي"], ["openai_compatible", "OpenAI Compatible"], ["external_api", "External API"], ["disabled", "معطل"]]} />
-            <TextField label="اسم النموذج" value={settings.model_name} disabled={!isSuperAdmin} onChange={(value) => updateSettings("model_name", value)} placeholder="qwen3:8b" />
-            <TextField label="رابط خادم النموذج" value={settings.api_base_url || ""} disabled={!isSuperAdmin} onChange={(value) => updateSettings("api_base_url", value)} placeholder="http://localhost:11434" />
-            <TextField label="Timeout" type="number" value={settings.timeout_seconds} disabled={!isSuperAdmin} onChange={(value) => updateSettings("timeout_seconds", value)} />
+            <SelectField label="نوع المزود" value={settings.provider} disabled={!canManageAi} onChange={(value) => updateSettings("provider", value)} options={[["local_ollama", "Ollama محلي"], ["openai_compatible", "OpenAI Compatible"], ["external_api", "External API"], ["disabled", "معطل"]]} />
+            <TextField label="اسم النموذج" value={settings.model_name} disabled={!canManageAi} onChange={(value) => updateSettings("model_name", value)} placeholder="qwen3:8b" />
+            <TextField label="رابط خادم النموذج" value={settings.api_base_url || ""} disabled={!canManageAi} onChange={(value) => updateSettings("api_base_url", value)} placeholder="http://localhost:11434" />
+            <TextField label="Timeout" type="number" value={settings.timeout_seconds} disabled={!canManageAi} onChange={(value) => updateSettings("timeout_seconds", value)} />
             <label className="space-y-2 text-sm font-bold text-slate-700 md:col-span-2">
               API Key
-              <Input type="password" disabled={!isSuperAdmin} value={settings.api_key || ""} onChange={(event) => updateSettings("api_key", event.target.value)} placeholder={settings.api_key_configured ? "تم حفظ مفتاح سابق. اتركه فارغاً للإبقاء عليه." : "اختياري حسب المزود"} />
+              <Input type="password" disabled={!canManageAi} value={settings.api_key || ""} onChange={(event) => updateSettings("api_key", event.target.value)} placeholder={settings.api_key_configured ? "تم حفظ مفتاح سابق. اتركه فارغاً للإبقاء عليه." : "اختياري حسب المزود"} />
             </label>
             <p className="rounded-md border border-slate-200 bg-slate-50 p-3 text-sm leading-6 text-slate-600 md:col-span-2">{providerHints[settings.provider] || providerHints.external_api}</p>
           </div>
           <div className="flex flex-wrap gap-3">
-            <Button type="button" onClick={testConnection} disabled={!isSuperAdmin || test.loading}>اختبار الاتصال</Button>
-            <button type="button" onClick={testGeneration} disabled={!isSuperAdmin || test.loading} className="inline-flex h-10 items-center gap-2 rounded-md border border-bank-200 bg-white px-4 text-sm font-bold text-bank-800 hover:bg-bank-50 disabled:opacity-60">
+            <Button type="button" onClick={testConnection} disabled={!canManageAi || test.loading}>اختبار الاتصال</Button>
+            <button type="button" onClick={testGeneration} disabled={!canManageAi || test.loading} className="inline-flex h-10 items-center gap-2 rounded-md border border-bank-200 bg-white px-4 text-sm font-bold text-bank-800 hover:bg-bank-50 disabled:opacity-60">
               <Wand2 className="h-4 w-4" />
               اختبار التوليد
             </button>
           </div>
           <TestOutput output={test.output} loading={test.loading} />
-          <SaveBar onSave={saveSettings} onRefresh={load} disabled={!isSuperAdmin || saving} saving={saving} />
+          <SaveBar onSave={saveSettings} onRefresh={load} disabled={!canManageAi || saving} saving={saving} />
         </SettingsCard>
       )}
 
       {active === "permissions" && (
         <SettingsCard title="صلاحيات الاستخدام" description="حدد خصائص الذكاء الاصطناعي المسموحة لكل دور وظيفي وحدود الاستخدام اليومية والشهرية.">
-          <FeatureMatrix features={features} disabled={!isSuperAdmin} onChange={updateFeature} />
-          <SaveBar onSave={saveFeatures} onRefresh={load} disabled={!isSuperAdmin || saving} saving={saving} />
+          <FeatureMatrix features={features} disabled={!canManageAi} onChange={updateFeature} />
+          <SaveBar onSave={saveFeatures} onRefresh={load} disabled={!canManageAi || saving} saving={saving} />
         </SettingsCard>
       )}
 
@@ -334,35 +350,36 @@ export default function AIControlCenter({ notify }) {
         <SettingsCard title="الخصوصية وحماية البيانات" description="إعدادات منع إرسال بيانات حساسة إلى النموذج.">
           <WarningBox>لا يتم إرسال كلمات المرور أو المفاتيح أو الرموز السرية للنموذج. يتم إخفاء البيانات الحساسة قبل الاتصال بالمزود.</WarningBox>
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-            <Toggle label="إخفاء البيانات الحساسة" checked={settings.mask_sensitive_data} disabled={!isSuperAdmin} onChange={(value) => updateSettings("mask_sensitive_data", value)} />
-            <Toggle label="إخفاء البريد الإلكتروني" checked={settings.mask_emails} disabled={!isSuperAdmin} onChange={(value) => updateSettings("mask_emails", value)} />
-            <Toggle label="إخفاء رقم الجوال" checked={settings.mask_phone_numbers} disabled={!isSuperAdmin} onChange={(value) => updateSettings("mask_phone_numbers", value)} />
-            <Toggle label="إخفاء الرقم الوظيفي" checked={settings.mask_employee_ids} disabled={!isSuperAdmin} onChange={(value) => updateSettings("mask_employee_ids", value)} />
-            <Toggle label="إخفاء أسماء المستخدمين" checked={settings.mask_usernames} disabled={!isSuperAdmin} onChange={(value) => updateSettings("mask_usernames", value)} />
-            <Toggle label="إخفاء أرقام الطلبات" checked={settings.mask_request_numbers} disabled={!isSuperAdmin} onChange={(value) => updateSettings("mask_request_numbers", value)} />
-            <Toggle label="السماح بإرسال سياق الطلب" checked={settings.allow_request_context} disabled={!isSuperAdmin} onChange={(value) => updateSettings("allow_request_context", value)} />
-            <SelectField label="مستوى سياق الطلب" value={settings.request_context_level} disabled={!isSuperAdmin} onChange={(value) => updateSettings("request_context_level", value)} options={[["none", "لا يوجد"], ["basic_only", "بيانات أساسية فقط"], ["basic_and_allowed_messages", "البيانات والمراسلات المسموحة"]]} />
-            <Toggle label="السماح بإرسال المرفقات للنموذج" checked={settings.allow_attachments_to_ai} disabled={!isSuperAdmin} onChange={(value) => updateSettings("allow_attachments_to_ai", value)} />
-            <Toggle label="حفظ النص الكامل في السجلات" checked={settings.store_full_prompt_logs} disabled={!isSuperAdmin} onChange={(value) => updateSettings("store_full_prompt_logs", value)} />
+            <Toggle label="إخفاء البيانات الحساسة" checked={settings.mask_sensitive_data} disabled={!canManageAi} onChange={(value) => updateSettings("mask_sensitive_data", value)} />
+            <Toggle label="إخفاء البريد الإلكتروني" checked={settings.mask_emails} disabled={!canManageAi} onChange={(value) => updateSettings("mask_emails", value)} />
+            <Toggle label="إخفاء رقم الجوال" checked={settings.mask_phone_numbers} disabled={!canManageAi} onChange={(value) => updateSettings("mask_phone_numbers", value)} />
+            <Toggle label="إخفاء الرقم الوظيفي" checked={settings.mask_employee_ids} disabled={!canManageAi} onChange={(value) => updateSettings("mask_employee_ids", value)} />
+            <Toggle label="إخفاء أسماء المستخدمين" checked={settings.mask_usernames} disabled={!canManageAi} onChange={(value) => updateSettings("mask_usernames", value)} />
+            <Toggle label="إخفاء أرقام الطلبات" checked={settings.mask_request_numbers} disabled={!canManageAi} onChange={(value) => updateSettings("mask_request_numbers", value)} />
+            <Toggle label="السماح بإرسال سياق الطلب" checked={settings.allow_request_context} disabled={!canManageAi} onChange={(value) => updateSettings("allow_request_context", value)} />
+            <SelectField label="مستوى سياق الطلب" value={settings.request_context_level} disabled={!canManageAi} onChange={(value) => updateSettings("request_context_level", value)} options={[["none", "لا يوجد"], ["basic_only", "بيانات أساسية فقط"], ["basic_and_allowed_messages", "البيانات والمراسلات المسموحة"]]} />
+            <Toggle label="السماح بإرسال المرفقات للنموذج" checked={settings.allow_attachments_to_ai} disabled={!canManageAi} onChange={(value) => updateSettings("allow_attachments_to_ai", value)} />
+            <Toggle label="حفظ النص الكامل في السجلات" checked={settings.store_full_prompt_logs} disabled={!canManageAi} onChange={(value) => updateSettings("store_full_prompt_logs", value)} />
           </div>
-          <SaveBar onSave={saveSettings} onRefresh={load} disabled={!isSuperAdmin || saving} saving={saving} />
+          <SaveBar onSave={saveSettings} onRefresh={load} disabled={!canManageAi || saving} saving={saving} />
         </SettingsCard>
       )}
 
       {active === "messaging" && (
         <SettingsCard title="إعدادات المراسلات" description="حدد أماكن ظهور أدوات الذكاء الاصطناعي داخل نظام المراسلات.">
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-            <Toggle label="إظهار AI في رسالة جديدة" checked={settings.show_in_compose_message} disabled={!isSuperAdmin} onChange={(value) => updateSettings("show_in_compose_message", value)} />
-            <Toggle label="إظهار AI في تفاصيل الرسالة" checked={settings.show_in_message_details} disabled={!isSuperAdmin} onChange={(value) => updateSettings("show_in_message_details", value)} />
-            <Toggle label="إظهار AI في مراسلات الطلب" checked={settings.show_in_request_messages_tab} disabled={!isSuperAdmin} onChange={(value) => updateSettings("show_in_request_messages_tab", value)} />
-            <Toggle label="السماح بتوليد الرسائل" checked={settings.allow_message_drafting} disabled={!isSuperAdmin} onChange={(value) => updateSettings("allow_message_drafting", value)} />
-            <Toggle label="السماح باقتراح الردود" checked={settings.allow_reply_suggestion} disabled={!isSuperAdmin} onChange={(value) => updateSettings("allow_reply_suggestion", value)} />
-            <Toggle label="السماح بتحسين الصياغة" checked={settings.allow_message_improvement} disabled={!isSuperAdmin} onChange={(value) => updateSettings("allow_message_improvement", value)} />
-            <Toggle label="السماح بتلخيص المراسلات" checked={settings.allow_summarization} disabled={!isSuperAdmin} onChange={(value) => updateSettings("allow_summarization", value)} />
-            <Toggle label="فحص المعلومات الناقصة" checked={settings.allow_missing_info_detection} disabled={!isSuperAdmin} onChange={(value) => updateSettings("allow_missing_info_detection", value)} />
+            <Toggle label="إظهار AI في رسالة جديدة" checked={settings.show_in_compose_message} disabled={!canManageAi} onChange={(value) => updateSettings("show_in_compose_message", value)} />
+            <Toggle label="إظهار AI في تفاصيل الرسالة" checked={settings.show_in_message_details} disabled={!canManageAi} onChange={(value) => updateSettings("show_in_message_details", value)} />
+            <Toggle label="إظهار AI في مراسلات الطلب" checked={settings.show_in_request_messages_tab} disabled={!canManageAi} onChange={(value) => updateSettings("show_in_request_messages_tab", value)} />
+            <Toggle label="السماح بتوليد الرسائل" checked={settings.allow_message_drafting} disabled={!canManageAi} onChange={(value) => updateSettings("allow_message_drafting", value)} />
+            <Toggle label="السماح باقتراح الردود" checked={settings.allow_reply_suggestion} disabled={!canManageAi} onChange={(value) => updateSettings("allow_reply_suggestion", value)} />
+            <Toggle label="السماح بتحسين الصياغة" checked={settings.allow_message_improvement} disabled={!canManageAi} onChange={(value) => updateSettings("allow_message_improvement", value)} />
+            <Toggle label="السماح بتلخيص المراسلات" checked={settings.allow_summarization} disabled={!canManageAi} onChange={(value) => updateSettings("allow_summarization", value)} />
+            <Toggle label="فحص المعلومات الناقصة" checked={settings.allow_missing_info_detection} disabled={!canManageAi} onChange={(value) => updateSettings("allow_missing_info_detection", value)} />
+            <Toggle label="ترجمة عربي/إنجليزي" checked={settings.allow_translate_ar_en} disabled={!canManageAi} onChange={(value) => updateSettings("allow_translate_ar_en", value)} />
           </div>
           <WarningBox>النص المقترح لا يدخل في الرسالة إلا بعد ضغط المستخدم على زر “استخدام النص”. لا يوجد إرسال تلقائي.</WarningBox>
-          <SaveBar onSave={saveSettings} onRefresh={load} disabled={!isSuperAdmin || saving} saving={saving} />
+          <SaveBar onSave={saveSettings} onRefresh={load} disabled={!canManageAi || saving} saving={saving} />
         </SettingsCard>
       )}
 
@@ -426,8 +443,8 @@ export default function AIControlCenter({ notify }) {
             <div className="space-y-3">
               <TextArea label="نص اختبار التوليد أو القالب" value={test.prompt} onChange={(value) => setTest((current) => ({ ...current, prompt: value }))} rows={7} />
               <div className="flex flex-wrap gap-3">
-                <Button type="button" onClick={testConnection} disabled={!isSuperAdmin || test.loading}>اختبار الاتصال</Button>
-                <button type="button" onClick={testGeneration} disabled={!isSuperAdmin || test.loading} className="h-10 rounded-md border border-bank-200 bg-bank-50 px-4 text-sm font-bold text-bank-800 disabled:opacity-60">اختبار التوليد</button>
+                <Button type="button" onClick={testConnection} disabled={!canManageAi || test.loading}>اختبار الاتصال</Button>
+                <button type="button" onClick={testGeneration} disabled={!canManageAi || test.loading} className="h-10 rounded-md border border-bank-200 bg-bank-50 px-4 text-sm font-bold text-bank-800 disabled:opacity-60">اختبار التوليد</button>
               </div>
             </div>
             <div className="space-y-3">
@@ -563,22 +580,26 @@ function Metric({ label, value }) {
   );
 }
 
-function SimpleTable({ headers, rows }) {
+function SimpleTable({ headers, rows, pageSize = 10 }) {
+  const { page, setPage, visibleRows, showPagination, totalItems } = useAutoPagination(rows || [], pageSize);
   if (!rows?.length) {
     return <div className="rounded-md border border-dashed border-slate-200 bg-slate-50 p-5 text-center text-sm text-slate-500">لا توجد بيانات حالياً.</div>;
   }
   return (
-    <div className="overflow-x-auto rounded-lg border border-slate-200">
-      <table className="min-w-full text-right text-sm">
-        <thead className="bg-slate-50 text-slate-700">
-          <tr>{headers.map((header) => <th key={header} className="whitespace-nowrap px-3 py-3 font-black">{header}</th>)}</tr>
-        </thead>
-        <tbody className="divide-y divide-slate-100 bg-white">
-          {rows.map((row, index) => (
-            <tr key={index}>{row.map((cell, cellIndex) => <td key={cellIndex} className="max-w-md px-3 py-3 text-slate-700">{cell}</td>)}</tr>
-          ))}
-        </tbody>
-      </table>
+    <div className="overflow-hidden rounded-lg border border-slate-200">
+      <div className="overflow-x-auto">
+        <table className="min-w-full text-right text-sm">
+          <thead className="bg-slate-50 text-slate-700">
+            <tr>{headers.map((header) => <th key={header} className="whitespace-nowrap px-3 py-3 font-black">{header}</th>)}</tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100 bg-white">
+            {visibleRows.map((row, index) => (
+              <tr key={`${page}-${index}`}>{row.map((cell, cellIndex) => <td key={cellIndex} className="max-w-md px-3 py-3 text-slate-700">{cell}</td>)}</tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {showPagination && <Pagination page={page} totalItems={totalItems} pageSize={pageSize} onPageChange={setPage} />}
     </div>
   );
 }

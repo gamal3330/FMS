@@ -33,6 +33,8 @@ import { formatSystemDateTime } from "../../lib/datetime";
 import { Button } from "../../components/ui/button";
 import { Card } from "../../components/ui/card";
 import { Input } from "../../components/ui/input";
+import { Pagination } from "../../components/ui/Pagination";
+import { useAutoPagination } from "../../components/ui/useAutoPagination";
 import FeedbackDialog from "../../components/ui/FeedbackDialog";
 
 const tabs = [
@@ -87,6 +89,7 @@ const emptyUserForm = {
   relationship_type: "employee",
   role: "employee",
   administrative_section: "",
+  specialized_section_id: "",
   password: "",
   force_password_change: true,
   password_expires_at: "",
@@ -284,7 +287,7 @@ export default function UsersPage() {
       department_id: form.department_id ? Number(form.department_id) : null,
       manager_id: form.manager_id ? Number(form.manager_id) : null,
       role_id: null,
-      specialized_section_id: null,
+      specialized_section_id: form.role === "it_staff" && form.specialized_section_id ? Number(form.specialized_section_id) : null,
       password_expires_at: form.password_expires_at || null,
       mobile: form.mobile || null,
       username: form.username || null,
@@ -292,7 +295,7 @@ export default function UsersPage() {
       allowed_login_from_ip: form.allowed_login_from_ip || null,
       notes: form.notes || null
     };
-    if (userModal.mode === "edit" || !payload.password || payload.password === configuredTemporaryPassword) {
+    if (userModal.mode === "edit" || payload.password === "") {
       delete payload.password;
     }
     await runAction("save-user", async () => {
@@ -428,20 +431,19 @@ export default function UsersPage() {
                   setFilters={setFilters}
                   selectedUsers={selectedUsers}
                   setSelectedUsers={setSelectedUsers}
-                  onAdd={() => setUserModal({ mode: "create", form: { ...emptyUserForm, password: configuredTemporaryPassword } })}
+                  onAdd={() => setUserModal({ mode: "create", form: { ...emptyUserForm, password: "" } })}
                   onEdit={(user) => setUserModal({ mode: "edit", user, form: userToForm(user) })}
                   onDetails={openDetails}
                   onExport={exportUsersCsv}
                   onToggleActive={(user) => runAction("toggle-user", async () => api.post(`/users/${user.id}/${user.is_active ? "disable" : "enable"}`))}
                   onLock={(user) => runAction("lock-user", async () => api.post(`/users/${user.id}/${user.is_locked ? "unlock" : "lock"}`))}
                   onResetPassword={(user) => {
-                    const password = window.prompt("أدخل كلمة المرور المؤقتة الجديدة، أو اتركها فارغة لاستخدام إعداد النظام", configuredTemporaryPassword);
+                    const password = window.prompt("أدخل كلمة المرور المؤقتة الجديدة، أو اتركها فارغة لاستخدام إعداد النظام", "");
                     if (password === null) return;
                     const admin_password = window.prompt("أدخل كلمة مرورك الحالية لتأكيد العملية");
                     if (admin_password) {
-                      const normalizedPassword = password.trim();
                       const payload = { admin_password };
-                      if (normalizedPassword && normalizedPassword !== configuredTemporaryPassword) payload.password = normalizedPassword;
+                      if (password !== "") payload.password = password;
                       runAction("reset-password", async () => api.post(`/users/${user.id}/reset-password`, payload));
                     }
                   }}
@@ -833,6 +835,13 @@ function UserFormModal({ modal, setModal, users, departments, specializedSection
   const form = modal.form;
   const setForm = (patch) => setModal({ ...modal, form: { ...form, ...patch } });
   const currentSectionExists = specializedSections.some((section) => section.code === form.administrative_section);
+  const setSpecializedSection = (code) => {
+    const selected = specializedSections.find((section) => section.code === code);
+    setForm({
+      administrative_section: code,
+      specialized_section_id: selected?.id || ""
+    });
+  };
   return (
     <Modal title={modal.mode === "edit" ? "تعديل مستخدم" : "إضافة مستخدم"} onClose={() => setModal(null)}>
       <form onSubmit={onSubmit} className="space-y-4">
@@ -847,12 +856,12 @@ function UserFormModal({ modal, setModal, users, departments, specializedSection
           <Field label="الإدارة"><Select value={form.department_id || ""} onChange={(event) => setForm({ department_id: event.target.value })}><option value="">اختر الإدارة</option>{departments.map((department) => <option key={department.id} value={department.id}>{department.name_ar}</option>)}</Select></Field>
           <Field label="المدير المباشر"><Select value={form.manager_id || ""} onChange={(event) => setForm({ manager_id: event.target.value })}><option value="">بدون مدير</option>{users.map((user) => <option key={user.id} value={user.id}>{user.full_name_ar}</option>)}</Select></Field>
           <Field label="نوع العلاقة"><Select value={form.relationship_type || "employee"} onChange={(event) => setForm({ relationship_type: event.target.value })}>{relationOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</Select></Field>
-          <Field label="الدور"><Select value={form.role} onChange={(event) => setForm({ role: event.target.value, administrative_section: event.target.value === "it_staff" ? form.administrative_section : "" })}>{roleOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</Select></Field>
+          <Field label="الدور"><Select value={form.role} onChange={(event) => setForm({ role: event.target.value, administrative_section: event.target.value === "it_staff" ? form.administrative_section : "", specialized_section_id: event.target.value === "it_staff" ? form.specialized_section_id : "" })}>{roleOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</Select></Field>
           <Field label="القسم المختص">
             <Select
               value={form.administrative_section || ""}
               disabled={form.role !== "it_staff"}
-              onChange={(event) => setForm({ administrative_section: event.target.value })}
+              onChange={(event) => setSpecializedSection(event.target.value)}
             >
               <option value="">{form.role === "it_staff" ? "اختر القسم المختص" : "لا ينطبق إلا على مختص تنفيذ"}</option>
               {form.administrative_section && !currentSectionExists && <option value={form.administrative_section}>{form.administrative_section}</option>}
@@ -985,23 +994,27 @@ function SubjectSelector({ matrix, subject, setSubject }) {
   );
 }
 
-function DataTable({ headers, rows, compact = false }) {
+function DataTable({ headers, rows, compact = false, pageSize = 10 }) {
+  const { page, setPage, visibleRows, showPagination, totalItems } = useAutoPagination(rows || [], pageSize);
   return (
-    <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
-      <table className="min-w-full text-sm">
-        <thead className="bg-slate-50 text-slate-700">
-          <tr>{headers.map((header) => <th key={header} className={`whitespace-nowrap text-right font-black ${compact ? "p-2" : "p-3"}`}>{header}</th>)}</tr>
-        </thead>
-        <tbody className="divide-y divide-slate-100">
-          {rows.length ? rows.map((row, index) => (
-            <tr key={index} className="align-top hover:bg-slate-50/70">
-              {row.map((cell, cellIndex) => <td key={cellIndex} className={`${compact ? "p-2" : "p-3"} text-slate-700`}>{cell}</td>)}
-            </tr>
-          )) : (
-            <tr><td colSpan={headers.length} className="p-6 text-center text-sm text-slate-500">لا توجد بيانات للعرض.</td></tr>
-          )}
-        </tbody>
-      </table>
+    <div className="overflow-hidden rounded-lg border border-slate-200 bg-white">
+      <div className="overflow-x-auto">
+        <table className="min-w-full text-sm">
+          <thead className="bg-slate-50 text-slate-700">
+            <tr>{headers.map((header) => <th key={header} className={`whitespace-nowrap text-right font-black ${compact ? "p-2" : "p-3"}`}>{header}</th>)}</tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {visibleRows.length ? visibleRows.map((row, index) => (
+              <tr key={`${page}-${index}`} className="align-top hover:bg-slate-50/70">
+                {row.map((cell, cellIndex) => <td key={cellIndex} className={`${compact ? "p-2" : "p-3"} text-slate-700`}>{cell}</td>)}
+              </tr>
+            )) : (
+              <tr><td colSpan={headers.length} className="p-6 text-center text-sm text-slate-500">لا توجد بيانات للعرض.</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+      {showPagination && <Pagination page={page} totalItems={totalItems} pageSize={pageSize} onPageChange={setPage} />}
     </div>
   );
 }
@@ -1135,7 +1148,8 @@ function userToForm(user) {
     manager_id: user.manager_id || "",
     mobile: user.mobile || "",
     job_title: user.job_title || "",
-    administrative_section: user.administrative_section || "",
+    administrative_section: user.administrative_section || user.specialized_section_code || "",
+    specialized_section_id: user.specialized_section_id || user.specializedSectionId || user.specialized_section?.id || "",
     password_expires_at: toLocalDateTimeInput(user.password_expires_at),
     allowed_login_from_ip: user.allowed_login_from_ip || "",
     notes: user.notes || "",

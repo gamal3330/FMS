@@ -1,9 +1,10 @@
+// @ts-nocheck
 import { useEffect, useState } from "react";
 import { Bot, FileSearch, Sparkles } from "lucide-react";
 import { apiFetch } from "../../lib/api";
 import AISuggestionPanel from "./AISuggestionPanel";
 
-export default function AIAssistantBox({ body = "", relatedRequestId = "", requestType = "", onUseDraft, onUseBody }) {
+export default function AIAssistantBox({ body = "", relatedRequestId = "", requestType = "", onUseDraft, onUseBody, status: statusOverride = null }) {
   const [status, setStatus] = useState(null);
   const [instruction, setInstruction] = useState("");
   const [loadingAction, setLoadingAction] = useState("");
@@ -13,20 +14,31 @@ export default function AIAssistantBox({ body = "", relatedRequestId = "", reque
   const [lastAction, setLastAction] = useState(null);
 
   useEffect(() => {
+    if (statusOverride) {
+      setStatus(statusOverride);
+      return;
+    }
     apiFetch("/ai/status")
       .then((data) => setStatus(data))
       .catch(() => setStatus({ is_enabled: false, allow_message_drafting: false }));
-  }, []);
+  }, [statusOverride]);
 
   useEffect(() => {
     setError("");
     setErrorAction("");
   }, [instruction, body]);
 
-  const isEnabled = Boolean(status?.is_enabled && status?.allow_message_drafting && status?.show_in_compose_message !== false);
-  if (!isEnabled) return null;
+  const locationEnabled = Boolean(status?.is_enabled && status?.show_in_compose_message !== false);
+  const canDraft = Boolean(locationEnabled && status?.allow_message_drafting);
+  const canImprove = Boolean(locationEnabled && status?.allow_message_improvement);
+  const canDetectMissingInfo = Boolean(locationEnabled && status?.allow_missing_info_detection);
+  const canTranslate = Boolean(locationEnabled && status?.allow_translate_ar_en);
+  if (!canDraft && !canImprove && !canDetectMissingInfo && !canTranslate) return null;
 
   const maxInputChars = Number(status?.max_input_chars || 6000);
+  const assistantName = status?.assistant_name || "المساعد الذكي للمراسلات";
+  const assistantDescription = status?.assistant_description || "يساعدك في توليد مسودات وتحسين النص. لن يرسل أي رسالة تلقائياً.";
+  const showDisclaimer = status?.show_human_review_disclaimer !== false;
   const instructionLength = plainTextLength(instruction);
   const bodyLength = plainTextLength(body);
   const isInstructionTooLong = instructionLength > maxInputChars;
@@ -52,18 +64,28 @@ export default function AIAssistantBox({ body = "", relatedRequestId = "", reque
     try {
       let data;
       if (action === "draft") {
+        if (!canDraft) return;
         data = await apiFetch("/ai/messages/draft", {
           method: "POST",
           body: JSON.stringify({ instruction, related_request_id: relatedRequestId || undefined })
         });
         setSuggestion({ type: "draft", subject: data.subject || "", body: data.body || "" });
       } else if (action === "missing") {
+        if (!canDetectMissingInfo) return;
         data = await apiFetch("/ai/messages/missing-info", {
           method: "POST",
           body: JSON.stringify({ body, request_type: requestType || undefined, related_request_id: relatedRequestId || undefined })
         });
         setSuggestion({ type: "missing", items: data.items || [] });
+      } else if (action === "translate") {
+        if (!canTranslate) return;
+        data = await apiFetch("/ai/messages/translate", {
+          method: "POST",
+          body: JSON.stringify({ body, related_request_id: relatedRequestId || undefined })
+        });
+        setSuggestion({ type: "translate", body: data.body || "" });
       } else {
+        if (!canImprove) return;
         const endpoint = action === "improve" ? "improve" : action === "formalize" ? "formalize" : "shorten";
         data = await apiFetch(`/ai/messages/${endpoint}`, {
           method: "POST",
@@ -103,34 +125,37 @@ export default function AIAssistantBox({ body = "", relatedRequestId = "", reque
             <Bot className="h-5 w-5" />
           </span>
           <div>
-            <p className="text-sm font-black text-slate-950">المساعد الذكي للمراسلات</p>
-            <p className="mt-1 text-xs leading-5 text-slate-500">يساعدك في توليد مسودات وتحسين النص. لن يرسل أي رسالة تلقائياً.</p>
+            <p className="text-sm font-black text-slate-950">{assistantName}</p>
+            <p className="mt-1 text-xs leading-5 text-slate-500">{assistantDescription}</p>
           </div>
         </div>
       </div>
 
-      <div className="grid gap-3 lg:grid-cols-[1fr_auto]">
-        <input
-          value={instruction}
-          onChange={(event) => setInstruction(event.target.value)}
-          disabled={!isEnabled}
-          placeholder="اكتب ما تريد من المساعد الذكي، مثل: اكتب رسالة طلب استيضاح بخصوص هذا الطلب"
-          className={`h-11 w-full rounded-md border bg-white px-3 text-sm outline-none focus:ring-2 disabled:bg-slate-50 disabled:text-slate-400 ${isInstructionTooLong ? "border-red-300 focus:border-red-500 focus:ring-red-100" : "border-slate-200 focus:border-bank-600 focus:ring-bank-100"}`}
-        />
-        <button
-          type="button"
-          onClick={() => run("draft")}
-          disabled={!isEnabled || !instruction.trim() || isInstructionTooLong || Boolean(loadingAction)}
-          className="inline-flex h-11 items-center justify-center gap-2 rounded-md bg-bank-700 px-4 text-sm font-bold text-white hover:bg-bank-800 disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          <Sparkles className="h-4 w-4" />
-          {loadingAction === "draft" ? "جاري التوليد..." : "توليد مسودة"}
-        </button>
-      </div>
+      {canDraft && (
+        <div className="grid gap-3 lg:grid-cols-[1fr_auto]">
+          <input
+            value={instruction}
+            onChange={(event) => setInstruction(event.target.value)}
+            placeholder="اكتب ما تريد من المساعد الذكي، مثل: اكتب رسالة طلب استيضاح بخصوص هذا الطلب"
+            className={`h-11 w-full rounded-md border bg-white px-3 text-sm outline-none focus:ring-2 disabled:bg-slate-50 disabled:text-slate-400 ${isInstructionTooLong ? "border-red-300 focus:border-red-500 focus:ring-red-100" : "border-slate-200 focus:border-bank-600 focus:ring-bank-100"}`}
+          />
+          <button
+            type="button"
+            onClick={() => run("draft")}
+            disabled={!instruction.trim() || isInstructionTooLong || Boolean(loadingAction)}
+            className="inline-flex h-11 items-center justify-center gap-2 rounded-md bg-bank-700 px-4 text-sm font-bold text-white hover:bg-bank-800 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <Sparkles className="h-4 w-4" />
+            {loadingAction === "draft" ? "جاري التوليد..." : "توليد مسودة"}
+          </button>
+        </div>
+      )}
       <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-[11px]">
-        <span className={isInstructionTooLong ? "font-bold text-red-600" : "text-slate-400"}>
-          تعليمات المساعد: {formatCount(instructionLength)} من {formatCount(maxInputChars)} حرف
-        </span>
+        {canDraft && (
+          <span className={isInstructionTooLong ? "font-bold text-red-600" : "text-slate-400"}>
+            تعليمات المساعد: {formatCount(instructionLength)} من {formatCount(maxInputChars)} حرف
+          </span>
+        )}
         {hasBodyText && (
           <span className={isBodyTooLong ? "font-bold text-red-600" : "text-slate-400"}>
             نص الرسالة: {formatCount(bodyLength)} من {formatCount(maxInputChars)} حرف
@@ -149,10 +174,11 @@ export default function AIAssistantBox({ body = "", relatedRequestId = "", reque
       )}
 
       <div className="mt-3 flex flex-wrap gap-2">
-        <AIActionButton label="تحسين الصياغة" action="improve" current={loadingAction} disabled={!isEnabled || !hasBodyText || isBodyTooLong} onClick={run} />
-        <AIActionButton label="جعلها رسمية" action="formalize" current={loadingAction} disabled={!isEnabled || !hasBodyText || isBodyTooLong} onClick={run} />
-        <AIActionButton label="اختصار النص" action="shorten" current={loadingAction} disabled={!isEnabled || !hasBodyText || isBodyTooLong} onClick={run} />
-        <AIActionButton label="فحص المعلومات الناقصة" action="missing" current={loadingAction} disabled={!isEnabled || !hasBodyText || isBodyTooLong} onClick={run} icon={FileSearch} />
+        {canImprove && <AIActionButton label="تحسين الصياغة" action="improve" current={loadingAction} disabled={!hasBodyText || isBodyTooLong} onClick={run} />}
+        {canImprove && <AIActionButton label="جعلها رسمية" action="formalize" current={loadingAction} disabled={!hasBodyText || isBodyTooLong} onClick={run} />}
+        {canImprove && <AIActionButton label="اختصار النص" action="shorten" current={loadingAction} disabled={!hasBodyText || isBodyTooLong} onClick={run} />}
+        {canTranslate && <AIActionButton label="ترجمة عربي/إنجليزي" action="translate" current={loadingAction} disabled={!hasBodyText || isBodyTooLong} onClick={run} />}
+        {canDetectMissingInfo && <AIActionButton label="فحص المعلومات الناقصة" action="missing" current={loadingAction} disabled={!hasBodyText || isBodyTooLong} onClick={run} icon={FileSearch} />}
       </div>
 
       {visibleError && <div className="mt-3 rounded-md border border-red-100 bg-red-50 p-3 text-sm text-red-700">{visibleError}</div>}
@@ -165,6 +191,7 @@ export default function AIAssistantBox({ body = "", relatedRequestId = "", reque
           onUse={suggestion?.type === "missing" ? null : useSuggestion}
           onRetry={lastAction ? () => run(lastAction) : null}
           onCancel={() => setSuggestion(null)}
+          showDisclaimer={showDisclaimer}
         />
       </div>
     </div>
@@ -190,7 +217,7 @@ function shouldShowError(error, action, context) {
   if (action === "draft") {
     return context.isInstructionTooLong || context.instructionLength > context.maxInputChars;
   }
-  if (["improve", "formalize", "shorten", "missing"].includes(action)) {
+  if (["improve", "formalize", "shorten", "missing", "translate"].includes(action)) {
     return context.isBodyTooLong;
   }
   return false;

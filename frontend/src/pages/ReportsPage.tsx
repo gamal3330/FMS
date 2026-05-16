@@ -18,6 +18,7 @@ import { formatSystemDate } from "../lib/datetime";
 import { Button } from "../components/ui/button";
 import { Card } from "../components/ui/card";
 import { Pagination } from "../components/ui/Pagination";
+import { useAutoPagination } from "../components/ui/useAutoPagination";
 
 type ReportKey =
   | "summary"
@@ -761,13 +762,14 @@ function ReportTable({ columns, rows, loading }: { columns: Array<{ key: string;
 }
 
 function SavedReportsPanel({ items, onRun, onDelete, loading }: { items: Array<Record<string, unknown>>; onRun: (item: Record<string, unknown>) => void; onDelete: (id: unknown) => void; loading: boolean }) {
+  const { page, setPage, visibleRows, showPagination, totalItems, pageSize } = useAutoPagination(items || [], 10);
   return (
     <Card className="p-5">
       <PanelHeader icon={<Save className="h-5 w-5" />} title="التقارير المحفوظة" subtitle="التقارير التي تحفظ فلاتر المستخدم لتشغيلها لاحقاً." />
       <div className="grid gap-3">
         {loading && <p className="text-sm text-slate-500">جار التحميل...</p>}
         {!loading && items.length === 0 && <p className="text-sm text-slate-500">لا توجد تقارير محفوظة.</p>}
-        {items.map((item) => (
+        {visibleRows.map((item) => (
           <div key={String(item.id)} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 p-4">
             <div>
               <h3 className="font-bold text-slate-950">{String(item.name)}</h3>
@@ -780,6 +782,7 @@ function SavedReportsPanel({ items, onRun, onDelete, loading }: { items: Array<R
           </div>
         ))}
       </div>
+      {showPagination && <Pagination page={page} totalItems={totalItems} pageSize={pageSize} onPageChange={setPage} />}
     </Card>
   );
 }
@@ -793,13 +796,14 @@ function TemplatesPanel({ items, form, setForm, onCreate, onRun, onDisable, load
   onDisable: (id: unknown) => void;
   loading: boolean;
 }) {
+  const { page, setPage, visibleRows, showPagination, totalItems, pageSize } = useAutoPagination(items || [], 10);
   return (
     <div className="grid gap-4 xl:grid-cols-[1fr_360px]">
       <Card className="p-5">
         <PanelHeader icon={<FileText className="h-5 w-5" />} title="قوالب التقارير" subtitle="قوالب جاهزة أو مخصصة لتشغيل تقارير بفلاتر وأعمدة محددة." />
         <div className="grid gap-3">
           {loading && <p className="text-sm text-slate-500">جار التحميل...</p>}
-          {items.map((item) => (
+          {visibleRows.map((item) => (
             <div key={String(item.id)} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 p-4">
               <div>
                 <h3 className="font-bold text-slate-950">{String(item.name_ar)}</h3>
@@ -812,6 +816,7 @@ function TemplatesPanel({ items, form, setForm, onCreate, onRun, onDisable, load
             </div>
           ))}
         </div>
+        {showPagination && <Pagination page={page} totalItems={totalItems} pageSize={pageSize} onPageChange={setPage} />}
       </Card>
       <Card className="p-5">
         <h3 className="font-bold text-slate-950">إضافة قالب</h3>
@@ -836,6 +841,7 @@ function ScheduledPanel({ items, templates, form, setForm, onCreate, onDelete, l
   onDelete: (id: unknown) => void;
   loading: boolean;
 }) {
+  const { page, setPage, visibleRows, showPagination, totalItems, pageSize } = useAutoPagination(items || [], 10);
   return (
     <div className="grid gap-4 xl:grid-cols-[1fr_360px]">
       <Card className="p-5">
@@ -843,7 +849,7 @@ function ScheduledPanel({ items, templates, form, setForm, onCreate, onDelete, l
         <div className="grid gap-3">
           {loading && <p className="text-sm text-slate-500">جار التحميل...</p>}
           {items.length === 0 && !loading && <p className="text-sm text-slate-500">لا توجد جدولة تقارير.</p>}
-          {items.map((item) => (
+          {visibleRows.map((item) => (
             <div key={String(item.id)} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 p-4">
               <div>
                 <h3 className="font-bold text-slate-950">{String(item.name)}</h3>
@@ -853,6 +859,7 @@ function ScheduledPanel({ items, templates, form, setForm, onCreate, onDelete, l
             </div>
           ))}
         </div>
+        {showPagination && <Pagination page={page} totalItems={totalItems} pageSize={pageSize} onPageChange={setPage} />}
       </Card>
       <Card className="p-5">
         <h3 className="font-bold text-slate-950">إضافة جدولة</h3>

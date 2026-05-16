@@ -25,6 +25,7 @@ export default function RequestTypesPage() {
   const [status, setStatus] = useState("");
   const [dialog, setDialog] = useState({ type: "success", message: "" });
   const [workflowPreview, setWorkflowPreview] = useState([]);
+  const [workflowPreviewMeta, setWorkflowPreviewMeta] = useState(null);
   const [versionInfo, setVersionInfo] = useState(null);
   const [publishValidation, setPublishValidation] = useState(null);
 
@@ -44,11 +45,15 @@ export default function RequestTypesPage() {
       setSections(
         (data.specialized_sections || []).map((section) => [
           section.code,
-          section.department_id ? `${section.name_ar} - ${departmentNameById.get(Number(section.department_id)) || "إدارة مرتبطة"}` : section.name_ar
+          section.department_id ? `${section.name_ar} - ${departmentNameById.get(Number(section.department_id)) || "إدارة مرتبطة"}` : section.name_ar,
+          section.id
         ])
       );
       setOverview(overviewResponse.data);
-      setSelected((current) => current || data.request_types?.[0] || null);
+      setSelected((current) => {
+        if (!current) return data.request_types?.[0] || null;
+        return data.request_types?.find((item) => Number(item.id) === Number(current.id)) || current;
+      });
     } catch (error) {
       setDialog({ type: "error", message: getErrorMessage(error) });
     }
@@ -99,7 +104,9 @@ export default function RequestTypesPage() {
   async function previewWorkflow(showNotice = true) {
     if (!selected) return;
     try {
-      setWorkflowPreview((await api.get(`/request-types/${selected.id}/workflow/preview`)).data.steps);
+      const { data } = await api.get(`/request-types/${selected.id}/workflow/preview`);
+      setWorkflowPreview(data.steps || []);
+      setWorkflowPreviewMeta({ status: data.status, version_number: data.version_number });
       if (showNotice) notify("تم تحديث معاينة المسار");
     } catch (error) {
       setDialog({ type: "error", message: getErrorMessage(error) });
@@ -109,6 +116,7 @@ export default function RequestTypesPage() {
   useEffect(() => {
     if (!selected?.id || activeTab !== "معاينة الموافقات") {
       setWorkflowPreview([]);
+      setWorkflowPreviewMeta(null);
       return;
     }
     previewWorkflow(false);
@@ -130,6 +138,13 @@ export default function RequestTypesPage() {
     } catch (error) {
       setDialog({ type: "error", message: getErrorMessage(error) });
     }
+  }
+
+  async function refreshSelectedType(id = selected?.id) {
+    if (!id) return;
+    await load();
+    const { data } = await api.get(`/request-types/${id}`);
+    setSelected(data);
   }
 
   useEffect(() => {
@@ -230,8 +245,24 @@ export default function RequestTypesPage() {
           </div>
           {activeTab === "البيانات الأساسية" && <RequestTypeForm value={selected} onSubmit={saveType} onCancel={() => undefined} sectionsOptions={sections} />}
           {activeTab === "الحقول" && <DynamicFieldsBuilder requestTypeId={selected.id} notify={notify} />}
-          {activeTab === "مسار الموافقات" && <WorkflowBuilder requestTypeId={selected.id} notify={notify} onWorkflowChange={() => previewWorkflow(false)} />}
-          {activeTab === "معاينة الموافقات" && <WorkflowPreview steps={workflowPreview} />}
+          {activeTab === "مسار الموافقات" && (
+            <WorkflowBuilder
+              requestTypeId={selected.id}
+              notify={notify}
+              onWorkflowChange={() => previewWorkflow(false)}
+              onWorkflowPublished={() => refreshSelectedType(selected.id)}
+            />
+          )}
+          {activeTab === "معاينة الموافقات" && (
+            <div className="space-y-4">
+              {workflowPreviewMeta?.status === "draft" && (
+                <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm font-semibold leading-6 text-amber-800 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-100">
+                  هذه معاينة لمسودة غير منشورة. الطلبات الجديدة لن تستخدمها إلا بعد الضغط على نشر المسار.
+                </div>
+              )}
+              <WorkflowPreview steps={workflowPreview} />
+            </div>
+          )}
           {activeTab === "المعاينة والنشر" && <PublishValidationPanel validation={publishValidation} onRefresh={() => loadPublishValidation(true)} onPublish={publishDraft} />}
           {activeTab === "النسخ والإصدارات" && <RequestTypeVersionsPanel versionInfo={versionInfo} onPublishDraft={publishDraft} />}
         </Card>

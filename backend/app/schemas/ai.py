@@ -118,8 +118,14 @@ class AIUsageLogRead(BaseModel):
 class AIStatusRead(BaseModel):
     is_enabled: bool = False
     mode: str = "disabled"
+    assistant_name: str = "المساعد الذكي للمراسلات"
+    assistant_description: str | None = None
+    max_input_chars: int = 6000
+    show_human_review_disclaimer: bool = True
     allow_message_drafting: bool = False
     allow_summarization: bool = False
+    allow_message_summarization: bool = False
+    allow_request_messages_summarization: bool = False
     allow_reply_suggestion: bool = False
     allow_message_improvement: bool = False
     allow_missing_info_detection: bool = False
@@ -127,7 +133,6 @@ class AIStatusRead(BaseModel):
     show_in_compose_message: bool = False
     show_in_message_details: bool = False
     show_in_request_messages_tab: bool = False
-    max_input_chars: int = 6000
 
 
 class AIFeaturePermissionItem(BaseModel):

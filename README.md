@@ -176,6 +176,7 @@ powershell -ExecutionPolicy Bypass -File scripts/install-local.ps1
 
 - [وثيقة النظام الكاملة](docs/QIB_SERVICE_PORTAL_SYSTEM_DOCUMENTATION.md)
 - [مخطط قاعدة البيانات](docs/database-schema.md)
+- [دليل مجلدات النظام والتثبيت على Windows](docs/WINDOWS_INSTALLATION_AND_STRUCTURE_AR.md)
 
 ## هيكل المشروع
 

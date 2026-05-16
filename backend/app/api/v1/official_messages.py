@@ -17,7 +17,6 @@ from app.models.message import (
     OfficialLetterheadTemplate,
     OfficialMessageDocument,
     OfficialMessageSettings,
-    OfficialStamp,
     UserSignature,
 )
 from app.models.request import ServiceRequest
@@ -38,13 +37,17 @@ from app.services.official_messages import (
 letterheads_router = APIRouter(prefix="/settings/official-letterheads", tags=["Official Letterheads"])
 signatures_router = APIRouter(prefix="/signatures", tags=["Official Signatures"])
 settings_signatures_router = APIRouter(prefix="/settings/signatures", tags=["Official Signatures"])
-stamps_router = APIRouter(prefix="/settings/official-stamps", tags=["Official Stamps"])
 official_messages_router = APIRouter(prefix="/messages", tags=["Official Messages"])
 official_settings_router = APIRouter(prefix="/settings/official-messages", tags=["Official Messages"])
 
 ALLOWED_IMAGE_EXTENSIONS = {"png", "jpg", "jpeg"}
 MAX_OFFICIAL_IMAGE_BYTES = 5 * 1024 * 1024
 MAX_OFFICIAL_TEMPLATE_BYTES = 15 * 1024 * 1024
+OFFICIAL_MESSAGE_TYPE_CODES = {"official_correspondence", "official_message"}
+
+
+def is_official_internal_message(message: InternalMessage) -> bool:
+    return bool(getattr(message, "is_official", False)) or str(message.message_type or "").strip() in OFFICIAL_MESSAGE_TYPE_CODES
 
 
 class LetterheadTemplateRead(BaseModel):
@@ -112,31 +115,13 @@ class UserSignatureRead(BaseModel):
     model_config = {"from_attributes": True}
 
 
-class OfficialStampRead(BaseModel):
-    id: int
-    name_ar: str
-    code: str
-    allowed_roles_json: list[str] = Field(default_factory=list)
-    is_active: bool = True
-
-    model_config = {"from_attributes": True}
-
-
-class OfficialStampPayload(BaseModel):
-    name_ar: str = Field(min_length=2, max_length=160)
-    code: str | None = Field(default=None, max_length=80)
-    allowed_roles_json: list[str] = Field(default_factory=list)
-    is_active: bool = True
-
-
 class OfficialPDFOptions(BaseModel):
     letterhead_template_id: int | None = None
     official_reference_number: str | None = Field(default=None, max_length=80)
     correspondence_type: str | None = Field(default=None, max_length=120)
+    body: str | None = Field(default=None, max_length=20000)
     include_signature: bool = False
     signature_id: int | None = None
-    include_stamp: bool = False
-    stamp_id: int | None = None
     include_in_request_pdf: bool = False
     show_sender_department: bool = True
     show_recipients: bool = True
@@ -161,6 +146,20 @@ def require_manage(user: User) -> None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="لا تملك صلاحية إدارة الترويسات الرسمية")
 
 
+def require_official_settings_manage(db: Session, user: User) -> None:
+    if can_manage_official_assets(user):
+        return
+    allowed_actions = {
+        "settings.manage",
+        "official_letterheads.manage",
+        "manage_letterhead_templates",
+        "manage_user_signatures",
+    }
+    if any(has_action_permission(db, user, action) for action in allowed_actions):
+        return
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="لا تملك صلاحية تعديل إعدادات المراسلات الرسمية")
+
+
 def handle_permission_error(error: Exception) -> None:
     if isinstance(error, PermissionError):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(error) or "لا تملك صلاحية تنفيذ هذا الإجراء")
@@ -175,8 +174,14 @@ def save_official_image(file: UploadFile) -> str:
     if extension not in ALLOWED_IMAGE_EXTENSIONS:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="يسمح برفع صور PNG أو JPG فقط")
     content = file.file.read()
+    if not content:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="صورة التوقيع فارغة")
     if len(content) > MAX_OFFICIAL_IMAGE_BYTES:
         raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="حجم الصورة أكبر من الحد المسموح 5MB")
+    if extension == "png" and not content.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="الملف المرفوع ليس صورة PNG صالحة")
+    if extension in {"jpg", "jpeg"} and not content.startswith(b"\xff\xd8\xff"):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="الملف المرفوع ليس صورة JPG صالحة")
     stored = f"{uuid4().hex}.{extension}"
     destination = official_asset_dir() / stored
     destination.write_bytes(content)
@@ -230,13 +235,6 @@ def letterhead_payload_data(db: Session, payload: LetterheadTemplatePayload, tem
     data = payload.model_dump()
     code_source = payload.code or payload.name_en or payload.name_ar
     data["code"] = unique_asset_code(db, OfficialLetterheadTemplate, normalize_asset_code(code_source, "letterhead"), template_id)
-    return data
-
-
-def stamp_payload_data(db: Session, payload: OfficialStampPayload, stamp_id: int | None = None) -> dict:
-    data = payload.model_dump()
-    code_source = payload.code or payload.name_ar
-    data["code"] = unique_asset_code(db, OfficialStamp, normalize_asset_code(code_source, "stamp"), stamp_id)
     return data
 
 
@@ -408,17 +406,20 @@ def get_official_settings(db: Session = Depends(get_db), current_user: User = De
 
 @official_settings_router.put("", response_model=OfficialMessageSettingsRead)
 def update_official_settings(payload: OfficialMessageSettingsPayload, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    require_manage(current_user)
+    require_official_settings_manage(db, current_user)
     ensure_official_message_runtime(db)
     row = seed_default_official_settings(db)
     if payload.default_letterhead_template_id:
         template = db.get(OfficialLetterheadTemplate, payload.default_letterhead_template_id)
         if not template or not template.is_active:
             raise HTTPException(status_code=422, detail="قالب الترويسة الافتراضي غير صحيح")
-    for key, value in payload.model_dump().items():
-        setattr(row, key, value)
+    rows = db.scalars(select(OfficialMessageSettings).order_by(OfficialMessageSettings.id)).all() or [row]
+    for target in rows:
+        for key, value in payload.model_dump().items():
+            setattr(target, key, value)
     write_audit(db, "official_message_settings_updated", "official_message_settings", actor=current_user)
     db.commit()
+    db.refresh(row)
     return row
 
 
@@ -440,7 +441,7 @@ async def upload_my_signature(
     if not settings_row.allow_signature_upload_by_user and not can_manage_official_assets(current_user):
         raise HTTPException(status_code=403, detail="رفع التوقيع غير مفعل للمستخدمين")
     relative_path = save_official_image(file)
-    signature = UserSignature(user_id=current_user.id, signature_image_path=relative_path, signature_label=signature_label or "توقيعي", is_verified=False, is_active=True)
+    signature = UserSignature(user_id=current_user.id, signature_image_path=relative_path, signature_label=signature_label or "توقيعي", is_verified=True, is_active=True, verified_by=current_user.id, verified_at=datetime.now(timezone.utc))
     db.add(signature)
     write_audit(db, "user_signature_uploaded", "user_signature", actor=current_user)
     db.commit()
@@ -485,63 +486,6 @@ def update_signature_status(signature_id: int, payload: dict, db: Session = Depe
     return signature
 
 
-@stamps_router.get("", response_model=list[OfficialStampRead])
-def list_stamps(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    ensure_official_message_runtime(db)
-    return db.scalars(select(OfficialStamp).order_by(OfficialStamp.id)).all()
-
-
-@stamps_router.post("", response_model=OfficialStampRead, status_code=status.HTTP_201_CREATED)
-async def create_stamp(
-    name_ar: str = Form(...),
-    code: str = Form(...),
-    allowed_roles_json: str = Form(default=""),
-    file: UploadFile = File(...),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    require_manage(current_user)
-    ensure_official_message_runtime(db)
-    roles = [role.strip() for role in allowed_roles_json.split(",") if role.strip()]
-    relative_path = save_official_image(file)
-    normalized_code = unique_asset_code(db, OfficialStamp, normalize_asset_code(code or name_ar, "stamp"))
-    stamp = OfficialStamp(name_ar=name_ar, code=normalized_code, stamp_image_path=relative_path, allowed_roles_json=roles, is_active=True, created_by=current_user.id)
-    db.add(stamp)
-    write_audit(db, "official_stamp_created", "official_stamp", actor=current_user, metadata={"code": code})
-    db.commit()
-    db.refresh(stamp)
-    return stamp
-
-
-@stamps_router.put("/{stamp_id}", response_model=OfficialStampRead)
-def update_stamp(stamp_id: int, payload: OfficialStampPayload, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    require_manage(current_user)
-    ensure_official_message_runtime(db)
-    stamp = db.get(OfficialStamp, stamp_id)
-    if not stamp:
-        raise HTTPException(status_code=404, detail="الختم غير موجود")
-    for key, value in stamp_payload_data(db, payload, stamp_id).items():
-        setattr(stamp, key, value)
-    write_audit(db, "official_stamp_updated", "official_stamp", actor=current_user, entity_id=str(stamp.id))
-    db.commit()
-    db.refresh(stamp)
-    return stamp
-
-
-@stamps_router.patch("/{stamp_id}/status", response_model=OfficialStampRead)
-def update_stamp_status(stamp_id: int, payload: dict, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    require_manage(current_user)
-    ensure_official_message_runtime(db)
-    stamp = db.get(OfficialStamp, stamp_id)
-    if not stamp:
-        raise HTTPException(status_code=404, detail="الختم غير موجود")
-    stamp.is_active = bool(payload.get("is_active", True))
-    write_audit(db, "official_stamp_status_updated", "official_stamp", actor=current_user, entity_id=str(stamp.id), metadata={"is_active": stamp.is_active})
-    db.commit()
-    db.refresh(stamp)
-    return stamp
-
-
 @official_messages_router.post("/official/preview-pdf")
 def preview_official_pdf(payload: OfficialPreviewPayload, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     ensure_official_message_runtime(db)
@@ -577,8 +521,6 @@ def preview_official_pdf(payload: OfficialPreviewPayload, db: Session = Depends(
             correspondence_type=payload.correspondence_type,
             include_signature=payload.include_signature,
             signature_id=payload.signature_id,
-            include_stamp=payload.include_stamp,
-            stamp_id=payload.stamp_id,
             include_in_request_pdf=payload.include_in_request_pdf,
             show_sender_department=payload.show_sender_department,
             show_recipients=payload.show_recipients,
@@ -601,8 +543,11 @@ def generate_message_official_pdf(message_id: int, payload: OfficialPDFOptions, 
     if not has_action_permission(db, current_user, "send_official_message", default=can_manage_official_assets(current_user)):
         raise HTTPException(status_code=403, detail="لا تملك صلاحية إنشاء الخطاب الرسمي")
     message = load_message_for_official_pdf(db, message_id, current_user)
-    if str(message.message_type) != "official_correspondence" and not bool(message.is_official):
+    if not is_official_internal_message(message):
         raise HTTPException(status_code=422, detail="هذه الرسالة ليست مراسلة رسمية")
+    original_body = message.body
+    if payload.body is not None:
+        message.body = payload.body
     try:
         _, document = generate_official_document(
             db,
@@ -613,8 +558,6 @@ def generate_message_official_pdf(message_id: int, payload: OfficialPDFOptions, 
             correspondence_type=payload.correspondence_type,
             include_signature=payload.include_signature,
             signature_id=payload.signature_id,
-            include_stamp=payload.include_stamp,
-            stamp_id=payload.stamp_id,
             include_in_request_pdf=payload.include_in_request_pdf,
             show_sender_department=payload.show_sender_department,
             show_recipients=payload.show_recipients,
@@ -623,7 +566,9 @@ def generate_message_official_pdf(message_id: int, payload: OfficialPDFOptions, 
             persist=True,
         )
     except Exception as error:
+        message.body = original_body
         handle_permission_error(error)
+    message.body = original_body
     db.commit()
     return {"document_id": document.id if document else None, "message_id": message.id}
 

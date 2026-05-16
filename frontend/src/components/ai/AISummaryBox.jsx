@@ -16,8 +16,12 @@ export default function AISummaryBox({ relatedRequestId = "", messageId = 0, tex
   }, []);
 
   const locationEnabled = relatedRequestId ? status?.show_in_request_messages_tab !== false : status?.show_in_message_details !== false;
-  const isEnabled = Boolean(status?.is_enabled && status?.allow_summarization && locationEnabled);
+  const summaryAllowed = relatedRequestId
+    ? (status?.allow_request_messages_summarization ?? status?.allow_summarization)
+    : (status?.allow_message_summarization ?? status?.allow_summarization);
+  const isEnabled = Boolean(status?.is_enabled && summaryAllowed && locationEnabled);
   if (!isEnabled) return null;
+  const assistantName = status?.assistant_name || "المساعد الذكي للمراسلات";
 
   async function summarize() {
     setLoading(true);
@@ -26,7 +30,7 @@ export default function AISummaryBox({ relatedRequestId = "", messageId = 0, tex
       const data = await apiFetch("/ai/messages/summarize", {
         method: "POST",
         body: JSON.stringify({
-          related_request_id: relatedRequestId || undefined,
+          related_request_id: relatedRequestId ? Number(relatedRequestId) || relatedRequestId : undefined,
           message_id: messageId || undefined,
           text: text || undefined
         })
@@ -47,7 +51,7 @@ export default function AISummaryBox({ relatedRequestId = "", messageId = 0, tex
             <Bot className="h-4 w-4" />
           </span>
           <div>
-            <p className="text-sm font-black text-slate-950">المساعد الذكي للمراسلات</p>
+            <p className="text-sm font-black text-slate-950">{assistantName}</p>
             <p className="mt-1 text-xs leading-5 text-slate-500">يلخص النصوص المتاحة لك فقط.</p>
           </div>
         </div>

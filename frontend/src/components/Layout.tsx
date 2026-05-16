@@ -1,7 +1,7 @@
 import { Activity, BarChart3, Bell, BellRing, BookOpen, Building2, Database, FileText, KeyRound, LayoutDashboard, LogOut, Mail, Moon, Network, PanelRightClose, PanelRightOpen, ScrollText, Settings, ShieldCheck, Sparkles, Sun, UserCircle, Users, X } from "lucide-react";
 import { ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { NavLink } from "react-router-dom";
-import { API_BASE, apiFetch, CurrentUser, ServiceRequest } from "../lib/api";
+import { API_BASE, IS_DOTNET_API, apiFetch, CurrentUser, ServiceRequest } from "../lib/api";
 import { applyBrandColor, applyBranding, applyStoredFavicon } from "../lib/branding";
 import FeedbackDialog from "./ui/FeedbackDialog";
 import FeedbackToast from "./ui/FeedbackToast";
@@ -173,8 +173,12 @@ export function Layout({
 
   useEffect(() => {
     loadGeneralNotifications();
+    const timer = IS_DOTNET_API ? window.setInterval(loadGeneralNotifications, 15000) : 0;
     window.addEventListener("qib-notifications-updated", loadGeneralNotifications);
-    return () => window.removeEventListener("qib-notifications-updated", loadGeneralNotifications);
+    return () => {
+      if (timer) window.clearInterval(timer);
+      window.removeEventListener("qib-notifications-updated", loadGeneralNotifications);
+    };
   }, [loadGeneralNotifications]);
 
   useEffect(() => {
@@ -297,7 +301,10 @@ export function Layout({
         }
         setMessageToast({ message: `${payload.body}${payload.subject ? `: ${payload.subject}` : ""}` });
         showBrowserNotification(payload);
-        if (payload.type === "new_message") window.dispatchEvent(new Event("qib-messages-updated"));
+        if (payload.type === "new_message") {
+          window.dispatchEvent(new Event("qib-messages-updated"));
+          window.dispatchEvent(new Event("qib-notifications-updated"));
+        }
       };
       socket.onclose = () => {
         if (closedByEffect) return;
@@ -328,7 +335,11 @@ export function Layout({
     try {
       await apiFetch<void>("/auth/change-password", {
         method: "POST",
-        body: JSON.stringify(passwordForm)
+        body: JSON.stringify({
+          ...passwordForm,
+          currentPassword: passwordForm.current_password,
+          newPassword: passwordForm.new_password
+        })
       });
       setPasswordChangeRequired(false);
       onPasswordChanged?.();
@@ -675,10 +686,30 @@ function extractErrorMessage(error: unknown) {
   const raw = error instanceof Error ? error.message : "";
   try {
     const parsed = JSON.parse(raw);
-    return parsed.detail || "تعذر تغيير كلمة المرور";
+    if (parsed.detail) return parsed.detail;
+    if (parsed.errors && typeof parsed.errors === "object") {
+      const firstEntry = Object.entries(parsed.errors as Record<string, unknown>)[0];
+      if (firstEntry) {
+        const [field, value] = firstEntry;
+        const firstMessage = Array.isArray(value) ? String(value[0] ?? "") : String(value ?? "");
+        return translatePasswordValidationMessage(field, firstMessage);
+      }
+    }
+    return parsed.title || "تعذر تغيير كلمة المرور";
   } catch {
     return raw || "تعذر تغيير كلمة المرور";
   }
+}
+
+function translatePasswordValidationMessage(field: string, message: string) {
+  if (field.toLowerCase().includes("currentpassword")) {
+    return "كلمة المرور الحالية مطلوبة";
+  }
+  if (field.toLowerCase().includes("newpassword")) {
+    if (message.includes("maximum length")) return "كلمة المرور الجديدة طويلة جداً";
+    return "كلمة المرور الجديدة غير صالحة";
+  }
+  return message || "تعذر تغيير كلمة المرور";
 }
 
 function mapPasswordError(message: string) {

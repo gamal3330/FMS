@@ -18,10 +18,12 @@ import {
   UserCheck,
   XCircle
 } from "lucide-react";
-import { API_BASE, apiFetch, ApprovalStep, Attachment, ServiceRequest } from "../lib/api";
+import { API_BASE, apiFetch, ApprovalStep, Attachment, ServiceRequest, CurrentUser } from "../lib/api";
 import { formatSystemDateTime, parseApiDate } from "../lib/datetime";
 import { Button } from "../components/ui/button";
 import { Card } from "../components/ui/card";
+import { Pagination } from "../components/ui/Pagination";
+import { useAutoPagination } from "../components/ui/useAutoPagination";
 import AISuggestionPanel from "../components/ai/AISuggestionPanel";
 import AISummaryBox from "../components/ai/AISummaryBox";
 
@@ -37,9 +39,18 @@ interface LinkedMessage {
 
 interface AIStatus {
   is_enabled: boolean;
+  assistant_name?: string;
+  assistant_description?: string;
+  max_input_chars?: number;
+  show_human_review_disclaimer?: boolean;
   allow_message_drafting: boolean;
   allow_summarization: boolean;
+  allow_message_summarization?: boolean;
+  allow_request_messages_summarization?: boolean;
   allow_reply_suggestion: boolean;
+  allow_message_improvement?: boolean;
+  allow_missing_info_detection?: boolean;
+  allow_translate_ar_en?: boolean;
   show_in_compose_message?: boolean;
   show_in_message_details?: boolean;
   show_in_request_messages_tab?: boolean;
@@ -110,11 +121,12 @@ const roleLabels: Record<string, string> = {
 };
 
 const actionLabels: Record<string, string> = {
+  waiting: "بانتظار الدور",
   pending: "بانتظار الإجراء",
   approved: "تمت الموافقة",
   rejected: "تم الرفض",
   returned_for_edit: "أعيد للتعديل",
-  skipped: "تم التجاوز"
+  skipped: "بانتظار الدور"
 };
 
 const sectionLabels: Record<string, string> = {
@@ -155,12 +167,13 @@ export function RequestDetails() {
   const [messages, setMessages] = useState<LinkedMessage[]>([]);
   const [statusHistory, setStatusHistory] = useState<RequestHistoryRow[]>([]);
   const [auditLogs, setAuditLogs] = useState<RequestAuditRow[]>([]);
+  const [canViewAuditLogs, setCanViewAuditLogs] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
   const [aiDraft, setAiDraft] = useState<{ subject: string; body: string } | null>(null);
   const [aiError, setAiError] = useState("");
   const [aiLoading, setAiLoading] = useState(false);
-  const [aiStatus, setAiStatus] = useState<AIStatus>({ is_enabled: false, allow_message_drafting: false, allow_summarization: false, allow_reply_suggestion: false });
+  const [aiStatus, setAiStatus] = useState<AIStatus>(disabledAiStatus());
   const [messageSettings, setMessageSettings] = useState<MessageSettings>(defaultMessageSettings);
 
   async function loadDetails() {
@@ -170,9 +183,12 @@ export function RequestDetails() {
     try {
       const nextRequest = await apiFetch<ServiceRequest>(`/requests/${requestId}`);
       setRequest(nextRequest);
+      const currentUser = await apiFetch<CurrentUser>("/auth/me").catch(() => null);
+      const nextCanViewAuditLogs = canViewRequestAudit(currentUser);
+      setCanViewAuditLogs(nextCanViewAuditLogs);
       const [historyRows, auditRows] = await Promise.all([
         apiFetch<RequestHistoryRow[]>(`/requests/${nextRequest.id}/status-history`).catch(() => []),
-        apiFetch<RequestAuditRow[]>(`/requests/${nextRequest.id}/audit-logs`).catch(() => [])
+        nextCanViewAuditLogs ? apiFetch<RequestAuditRow[]>(`/requests/${nextRequest.id}/audit-logs`).catch(() => []) : Promise.resolve([])
       ]);
       setStatusHistory(historyRows);
       setAuditLogs(auditRows);
@@ -189,6 +205,7 @@ export function RequestDetails() {
       setMessages([]);
       setStatusHistory([]);
       setAuditLogs([]);
+      setCanViewAuditLogs(false);
       setError("تعذر تحميل تفاصيل الطلب.");
     } finally {
       setIsLoading(false);
@@ -201,16 +218,18 @@ export function RequestDetails() {
   }, [requestId]);
 
   const timeline = useMemo(() => buildTimeline(request, messages, statusHistory), [request, messages, statusHistory]);
+  const statusHistoryPagination = useAutoPagination(statusHistory, 10);
+  const auditLogsPagination = useAutoPagination(auditLogs, 10);
   const canShowRequestMessages = Boolean(messageSettings.enable_linked_requests && messageSettings.show_messages_tab_in_request_details);
   const canSendFromRequest = Boolean(canShowRequestMessages && messageSettings.allow_send_message_from_request);
   const canUseAiDrafting = Boolean(canShowRequestMessages && aiStatus.is_enabled && aiStatus.allow_message_drafting && aiStatus.show_in_request_messages_tab !== false);
-  const canUseAiSummaries = Boolean(canShowRequestMessages && aiStatus.is_enabled && aiStatus.allow_summarization && aiStatus.show_in_request_messages_tab !== false);
+  const canUseAiSummaries = Boolean(canShowRequestMessages && aiStatus.is_enabled && (aiStatus.allow_request_messages_summarization ?? aiStatus.allow_summarization) && aiStatus.show_in_request_messages_tab !== false);
 
   async function loadAiStatus() {
     try {
       setAiStatus(await apiFetch<AIStatus>("/ai/status"));
     } catch {
-      setAiStatus({ is_enabled: false, allow_message_drafting: false, allow_summarization: false, allow_reply_suggestion: false });
+      setAiStatus(disabledAiStatus());
     }
   }
 
@@ -375,6 +394,7 @@ export function RequestDetails() {
                   onUse={() => composeMessage(aiDraft)}
                   onRetry={suggestClarificationMessage}
                   onCancel={() => setAiDraft(null)}
+                  showDisclaimer={aiStatus.show_human_review_disclaimer !== false}
                 />
               </div>
             )}
@@ -401,7 +421,7 @@ export function RequestDetails() {
           <Card className="p-5">
             <SectionTitle icon={History} title="سجل الحالة" />
             <div className="mt-4 space-y-3">
-              {statusHistory.map((row, index) => (
+              {statusHistoryPagination.visibleRows.map((row, index) => (
                 <div key={`${row.event}-${index}`} className="rounded-md border border-slate-200 bg-white p-4">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <p className="font-black text-slate-950">{row.label}</p>
@@ -416,8 +436,17 @@ export function RequestDetails() {
               ))}
               {statusHistory.length === 0 && <Empty text="لا يوجد سجل حالة لهذا الطلب." />}
             </div>
+            {statusHistoryPagination.showPagination && (
+              <Pagination
+                page={statusHistoryPagination.page}
+                totalItems={statusHistoryPagination.totalItems}
+                pageSize={statusHistoryPagination.pageSize}
+                onPageChange={statusHistoryPagination.setPage}
+              />
+            )}
           </Card>
 
+          {canViewAuditLogs && (
           <Card className="p-5">
             <SectionTitle icon={ShieldCheck} title="سجل التدقيق" />
             <div className="mt-4 overflow-hidden rounded-md border border-slate-200">
@@ -431,7 +460,7 @@ export function RequestDetails() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {auditLogs.map((log) => (
+                  {auditLogsPagination.visibleRows.map((log) => (
                     <tr key={log.id}>
                       <td className="p-3 font-bold text-slate-900">{auditActionLabel(log.action)}</td>
                       <td className="p-3 text-slate-600">{log.actor_name || "-"}</td>
@@ -442,8 +471,17 @@ export function RequestDetails() {
                 </tbody>
               </table>
               {auditLogs.length === 0 && <Empty text="لا يوجد سجل تدقيق لهذا الطلب." />}
+              {auditLogsPagination.showPagination && (
+                <Pagination
+                  page={auditLogsPagination.page}
+                  totalItems={auditLogsPagination.totalItems}
+                  pageSize={auditLogsPagination.pageSize}
+                  onPageChange={auditLogsPagination.setPage}
+                />
+              )}
             </div>
           </Card>
+          )}
         </div>
 
         <aside className="space-y-5">
@@ -510,7 +548,7 @@ function buildTimeline(request: ServiceRequest | null, messages: LinkedMessage[]
         },
         ...[...(request.approvals ?? [])].sort((a, b) => a.step_order - b.step_order).map((step) => ({
           title: approvalStepLabel(step, request),
-          description: `${actionLabels[step.action] ?? step.action}${step.approver ? ` بواسطة ${step.approver.full_name_ar}` : ""}${step.note ? ` - ${step.note}` : ""}`,
+          description: `${actionLabels[step.action] ?? step.action}${step.action_by ? ` بواسطة ${step.action_by.full_name_ar}` : ""}${step.note ? ` - ${step.note}` : ""}`,
           date: step.acted_at || request.updated_at,
           tone: step.action === "approved" ? "success" : step.action === "rejected" || step.action === "returned_for_edit" ? "danger" : "info"
         }))
@@ -567,17 +605,24 @@ function workflowDepartmentName(request?: ServiceRequest | null) {
   const formDepartmentName = typeof formData.assigned_department_name === "string" ? formData.assigned_department_name : "";
   const snapshotDepartmentName = typeof snapshot.assigned_department_name === "string" ? snapshot.assigned_department_name : "";
 
-  return formDepartmentName || snapshotDepartmentName || request?.department?.name_ar || workflowSectionName(request);
+  return request?.specialized_department?.name_ar || formDepartmentName || snapshotDepartmentName || request?.department?.name_ar || workflowSectionName(request);
 }
 
 function approvalStepLabel(step: ApprovalStep, request?: ServiceRequest | null) {
-  if (step.display_label) return step.display_label;
-  const departmentName = workflowDepartmentName(request);
+  const departmentName = step.target_department_name_ar || workflowDepartmentName(request);
   const sectionName = workflowSectionName(request);
-  if (departmentName && step.role === "department_manager") return `مدير ${departmentName}`;
-  if (sectionName && step.role === "department_specialist") return `مختص ${sectionName}`;
-  if (departmentName && step.role === "specific_department_manager") return `مدير ${departmentName}`;
-  return roleLabels[step.role] ?? step.role;
+  if (step.role === "specific_user" && step.approver?.full_name_ar) return step.approver.full_name_ar;
+  if (step.role === "specific_role" && step.approver_role_name_ar) return step.approver_role_name_ar;
+  if (departmentName && ["department_manager", "specific_department_manager", "administration_manager"].includes(step.role)) {
+    return `مدير ${departmentName}`;
+  }
+  if (
+    sectionName &&
+    ["department_specialist", "specialized_section", "implementation_engineer", "implementation", "execution", "execute_request", "it_staff"].includes(step.role)
+  ) {
+    return `مختص ${sectionName}`;
+  }
+  return step.display_label || roleLabels[step.role] || step.role;
 }
 
 function requestFieldRows(request: ServiceRequest) {
@@ -620,9 +665,10 @@ function ApprovalStepCard({ request, step }: { request: ServiceRequest; step: Ap
         </div>
         <span className={`rounded-full px-3 py-1 text-xs font-bold ${approvalTone(step.action)}`}>{actionLabels[step.action] ?? step.action}</span>
       </div>
-      {(step.approver || step.acted_at || step.note) && (
+      {(step.action_by || step.approver || step.acted_at || step.note) && (
         <div className="mt-3 text-sm leading-6 text-slate-600">
-          {step.approver && <p>بواسطة: {step.approver.full_name_ar || step.approver.email}</p>}
+          {step.action_by && <p>بواسطة: {step.action_by.full_name_ar || step.action_by.email}</p>}
+          {!step.action_by && step.approver && <p>المكلف: {step.approver.full_name_ar || step.approver.email}</p>}
           {step.acted_at && <p>في: {formatDate(step.acted_at)}</p>}
           {step.note && <p>الملاحظة: {step.note}</p>}
         </div>
@@ -711,6 +757,29 @@ function readApiError(error: unknown) {
   } catch {
     return message;
   }
+}
+
+function canViewRequestAudit(user: CurrentUser | null) {
+  if (!user) return false;
+  const permissions = new Set((user.permissions ?? []).map((permission) => permission.toLowerCase()));
+  return user.role === "super_admin" || permissions.has("audit.view") || permissions.has("requests.manage");
+}
+
+function disabledAiStatus(): AIStatus {
+  return {
+    is_enabled: false,
+    allow_message_drafting: false,
+    allow_summarization: false,
+    allow_message_summarization: false,
+    allow_request_messages_summarization: false,
+    allow_reply_suggestion: false,
+    allow_message_improvement: false,
+    allow_missing_info_detection: false,
+    allow_translate_ar_en: false,
+    show_in_compose_message: false,
+    show_in_message_details: false,
+    show_in_request_messages_tab: false
+  };
 }
 
 async function downloadPdf(request: ServiceRequest) {

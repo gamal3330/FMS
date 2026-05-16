@@ -208,6 +208,7 @@ FEATURE_PERMISSION_MAP = {
     "shorten": "shorten_message",
     "suggest_reply": "suggest_reply",
     "summarize": "summarize_message",
+    "summarize_request_messages": "summarize_request_messages",
     "missing_info": "detect_missing_info",
     "translate_ar_en": "translate_ar_en",
     "template": "draft_message",
@@ -713,13 +714,13 @@ def validate_ai_feature(item: AISettings, feature: str) -> None:
     mode = item.mode or ("enabled" if item.is_enabled else "disabled")
     if not item.is_enabled or mode == "disabled":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="المساعد الذكي غير مفعل من إعدادات النظام")
-    if feature in {"draft", "improve", "formalize", "shorten", "missing_info"} and not item.allow_message_drafting:
+    if feature in {"draft", "template"} and not item.allow_message_drafting:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="توليد الرسائل غير مفعل في إعدادات المساعد الذكي")
     if feature in {"improve", "formalize", "shorten"} and not item.allow_message_improvement:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="تحسين صياغة الرسائل غير مفعل في إعدادات المساعد الذكي")
     if feature == "missing_info" and not item.allow_missing_info_detection:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="فحص المعلومات الناقصة غير مفعل في إعدادات المساعد الذكي")
-    if feature == "summarize" and not item.allow_summarization:
+    if feature in {"summarize", "summarize_request_messages"} and not item.allow_summarization:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="تلخيص المراسلات غير مفعل في إعدادات المساعد الذكي")
     if feature == "suggest_reply" and not item.allow_reply_suggestion:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="اقتراح الردود غير مفعل في إعدادات المساعد الذكي")

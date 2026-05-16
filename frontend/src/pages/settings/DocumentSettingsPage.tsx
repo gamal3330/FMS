@@ -3,6 +3,8 @@ import type { ReactNode } from "react";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { ClassificationBadge, DocumentStatusBadge } from "../../components/documents/DocumentBadges";
 import { Card } from "../../components/ui/card";
+import { Pagination } from "../../components/ui/Pagination";
+import { useAutoPagination } from "../../components/ui/useAutoPagination";
 import { apiFetch } from "../../lib/api";
 import { fetchDocumentFile } from "../documents/documentFile";
 import type { DocumentCategory, LibraryDocument } from "../documents/types";
@@ -582,6 +584,7 @@ function AcknowledgementReportPanel({ documents, departments, selectedDocumentId
 }
 
 function AcknowledgementUsersTable({ title, rows, acknowledged = false }: { title: string; rows: any[]; acknowledged?: boolean }) {
+  const { page, setPage, visibleRows, showPagination, totalItems, pageSize } = useAutoPagination(rows || [], 10);
   return (
     <div className="overflow-hidden rounded-lg border border-slate-200">
       <div className="border-b border-slate-100 bg-slate-50 px-4 py-3">
@@ -590,7 +593,7 @@ function AcknowledgementUsersTable({ title, rows, acknowledged = false }: { titl
       <table className="min-w-full text-right text-sm">
         <thead className="bg-white text-xs font-black text-slate-600"><tr><th className="px-4 py-3">المستخدم</th><th className="px-4 py-3">الإدارة</th><th className="px-4 py-3">{acknowledged ? "وقت الإقرار" : "الحالة"}</th></tr></thead>
         <tbody className="divide-y divide-slate-100">
-          {rows.map((row, index) => {
+          {visibleRows.map((row, index) => {
             const user = row.user || {};
             return (
               <tr key={row.id || user.id || index}>
@@ -603,11 +606,13 @@ function AcknowledgementUsersTable({ title, rows, acknowledged = false }: { titl
           {!rows.length && <tr><td colSpan={3} className="px-4 py-8 text-center text-slate-500">لا توجد بيانات.</td></tr>}
         </tbody>
       </table>
+      {showPagination && <Pagination page={page} totalItems={totalItems} pageSize={pageSize} onPageChange={setPage} />}
     </div>
   );
 }
 
 function DocumentScopedTable({ title, documents, selectedDocumentId, setSelectedDocumentId, rows, type }: { title: string; documents: LibraryDocument[]; selectedDocumentId: string; setSelectedDocumentId: (value: string) => void; rows: any[]; type: "ack" | "logs" }) {
+  const { page, setPage, visibleRows, showPagination, totalItems, pageSize } = useAutoPagination(rows || [], 10);
   return (
     <Card className="space-y-5 p-5">
       <div className="flex flex-wrap items-end gap-3">
@@ -619,12 +624,13 @@ function DocumentScopedTable({ title, documents, selectedDocumentId, setSelected
         <table className="min-w-full text-right text-sm">
           <thead className="bg-slate-50 text-xs font-black text-slate-600"><tr><th className="px-4 py-3">المستخدم</th><th className="px-4 py-3">{type === "ack" ? "وقت الإقرار" : "الإجراء"}</th><th className="px-4 py-3">التاريخ</th></tr></thead>
           <tbody className="divide-y divide-slate-100">
-            {rows.map((row) => (
+            {visibleRows.map((row) => (
               <tr key={row.id}><td className="px-4 py-3 font-bold">{row.user?.full_name_ar || "-"}</td><td className="px-4 py-3">{type === "ack" ? "أقر بالاطلاع" : row.action}</td><td className="px-4 py-3">{row.acknowledged_at || row.created_at || "-"}</td></tr>
             ))}
             {!rows.length && <tr><td colSpan={3} className="px-4 py-8 text-center text-slate-500">لا توجد بيانات.</td></tr>}
           </tbody>
         </table>
+        {showPagination && <Pagination page={page} totalItems={totalItems} pageSize={pageSize} onPageChange={setPage} />}
       </div>
     </Card>
   );

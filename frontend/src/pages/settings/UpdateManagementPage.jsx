@@ -5,6 +5,8 @@ import { formatSystemDateTime } from "../../lib/datetime";
 import FeedbackDialog from "../../components/ui/FeedbackDialog";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
+import { Pagination } from "../../components/ui/Pagination";
+import { useAutoPagination } from "../../components/ui/useAutoPagination";
 
 const tabs = [
   ["overview", "نظرة عامة", PackageCheck],
@@ -223,9 +225,22 @@ function Metric({ label, value }) {
   return <div className="rounded-lg border border-slate-200 bg-slate-50 p-4"><p className="text-xs font-bold text-slate-500">{label}</p><p className="mt-2 text-xl font-black text-slate-950">{value ?? "-"}</p></div>;
 }
 
-function Table({ headers, rows }) {
+function Table({ headers, rows, pageSize = 10 }) {
+  const { page, setPage, visibleRows, showPagination, totalItems } = useAutoPagination(rows || [], pageSize);
   if (!rows?.length) return <Empty text="لا توجد بيانات حالياً." />;
-  return <div className="overflow-x-auto rounded-lg border border-slate-200"><table className="min-w-full text-right text-sm"><thead className="bg-slate-50"><tr>{headers.map((header) => <th key={header} className="whitespace-nowrap px-3 py-3 font-black text-slate-700">{header}</th>)}</tr></thead><tbody className="divide-y divide-slate-100 bg-white">{rows.map((row, rowIndex) => <tr key={rowIndex}>{row.map((cell, index) => <td key={index} className="max-w-md px-3 py-3 text-slate-700">{cell}</td>)}</tr>)}</tbody></table></div>;
+  return (
+    <div className="overflow-hidden rounded-lg border border-slate-200">
+      <div className="overflow-x-auto">
+        <table className="min-w-full text-right text-sm">
+          <thead className="bg-slate-50"><tr>{headers.map((header) => <th key={header} className="whitespace-nowrap px-3 py-3 font-black text-slate-700">{header}</th>)}</tr></thead>
+          <tbody className="divide-y divide-slate-100 bg-white">
+            {visibleRows.map((row, rowIndex) => <tr key={`${page}-${rowIndex}`}>{row.map((cell, index) => <td key={index} className="max-w-md px-3 py-3 text-slate-700">{cell}</td>)}</tr>)}
+          </tbody>
+        </table>
+      </div>
+      {showPagination && <Pagination page={page} totalItems={totalItems} pageSize={pageSize} onPageChange={setPage} />}
+    </div>
+  );
 }
 
 function Empty({ text }) {

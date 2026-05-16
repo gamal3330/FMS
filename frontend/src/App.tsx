@@ -188,14 +188,10 @@ function ProtectedApp() {
             element={canAccessScreen("messaging_settings") ? <OfficialCorrespondenceSettingsPage /> : <Navigate to={defaultPath()} replace />}
           />
           <Route
-            path="/settings/official-stamps"
-            element={canAccessScreen("messaging_settings") ? <OfficialCorrespondenceSettingsPage initialTab="stamps" /> : <Navigate to={defaultPath()} replace />}
-          />
-          <Route
             path="/settings/signatures"
-            element={canAccessScreen("messaging_settings") ? <OfficialCorrespondenceSettingsPage initialTab="signatures" /> : <Navigate to={defaultPath()} replace />}
+            element={<Navigate to="/settings/official-letterheads" replace />}
           />
-          <Route path="/profile/signature" element={<OfficialCorrespondenceSettingsPage initialTab="my-signature" />} />
+          <Route path="/profile/signature" element={<Navigate to="/settings/official-letterheads" replace />} />
           <Route
             path="/request-types"
             element={canAccessScreen("request_types") ? <RequestTypesPage /> : <Navigate to={defaultPath()} replace />}

@@ -5,6 +5,8 @@ import { Button } from "../../components/ui/button";
 import { Card } from "../../components/ui/card";
 import FeedbackDialog from "../../components/ui/FeedbackDialog";
 import { Input } from "../../components/ui/input";
+import { Pagination } from "../../components/ui/Pagination";
+import { useAutoPagination } from "../../components/ui/useAutoPagination";
 
 const empty = {
   name_ar: "",
@@ -61,6 +63,7 @@ export default function SpecializedSectionsPage() {
         .sort((first, second) => String(first.name_ar || "").localeCompare(String(second.name_ar || ""), "ar")),
     [departments]
   );
+  const { page, setPage, visibleRows: visibleItems, showPagination, totalItems, pageSize } = useAutoPagination(loading ? [] : items, 10);
 
   function reset() {
     setForm(empty);
@@ -229,7 +232,7 @@ export default function SpecializedSectionsPage() {
             </tr>
           )}
           {!loading &&
-            items.map((item) => (
+            visibleItems.map((item) => (
               <tr key={item.id}>
                 <td className="p-3 font-bold text-slate-900">{item.name_ar}</td>
                 <td className="p-3 text-slate-600">{item.name_en || "-"}</td>
@@ -259,6 +262,7 @@ export default function SpecializedSectionsPage() {
               </tr>
             ))}
         </Table>
+        {showPagination && <Pagination page={page} totalItems={totalItems} pageSize={pageSize} onPageChange={setPage} />}
       </div>
     </section>
   );

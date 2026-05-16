@@ -1,0 +1,3 @@
+﻿<Project>
+  <Import Project="../buildMultiTargeting/Qib.ServicePortal.Api.props" />
+</Project>

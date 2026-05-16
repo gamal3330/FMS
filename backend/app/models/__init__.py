@@ -10,7 +10,6 @@ from app.models.message import (
     OfficialLetterheadTemplate,
     OfficialMessageDocument,
     OfficialMessageSettings,
-    OfficialStamp,
     UserSignature,
 )
 from app.models.messaging_settings import (
@@ -97,7 +96,6 @@ __all__ = [
     "OfficialLetterheadTemplate",
     "OfficialMessageDocument",
     "OfficialMessageSettings",
-    "OfficialStamp",
     "MessageAISettings",
     "MessageAttachmentSettings",
     "MessageAutoRule",

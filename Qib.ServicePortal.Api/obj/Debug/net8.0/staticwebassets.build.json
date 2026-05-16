@@ -1,0 +1,11 @@
+{
+  "Version": 1,
+  "Hash": "+Oh+kxcJr30Np9X8Y9Cm3YOO7QOuY+f/WxmvQ1jzdOg=",
+  "Source": "Qib.ServicePortal.Api",
+  "BasePath": "_content/Qib.ServicePortal.Api",
+  "Mode": "Default",
+  "ManifestType": "Build",
+  "ReferencedProjectsConfiguration": [],
+  "DiscoveryPatterns": [],
+  "Assets": []
+}

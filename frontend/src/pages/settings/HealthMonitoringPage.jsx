@@ -26,6 +26,7 @@ import { api, getErrorMessage } from "../../lib/axios";
 import { formatSystemDateTime } from "../../lib/datetime";
 import { Button } from "../../components/ui/button";
 import { Pagination } from "../../components/ui/Pagination";
+import { useAutoPagination } from "../../components/ui/useAutoPagination";
 
 const tabs = [
   ["overview", "نظرة عامة", Activity],
@@ -842,33 +843,37 @@ function ToggleCard({ label, checked, onChange }) {
   );
 }
 
-function DataTable({ headers, rows, empty }) {
+function DataTable({ headers, rows, empty, pageSize = 10 }) {
+  const { page, setPage, visibleRows, showPagination, totalItems } = useAutoPagination(rows || [], pageSize);
   return (
-    <div className="overflow-x-auto rounded-lg border border-slate-200">
-      <table className="w-full min-w-[760px] text-sm">
-        <thead className="bg-slate-50 text-xs font-black text-slate-600">
-          <tr>
-            {headers.map((header) => (
-              <th key={header} className="p-3 text-right">{header}</th>
-            ))}
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-slate-100 bg-white">
-          {rows.length ? (
-            rows.map((row, index) => (
-              <tr key={index} className="hover:bg-slate-50">
-                {row.map((cell, cellIndex) => (
-                  <td key={cellIndex} className="p-3 align-top text-slate-700">{cell}</td>
-                ))}
-              </tr>
-            ))
-          ) : (
+    <div className="overflow-hidden rounded-lg border border-slate-200">
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[760px] text-sm">
+          <thead className="bg-slate-50 text-xs font-black text-slate-600">
             <tr>
-              <td colSpan={headers.length} className="p-6 text-center text-sm font-semibold text-slate-500">{empty}</td>
+              {headers.map((header) => (
+                <th key={header} className="p-3 text-right">{header}</th>
+              ))}
             </tr>
-          )}
-        </tbody>
-      </table>
+          </thead>
+          <tbody className="divide-y divide-slate-100 bg-white">
+            {visibleRows.length ? (
+              visibleRows.map((row, index) => (
+                <tr key={`${page}-${index}`} className="hover:bg-slate-50">
+                  {row.map((cell, cellIndex) => (
+                    <td key={cellIndex} className="p-3 align-top text-slate-700">{cell}</td>
+                  ))}
+                </tr>
+              ))
+            ) : (
+              <tr>
+                <td colSpan={headers.length} className="p-6 text-center text-sm font-semibold text-slate-500">{empty}</td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+      {showPagination && <Pagination page={page} totalItems={totalItems} pageSize={pageSize} onPageChange={setPage} />}
     </div>
   );
 }

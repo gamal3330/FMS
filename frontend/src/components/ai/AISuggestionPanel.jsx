@@ -1,6 +1,6 @@
 import { Check, Copy, RefreshCw, X } from "lucide-react";
 
-export default function AISuggestionPanel({ title = "اقتراح المساعد الذكي", subject = "", body = "", items = [], onUse, onRetry, onCancel }) {
+export default function AISuggestionPanel({ title = "اقتراح المساعد الذكي", subject = "", body = "", items = [], onUse, onRetry, onCancel, showDisclaimer = true }) {
   const content = body || (items.length ? items.map((item) => `- ${item}`).join("\n") : "");
   if (!subject && !content) return null;
 
@@ -14,7 +14,7 @@ export default function AISuggestionPanel({ title = "اقتراح المساعد
       <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
         <div>
           <p className="text-sm font-black text-bank-900">{title}</p>
-          <p className="mt-1 text-xs leading-5 text-slate-500">النص المقترح مسودة فقط، راجعه قبل الإرسال.</p>
+          {showDisclaimer && <p className="mt-1 text-xs leading-5 text-slate-500">النص المقترح مسودة فقط، راجعه قبل الإرسال.</p>}
         </div>
         <div className="flex flex-wrap gap-2">
           {onUse && (

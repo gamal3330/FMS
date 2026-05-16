@@ -1,0 +1,54 @@
+services:
+  qib-dotnet-postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: qib_service_portal_dotnet
+      POSTGRES_USER: qib_dotnet
+      POSTGRES_PASSWORD: qib_dotnet_dev_password
+    volumes:
+      - qib_dotnet_postgres_data:/var/lib/postgresql/data
+    ports:
+      - "55432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U qib_dotnet -d qib_service_portal_dotnet"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  qib-dotnet-api:
+    build:
+      context: .
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      qib-dotnet-postgres:
+        condition: service_healthy
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ConnectionStrings__DefaultConnection: Host=qib-dotnet-postgres;Port=5432;Database=qib_service_portal_dotnet;Username=qib_dotnet;Password=qib_dotnet_dev_password
+      Jwt__Issuer: Qib.ServicePortal.DotNet
+      Jwt__Audience: Qib.ServicePortal
+      Jwt__Secret: CHANGE_ME_TO_A_LONG_RANDOM_SECRET_AT_LEAST_32_CHARS
+      SeedAdmin__Email: admin@qib.internal-bank.qa
+      SeedAdmin__Username: admin
+      SeedAdmin__Password: ChangeMe@12345
+      Cors__Origins__0: http://localhost:5173
+      Cors__Origins__1: http://127.0.0.1:5173
+      Cors__Origins__2: http://localhost:5174
+      Cors__Origins__3: http://127.0.0.1:5174
+      Cors__Origins__4: http://localhost:3000
+      Storage__UploadsPath: /data/uploads
+      Storage__BackupsPath: /data/backups
+      ApplyMigrationsOnStartup: "false"
+      EnableDangerousDatabaseOperations: "${ENABLE_DANGEROUS_DATABASE_OPERATIONS:-false}"
+      Swagger__Enabled: "true"
+    volumes:
+      - qib_dotnet_uploads:/data/uploads
+      - qib_dotnet_backups:/data/backups
+    ports:
+      - "8088:8080"
+
+volumes:
+  qib_dotnet_postgres_data:
+  qib_dotnet_uploads:
+  qib_dotnet_backups:

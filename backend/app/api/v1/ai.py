@@ -90,24 +90,50 @@ def template_enabled_by_settings(ai_settings, feature: str) -> bool:
 
 
 @router.get("/status", response_model=AIStatusRead)
-def ai_status(db: Session = Depends(get_db), _: User = Depends(get_current_user)):
+def ai_status(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     item = get_or_create_ai_settings(db)
     db.commit()
     db.refresh(item)
-    return AIStatusRead(
-        is_enabled=bool(item.is_enabled),
-        mode=item.mode or ("enabled" if item.is_enabled else "disabled"),
-        allow_message_drafting=bool(item.is_enabled and item.allow_message_drafting),
-        allow_summarization=bool(item.is_enabled and item.allow_summarization),
-        allow_reply_suggestion=bool(item.is_enabled and item.allow_reply_suggestion),
-        allow_message_improvement=bool(item.is_enabled and item.allow_message_improvement),
-        allow_missing_info_detection=bool(item.is_enabled and item.allow_missing_info_detection),
-        allow_translate_ar_en=bool(item.is_enabled and item.allow_translate_ar_en),
-        show_in_compose_message=bool(item.is_enabled and item.show_in_compose_message),
-        show_in_message_details=bool(item.is_enabled and item.show_in_message_details),
-        show_in_request_messages_tab=bool(item.is_enabled and item.show_in_request_messages_tab),
-        max_input_chars=item.max_input_chars,
+    enabled = bool(item.is_enabled and (item.mode or "enabled") != "disabled")
+    draft_allowed = enabled and item.allow_message_drafting and user_ai_feature_enabled(db, current_user, "draft")
+    improve_allowed = enabled and item.allow_message_improvement and any(
+        user_ai_feature_enabled(db, current_user, feature)
+        for feature in ("improve", "formalize", "shorten")
     )
+    message_summary_allowed = enabled and item.allow_summarization and user_ai_feature_enabled(db, current_user, "summarize")
+    request_summary_allowed = enabled and item.allow_summarization and user_ai_feature_enabled(db, current_user, "summarize_request_messages")
+    reply_allowed = enabled and item.allow_reply_suggestion and user_ai_feature_enabled(db, current_user, "suggest_reply")
+    missing_allowed = enabled and item.allow_missing_info_detection and user_ai_feature_enabled(db, current_user, "missing_info")
+    translate_allowed = enabled and item.allow_translate_ar_en and user_ai_feature_enabled(db, current_user, "translate_ar_en")
+    return AIStatusRead(
+        is_enabled=enabled,
+        mode=item.mode or ("enabled" if item.is_enabled else "disabled"),
+        assistant_name=item.assistant_name or "المساعد الذكي للمراسلات",
+        assistant_description=item.assistant_description,
+        max_input_chars=item.max_input_chars,
+        show_human_review_disclaimer=bool(item.show_human_review_disclaimer),
+        allow_message_drafting=bool(draft_allowed),
+        allow_summarization=bool(message_summary_allowed or request_summary_allowed),
+        allow_message_summarization=bool(message_summary_allowed),
+        allow_request_messages_summarization=bool(request_summary_allowed),
+        allow_reply_suggestion=bool(reply_allowed),
+        allow_message_improvement=bool(improve_allowed),
+        allow_missing_info_detection=bool(missing_allowed),
+        allow_translate_ar_en=bool(translate_allowed),
+        show_in_compose_message=bool(enabled and item.show_in_compose_message),
+        show_in_message_details=bool(enabled and item.show_in_message_details),
+        show_in_request_messages_tab=bool(enabled and item.show_in_request_messages_tab),
+    )
+
+
+def user_ai_feature_enabled(db: Session, user: User, feature: str) -> bool:
+    try:
+        validate_ai_role_permission(db, user, feature)
+    except HTTPException as exc:
+        if exc.status_code == status.HTTP_403_FORBIDDEN:
+            return False
+        raise
+    return True
 
 
 @router.get("/prompt-templates", response_model=list[AIPromptTemplateOption])
@@ -225,6 +251,15 @@ def shorten_message(payload: AITextRequest, db: Session = Depends(get_db), curre
     return AITextResponse(body=result.text)
 
 
+@router.post("/messages/translate", response_model=AITextResponse)
+def translate_message(payload: AITextRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    service_request = resolve_request(db, payload.related_request_id, current_user)
+    body = strip_html(payload.body)
+    prompt = prompt_template(db, "translate").format(text=body)
+    result = generate_ai_text(db, current_user, "translate_ar_en", prompt, "service_request" if service_request else None, str(service_request.id) if service_request else None, source_text=body)
+    return AITextResponse(body=result.text)
+
+
 @router.post("/messages/suggest-reply", response_model=AITextResponse)
 def suggest_reply(payload: AISuggestReplyRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     ai_settings = get_or_create_ai_settings(db)
@@ -279,7 +314,8 @@ def summarize_messages(payload: AISummarizeRequest, db: Session = Depends(get_db
     if not text.strip():
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="لا توجد مراسلات متاحة للتلخيص")
     prompt = prompt_template(db, "message_summary").format(text=text)
-    result = generate_ai_text(db, current_user, "summarize", prompt, entity_type, entity_id, max_tokens=900, source_text=text)
+    feature = "summarize_request_messages" if payload.related_request_id else "summarize"
+    result = generate_ai_text(db, current_user, feature, prompt, entity_type, entity_id, max_tokens=900, source_text=text)
     return AISummaryResponse(summary=result.text)
 
 

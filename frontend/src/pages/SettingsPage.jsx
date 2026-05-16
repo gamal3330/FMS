@@ -5,6 +5,8 @@ import { Card } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import FeedbackDialog from "../components/ui/FeedbackDialog";
 import { Input } from "../components/ui/input";
+import { Pagination } from "../components/ui/Pagination";
+import { useAutoPagination } from "../components/ui/useAutoPagination";
 import GeneralSettings from "../components/settings/GeneralSettings";
 import { formatSystemDateTime } from "../lib/datetime";
 
@@ -763,7 +765,24 @@ function databaseActionLabel(value) {
 
 
 function SimpleError({ error }) { return error ? <p className="rounded-md bg-red-50 p-3 text-sm text-red-700">{error}</p> : null; }
-function SimpleTable({ headers, rows }) { return <div className="overflow-x-auto rounded-md border"><table className="w-full min-w-[680px] text-sm"><thead className="bg-slate-50"><tr>{headers.map((h) => <th key={h} className="p-3 text-right">{h}</th>)}</tr></thead><tbody className="divide-y">{rows.map((r, i) => <tr key={i}>{r.map((c, j) => <td key={j} className="p-3">{c}</td>)}</tr>)}</tbody></table></div>; }
+function SimpleTable({ headers, rows, pageSize = 10 }) {
+  const { page, setPage, visibleRows, showPagination, totalItems } = useAutoPagination(rows || [], pageSize);
+  return (
+    <div className="overflow-hidden rounded-md border">
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[680px] text-sm">
+          <thead className="bg-slate-50"><tr>{headers.map((h) => <th key={h} className="p-3 text-right">{h}</th>)}</tr></thead>
+          <tbody className="divide-y">
+            {visibleRows.length ? visibleRows.map((r, i) => <tr key={`${page}-${i}`}>{r.map((c, j) => <td key={j} className="p-3">{c}</td>)}</tr>) : (
+              <tr><td colSpan={headers.length} className="p-5 text-center text-sm text-slate-500">لا توجد بيانات حالياً.</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+      {showPagination && <Pagination page={page} totalItems={totalItems} pageSize={pageSize} onPageChange={setPage} />}
+    </div>
+  );
+}
 function EmailField({ label, value, onChange, type = "text" }) { return <label className="block space-y-2 text-sm font-medium text-slate-700">{label}<Input type={type} value={value ?? ""} onChange={(event) => onChange(event.target.value)} /></label>; }
 function Toggle({ label, checked, onChange }) { return <label className="flex min-h-11 items-center justify-between gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 text-sm font-semibold text-slate-700"><span>{label}</span><input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} className="h-4 w-4 accent-bank-700" /></label>; }
 function LabeledInput({ label, ...props }) { return <label className="block space-y-2 text-sm font-medium text-slate-700">{label}<Input {...props} /></label>; }

@@ -78,11 +78,12 @@ const fieldLabels: Record<string, string> = {
 };
 
 const actionLabels: Record<ApprovalAction, string> = {
+  waiting: "بانتظار الدور",
   pending: "بانتظار الإجراء",
   approved: "تمت الموافقة",
   rejected: "تم الرفض",
   returned_for_edit: "أعيد للتعديل",
-  skipped: "تم التجاوز"
+  skipped: "بانتظار الدور"
 };
 
 const approvalsPageSize = 12;
@@ -152,18 +153,25 @@ function workflowDepartmentName(request?: ServiceRequest | null) {
   const formDepartmentName = typeof formData.assigned_department_name === "string" ? formData.assigned_department_name : "";
   const snapshotDepartmentName = typeof snapshot.assigned_department_name === "string" ? snapshot.assigned_department_name : "";
 
-  return formDepartmentName || snapshotDepartmentName || request?.department?.name_ar || workflowSectionName(request);
+  return request?.specialized_department?.name_ar || formDepartmentName || snapshotDepartmentName || request?.department?.name_ar || workflowSectionName(request);
 }
 
 function approvalStepLabel(step?: ApprovalStep | null, request?: ServiceRequest | null) {
   if (!step) return "-";
-  if (step.display_label) return step.display_label;
-  const departmentName = workflowDepartmentName(request);
+  const departmentName = step.target_department_name_ar || workflowDepartmentName(request);
   const sectionName = workflowSectionName(request);
-  if (departmentName && step.role === "department_manager") return `مدير ${departmentName}`;
-  if (sectionName && step.role === "department_specialist") return `مختص ${sectionName}`;
-  if (departmentName && step.role === "specific_department_manager") return `مدير ${departmentName}`;
-  return roleLabels[step.role] ?? step.role;
+  if (step.role === "specific_user" && step.approver?.full_name_ar) return step.approver.full_name_ar;
+  if (step.role === "specific_role" && step.approver_role_name_ar) return step.approver_role_name_ar;
+  if (departmentName && ["department_manager", "specific_department_manager", "administration_manager"].includes(step.role)) {
+    return `مدير ${departmentName}`;
+  }
+  if (
+    sectionName &&
+    ["department_specialist", "specialized_section", "implementation_engineer", "implementation", "execution", "execute_request", "it_staff"].includes(step.role)
+  ) {
+    return `مختص ${sectionName}`;
+  }
+  return step.display_label || roleLabels[step.role] || step.role;
 }
 
 function slaStatus(request: ServiceRequest) {
@@ -278,6 +286,27 @@ function isActionableForUser(step: ApprovalStep | null, user: CurrentUser | null
   );
 }
 
+function mergeActionableStepFlags(details: ServiceRequest, listItem?: ServiceRequest): ServiceRequest {
+  const listStep = getCurrentStep(listItem);
+  if (!listStep) {
+    return details;
+  }
+
+  return {
+    ...details,
+    approvals: (details.approvals ?? []).map((step) =>
+      step.id === listStep.id
+        ? {
+            ...step,
+            can_act: listStep.can_act,
+            can_reject: listStep.can_reject,
+            can_return_for_edit: listStep.can_return_for_edit
+          }
+        : step
+    )
+  };
+}
+
 export function Approvals() {
   const navigate = useNavigate();
   const [requests, setRequests] = useState<ServiceRequest[]>([]);
@@ -301,10 +330,12 @@ export function Approvals() {
   const [showFilters, setShowFilters] = useState(false);
   const [showApprovalPath, setShowApprovalPath] = useState(false);
   const [approvalsPage, setApprovalsPage] = useState(1);
+  const [requestDetails, setRequestDetails] = useState<Record<number, ServiceRequest>>({});
+  const [isLoadingDetails, setIsLoadingDetails] = useState(false);
 
   const selectedRequest = useMemo(
-    () => (selectedId ? requests.find((request) => request.id === selectedId) : undefined),
-    [requests, selectedId]
+    () => (selectedId ? requestDetails[selectedId] ?? requests.find((request) => request.id === selectedId) : undefined),
+    [requestDetails, requests, selectedId]
   );
 
   const currentStep = getCurrentStep(selectedRequest);
@@ -364,6 +395,10 @@ export function Approvals() {
       const data = await apiFetch<ServiceRequest[]>(`/approvals?${query}`);
       const sorted = data.sort((a, b) => Number(isActionableForUser(getCurrentStep(b), currentUser, activeDelegations)) - Number(isActionableForUser(getCurrentStep(a), currentUser, activeDelegations)));
       setRequests(sorted);
+      setRequestDetails((current) => {
+        const allowedIds = new Set(sorted.map((request) => request.id));
+        return Object.fromEntries(Object.entries(current).filter(([id]) => allowedIds.has(Number(id))));
+      });
       setSelectedId((current) => current ?? sorted[0]?.id ?? null);
     } catch {
       setRequests([]);
@@ -391,6 +426,37 @@ export function Approvals() {
   }, [selectedId]);
 
   useEffect(() => {
+    if (!selectedId || requestDetails[selectedId]) {
+      return;
+    }
+
+    let cancelled = false;
+    setIsLoadingDetails(true);
+    apiFetch<ServiceRequest>(`/approvals/${selectedId}`)
+      .then((details) => {
+        if (cancelled) return;
+        setRequestDetails((current) => ({
+          ...current,
+          [selectedId]: mergeActionableStepFlags(details, requests.find((request) => request.id === selectedId))
+        }));
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setError("تعذر تحميل تفاصيل مسار الموافقات لهذا الطلب.");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setIsLoadingDetails(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [requestDetails, requests, selectedId]);
+
+  useEffect(() => {
     setApprovalsPage(1);
     setSelectedId(null);
     loadApprovals();
@@ -407,6 +473,10 @@ export function Approvals() {
     if (!selectedRequest) return;
     setMessage("");
     setError("");
+    if (!canShowDecisionForm) {
+      setError(`الطلب حالياً بانتظار مرحلة ${approvalStepLabel(currentStep, selectedRequest)}، ولا يوجد إجراء مطلوب منك في هذه المرحلة.`);
+      return;
+    }
     if (decision === "rejected" && !currentStepCanReject) {
       setError("هذه المرحلة لا تسمح بالرفض حسب إعدادات مسار الموافقات.");
       return;
@@ -434,12 +504,13 @@ export function Approvals() {
         body: JSON.stringify({ action: decision, note })
       });
       setRequests((current) => current.map((request) => (request.id === updated.id ? updated : request)));
+      setRequestDetails((current) => ({ ...current, [updated.id]: updated }));
       setSelectedId(updated.id);
       setNote("");
       loadSummary();
       setMessage(decision === "approved" ? "تمت الموافقة على الخطوة الحالية." : decision === "returned_for_edit" ? "تم إرجاع الطلب للتعديل حسب إعدادات مسار الموافقات." : "تم رفض الطلب وتحديث سجل الموافقات.");
     } catch {
-      setError("تعذر تنفيذ قرار الموافقة. تحقق من أن لديك صلاحية على الخطوة الحالية.");
+      setError(`تعذر تنفيذ القرار. الطلب حالياً بانتظار مرحلة ${approvalStepLabel(currentStep, selectedRequest)} أو تمت معالجته من مستخدم آخر.`);
     } finally {
       setIsSubmitting(false);
     }
@@ -669,15 +740,16 @@ export function Approvals() {
 
                 <div className="mt-4 flex flex-col gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 sm:flex-row sm:items-center sm:justify-between">
                   <p className="text-sm leading-6 text-slate-600">
-                    المسار مختصر هنا لتقليل التشتيت. يمكن عرض التفاصيل الكاملة عند الحاجة.
+                    يعرض المسار الكامل المحفوظ عند تقديم الطلب، ولا يتأثر بتغييرات إدارة الطلبات اللاحقة.
                   </p>
                   <button
                     type="button"
                     onClick={() => setShowApprovalPath((current) => !current)}
+                    disabled={isLoadingDetails}
                     className="inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-md border border-bank-100 bg-white px-4 text-sm font-bold text-bank-700 hover:bg-bank-50"
                   >
                     <Clock3 className="h-4 w-4" />
-                    {showApprovalPath ? "إخفاء مسار الموافقات" : "عرض مسار الموافقات"}
+                    {isLoadingDetails ? "تحميل المسار..." : showApprovalPath ? "إخفاء مسار الموافقات" : "عرض مسار الموافقات"}
                   </button>
                 </div>
 
@@ -920,6 +992,7 @@ function ApprovalTimelineItem({ request, step }: { request: ServiceRequest; step
   const isApproved = step.action === "approved";
   const isRejected = step.action === "rejected";
   const isReturned = step.action === "returned_for_edit";
+  const actionByName = step.action_by?.full_name_ar || step.action_by?.email || step.approver?.full_name_ar || step.approver?.email || "-";
   const tone = isApproved ? "bg-bank-50 text-bank-700" : isRejected ? "bg-red-50 text-red-700" : isReturned ? "bg-amber-50 text-amber-700" : "bg-slate-100 text-slate-600";
   const actorLabel = isApproved ? "قام بالموافقة" : isRejected ? "قام بالرفض" : isReturned ? "قام بالإرجاع" : "";
   const dateLabel = isApproved ? "تاريخ الموافقة" : isRejected ? "تاريخ الرفض" : isReturned ? "تاريخ الإرجاع" : "";
@@ -939,7 +1012,7 @@ function ApprovalTimelineItem({ request, step }: { request: ServiceRequest; step
         <p className="mt-1 text-sm text-slate-500">{actionLabels[step.action]}</p>
         {(isApproved || isRejected || isReturned) && (
           <div className="mt-2 grid gap-1 rounded-md bg-slate-50 p-2 text-xs leading-5 text-slate-600 sm:grid-cols-2">
-            <p><span className="font-bold text-slate-700">{actorLabel}:</span> {step.approver?.full_name_ar || step.approver?.email || "-"}</p>
+            <p><span className="font-bold text-slate-700">{actorLabel}:</span> {actionByName}</p>
             <p><span className="font-bold text-slate-700">{dateLabel}:</span> {formatDate(step.acted_at)}</p>
           </div>
         )}
@@ -954,7 +1027,7 @@ function ApprovalProgressBar({ request, steps }: { request: ServiceRequest; step
   const rejectedIndex = orderedSteps.findIndex((step) => step.action === "rejected");
   const returnedIndex = orderedSteps.findIndex((step) => step.action === "returned_for_edit");
   const currentIndex = orderedSteps.findIndex((step) => step.action === "pending");
-  const completedCount = orderedSteps.filter((step) => step.action === "approved" || step.action === "skipped").length;
+  const completedCount = orderedSteps.filter((step) => step.action === "approved").length;
   const progressPercent = orderedSteps.length === 0 ? 0 : Math.round((completedCount / orderedSteps.length) * 100);
 
   if (orderedSteps.length === 0) {
@@ -1056,9 +1129,9 @@ function ProgressStepMobile({
 }
 
 function getStepState(step: ApprovalStep, index: number, currentIndex: number, rejectedIndex: number) {
-  if (step.action === "approved" || step.action === "skipped") {
+  if (step.action === "approved") {
     return {
-      label: step.action === "skipped" ? "تم التجاوز" : "تمت الموافقة",
+      label: "تمت الموافقة",
       ring: "border-bank-600 text-bank-700",
       text: "text-bank-700",
       icon: <CheckCircle2 className="h-5 w-5" />

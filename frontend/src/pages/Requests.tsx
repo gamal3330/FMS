@@ -1,5 +1,5 @@
 import { ChangeEvent, FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
-import { Eye, FilePlus2, MessageSquare, RefreshCw, RotateCcw, Save, Search, Send } from "lucide-react";
+import { Eye, FilePlus2, MessageSquare, RefreshCw, RotateCcw, Save, Search, Send, X } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { API_BASE, apiFetch, CurrentUser, ServiceRequest } from "../lib/api";
 import { formatSystemDate, formatSystemDateTime, parseApiDate } from "../lib/datetime";
@@ -32,6 +32,7 @@ interface TypeConfig {
   label: string;
   description: string;
   section: AdministrativeSection;
+  sectionLabel?: string;
   autoAssignStrategy?: string;
   requiresAttachment?: boolean;
   allowMultipleAttachments?: boolean;
@@ -52,6 +53,7 @@ interface LinkedMessage {
   body: string;
   sender_name: string;
   recipient_names: string[];
+  recipients_count?: number;
   is_read: boolean;
   created_at: string;
 }
@@ -73,6 +75,7 @@ const defaultMessageSettings: MessageSettings = {
   allow_send_message_from_request: true,
   show_messages_tab_in_request_details: true
 };
+const defaultComposeMessageType = API_BASE.includes("/api/dotnet") ? "internal_message" : "internal_correspondence";
 
 const administrativeSections: Record<AdministrativeSection, string> = {
   servers: "قسم السيرفرات",
@@ -216,12 +219,21 @@ export function Requests() {
           description?: string;
           category?: string;
           assigned_section?: string;
+          assigned_section_label?: string;
+          specialized_section_code?: string;
           auto_assign_strategy?: string;
+          specialized_section_name?: string;
+          specialized_section_name_ar?: string;
+          specialized_section?: {
+            code?: string;
+            name_ar?: string;
+            nameAr?: string;
+          } | null;
           requires_attachment?: boolean;
           allow_multiple_attachments?: boolean;
           max_attachments?: number;
           max_file_size_mb?: number;
-          allowed_extensions_json?: string[];
+          allowed_extensions_json?: string[] | string;
           default_priority?: string;
           sla_response_hours?: number | null;
           sla_resolution_hours?: number | null;
@@ -229,16 +241,29 @@ export function Requests() {
       >("/request-types/active");
       const sections = await apiFetch<Array<{ code: string; name_ar: string }>>("/settings/specialized-sections?active_only=true").catch(() => []);
       const labels = { ...administrativeSections, ...Object.fromEntries(sections.map((section) => [section.code, section.name_ar])) };
-      setSectionLabels(labels);
+      const nextSectionLabels = { ...labels };
 
       const nextTypes = await Promise.all(
         data.map(async (item) => {
           const fields = await loadManagedFields(item.id, []);
+          const sectionCode = item.assigned_section || item.specialized_section_code || item.specialized_section?.code || categoryToSection(item.category);
+          const sectionLabel =
+            item.assigned_section_label ||
+            item.specialized_section_name_ar ||
+            item.specialized_section_name ||
+            item.specialized_section?.name_ar ||
+            item.specialized_section?.nameAr ||
+            labels[sectionCode] ||
+            sectionCode;
+          if (sectionCode && sectionLabel) {
+            nextSectionLabels[sectionCode] = sectionLabel;
+          }
           return {
             value: `managed_${item.id}`,
             label: item.name_ar || item.code || "نوع طلب",
             description: item.description || "نوع طلب معرف من شاشة إدارة الطلبات.",
-            section: item.assigned_section || categoryToSection(item.category),
+            section: sectionCode,
+            sectionLabel,
             autoAssignStrategy: item.auto_assign_strategy || "none",
             icon: FilePlus2,
             requestTypeId: item.id,
@@ -247,7 +272,7 @@ export function Requests() {
             allowMultipleAttachments: Boolean(item.allow_multiple_attachments),
             maxAttachments: item.max_attachments ?? (item.allow_multiple_attachments ? 5 : 1),
             maxFileSizeMb: item.max_file_size_mb ?? 10,
-            allowedExtensions: item.allowed_extensions_json ?? ["pdf", "png", "jpg", "jpeg"],
+            allowedExtensions: normalizeAllowedExtensions(item.allowed_extensions_json),
             defaultPriority: normalizePriority(item.default_priority),
             slaResponseHours: item.sla_response_hours ?? null,
             slaResolutionHours: item.sla_resolution_hours ?? null,
@@ -255,6 +280,7 @@ export function Requests() {
           } as TypeConfig;
         })
       );
+      setSectionLabels(nextSectionLabels);
 
       if (nextTypes.length > 0) {
         setManagedRequestTypes(nextTypes);
@@ -330,9 +356,7 @@ export function Requests() {
           method: "PATCH",
           body: JSON.stringify(payload)
         });
-        for (const file of attachments) {
-          await uploadAttachment(editingRequestId, file);
-        }
+        await uploadAttachments(editingRequestId, attachments);
         await apiFetch<ServiceRequest>(`/requests/${editingRequestId}/resubmit`, { method: "POST" });
         setMessage("تم تحديث الطلب وإعادة إرساله إلى مسار الموافقات.");
         setEditingRequestId(null);
@@ -342,17 +366,15 @@ export function Requests() {
           body: JSON.stringify(payload)
         });
         if (created?.id) {
-          for (const file of attachments) {
-            await uploadAttachment(created.id, file);
-          }
+          await uploadAttachments(created.id, attachments);
         }
         setMessage("تم إرسال الطلب بنجاح وإضافته إلى مسار الموافقات.");
       }
       resetForm();
       setRequestsPage(1);
       await loadRequests(1);
-    } catch {
-      setError("تعذر إرسال الطلب. تحقق من الاتصال بالخادم وصلاحية الجلسة.");
+    } catch (submitError) {
+      setError(readableSubmitError(submitError) || "تعذر إرسال الطلب. تحقق من الاتصال بالخادم وصلاحية الجلسة.");
     } finally {
       setIsSubmitting(false);
     }
@@ -385,9 +407,9 @@ export function Requests() {
     const enrichedFormData = {
       ...formData,
       administrative_section: selectedType.section,
-      administrative_section_label: sectionLabels[selectedType.section] || selectedType.section,
+      administrative_section_label: sectionLabelForType(selectedType),
       assigned_section: selectedType.section,
-      assigned_section_label: sectionLabels[selectedType.section] || selectedType.section,
+      assigned_section_label: sectionLabelForType(selectedType),
       request_type_code: selectedType.code || selectedType.value,
       request_type_label: selectedType.label
     };
@@ -420,12 +442,18 @@ export function Requests() {
   }
 
   function requestSectionLabel(item: ServiceRequest) {
+    const type = availableRequestTypes.find((candidate) => candidate.value === item.request_type || candidate.code === item.form_data?.request_type_code);
     const key =
       item.form_data?.assigned_section ||
       item.form_data?.administrative_section ||
-      availableRequestTypes.find((type) => type.value === item.request_type || type.code === item.form_data?.request_type_code)?.section ||
+      type?.section ||
       "";
-    return item.form_data?.assigned_section_label || item.form_data?.administrative_section_label || sectionLabels[key] || item.department?.name_ar || key || "-";
+    return item.form_data?.assigned_section_label || item.form_data?.administrative_section_label || type?.sectionLabel || sectionLabels[key] || item.department?.name_ar || key || "-";
+  }
+
+  function sectionLabelForType(type?: TypeConfig | null) {
+    if (!type) return "-";
+    return type.sectionLabel || sectionLabels[type.section] || type.section || "-";
   }
 
   async function showLinkedMessages(item: ServiceRequest) {
@@ -435,8 +463,8 @@ export function Requests() {
     setIsLinkedMessagesLoading(true);
     setError("");
     try {
-      const data = await apiFetch<LinkedMessage[]>(`/requests/${item.id}/messages`);
-      setLinkedMessages(data);
+      const data = await apiFetch<unknown[]>(`/requests/${item.id}/messages`);
+      setLinkedMessages(normalizeLinkedMessages(data));
     } catch {
       setError("تعذر تحميل المراسلات المرتبطة بالطلب.");
     } finally {
@@ -450,7 +478,7 @@ export function Requests() {
       compose: "1",
       related_request_id: item.request_number,
       subject: `بخصوص الطلب ${item.request_number}`,
-      message_type: "internal_correspondence"
+      message_type: defaultComposeMessageType
     });
     navigate(`/messages?${params.toString()}`);
   }
@@ -515,7 +543,7 @@ export function Requests() {
                 </div>
 
                 <div className="mt-3 flex flex-wrap gap-2 text-xs font-bold">
-                  <span className="request-form-meta rounded-full px-3 py-1">القسم: {sectionLabels[selectedType.section] || selectedType.section}</span>
+                  <span className="request-form-meta rounded-full px-3 py-1">القسم: {sectionLabelForType(selectedType)}</span>
                   <span className="request-form-meta rounded-full px-3 py-1">الحقول المطلوبة: {selectedRequiredFieldsCount}</span>
                   {typeAllowsAttachments(selectedType) && <span className="request-form-meta rounded-full px-3 py-1">المرفقات: {selectedAttachmentLabel}</span>}
                 </div>
@@ -535,11 +563,9 @@ export function Requests() {
 
                 <label className="block space-y-2 text-sm font-medium text-slate-700">
                   القسم المختص
-                  <select value={selectedType.section} disabled className="h-10 w-full rounded-md border border-slate-300 bg-slate-100 px-3 text-sm text-slate-600 outline-none">
-                    {Object.entries(sectionLabels).map(([value, label]) => (
-                      <option key={value} value={value}>{label}</option>
-                    ))}
-                  </select>
+                  <div className="flex h-10 w-full items-center rounded-md border border-slate-300 bg-slate-100 px-3 text-sm font-semibold text-slate-600">
+                    {sectionLabelForType(selectedType)}
+                  </div>
                   <span className="block text-xs font-normal text-slate-500">يتم تحديد القسم من إدارة أنواع الطلبات.</span>
                 </label>
 
@@ -623,31 +649,43 @@ export function Requests() {
                   required={selectedType.requiresAttachment && attachments.length === 0 && !editingRequestId}
                   onChange={(event) => {
                     const selectedFiles = Array.from(event.target.files || []);
-                    const nextFiles = selectedType.allowMultipleAttachments ? selectedFiles : selectedFiles.slice(0, 1);
+                    const nextFiles = selectedType.allowMultipleAttachments
+                      ? mergeAttachmentFiles(attachments, selectedFiles)
+                      : selectedFiles.slice(0, 1);
                     const attachmentError = validateAttachmentsForType(nextFiles, selectedType);
                     if (attachmentError) {
                       setError(attachmentError);
                       event.target.value = "";
-                      setAttachments([]);
                       return;
                     }
                     setError("");
                     setAttachments(nextFiles);
+                    event.target.value = "";
                   }}
                   className="block w-full rounded-md border border-dashed border-slate-300 bg-white px-3 py-2 text-sm file:ml-3 file:rounded-md file:border-0 file:bg-bank-50 file:px-3 file:py-1.5 file:text-sm file:font-bold file:text-bank-700"
                 />
                 {attachments.length > 0 && (
                   <div className="space-y-1 rounded-md border border-slate-200 bg-slate-50 p-3">
-                    {attachments.map((file) => (
+                    {attachments.map((file, index) => (
                       <div key={`${file.name}-${file.size}`} className="flex items-center justify-between gap-3 text-xs text-slate-600">
                         <span className="truncate font-bold text-slate-800">{file.name}</span>
-                        <span>{formatFileSize(file.size)}</span>
+                        <span className="flex shrink-0 items-center gap-2">
+                          {formatFileSize(file.size)}
+                          <button
+                            type="button"
+                            onClick={() => setAttachments((current) => current.filter((_, fileIndex) => fileIndex !== index))}
+                            className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-500 hover:border-red-200 hover:text-red-600"
+                            aria-label="إزالة المرفق"
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </button>
+                        </span>
                       </div>
                     ))}
                   </div>
                 )}
                 <span className="block text-xs font-normal text-slate-500">
-                  الامتدادات المسموحة: {(selectedType.allowedExtensions ?? ["pdf", "png", "jpg", "jpeg"]).join(", ")}. الحد الأقصى للملف: {selectedType.maxFileSizeMb ?? 10} MB. عدد الملفات: {selectedType.allowMultipleAttachments ? `حتى ${selectedType.maxAttachments ?? 5}` : "ملف واحد"}.
+                  الامتدادات المسموحة: {formatAllowedExtensions(selectedType)}. الحد الأقصى للملف: {selectedType.maxFileSizeMb ?? 10} MB. عدد الملفات: {selectedType.allowMultipleAttachments ? `حتى ${selectedType.maxAttachments ?? 5}` : "ملف واحد"}.
                 </span>
               </label>
             )}
@@ -683,7 +721,7 @@ export function Requests() {
             <div className="flex flex-col gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 sm:flex-row sm:items-center sm:justify-between">
               <div className="text-xs leading-5 text-slate-500">
                 <p className="font-bold text-slate-700">ملخص سريع</p>
-                <p>{selectedType.label} - {sectionLabels[selectedType.section] || selectedType.section} - {priorities.find((type) => type.value === priority)?.label ?? priority}</p>
+                <p>{selectedType.label} - {sectionLabelForType(selectedType)} - {priorities.find((type) => type.value === priority)?.label ?? priority}</p>
               </div>
               <div className="flex flex-col gap-3 sm:flex-row">
               <Button type="submit" disabled={isSubmitting} className="gap-2">
@@ -899,7 +937,7 @@ export function Requests() {
                             <h4 className="font-bold text-slate-950">{message.subject || "بدون موضوع"}</h4>
                           </div>
                           <p className="mt-1 text-xs text-slate-500">
-                            من: {message.sender_name} | إلى: {message.recipient_names.join("، ") || "-"}
+                            من: {message.sender_name || "-"} | إلى: {linkedMessageRecipientsText(message)}
                           </p>
                         </div>
                         <span className="text-xs text-slate-500">{formatSystemDate(message.created_at)}</span>
@@ -920,7 +958,9 @@ export function Requests() {
 function messageTypeLabel(value: string) {
   const labels: Record<string, string> = {
     internal_correspondence: "مراسلة داخلية",
+    internal_message: "مراسلة داخلية",
     official_correspondence: "مراسلة رسمية",
+    official_message: "مراسلة رسمية",
     clarification_request: "طلب استيضاح",
     reply_to_clarification: "رد على استيضاح",
     approval_note: "ملاحظة موافقة",
@@ -929,7 +969,84 @@ function messageTypeLabel(value: string) {
     notification: "إشعار",
     circular: "تعميم"
   };
-  return labels[value] || "مراسلة داخلية";
+  return labels[value] || value || "مراسلة داخلية";
+}
+
+function normalizeLinkedMessages(value: unknown): LinkedMessage[] {
+  if (!Array.isArray(value)) return [];
+  return value.map(normalizeLinkedMessage).filter((message) => message.id > 0);
+}
+
+function normalizeLinkedMessage(value: unknown): LinkedMessage {
+  const item = toPlainRecord(value);
+  const sender = toPlainRecord(item.sender);
+  const recipientNames =
+    normalizeRecipientNames(item.recipient_names).length > 0
+      ? normalizeRecipientNames(item.recipient_names)
+      : normalizeRecipientNames(item.recipientNames).length > 0
+        ? normalizeRecipientNames(item.recipientNames)
+        : normalizeRecipientNames(item.recipients);
+
+  return {
+    id: toNumber(item.id),
+    message_type: firstText(item.message_type, item.messageType, item.message_type_code, item.messageTypeCode, item.messageTypeNameAr, item.message_type_name_ar),
+    subject: firstText(item.subject),
+    body: firstText(item.body, item.preview),
+    sender_name: firstText(item.sender_name, item.senderName, item.senderNameAr, item.sender_name_ar, sender.name_ar, sender.nameAr, sender.full_name_ar, sender.fullNameAr, sender.username),
+    recipient_names: recipientNames,
+    recipients_count: toNumber(item.recipients_count, item.recipientsCount),
+    is_read: Boolean(item.is_read ?? item.isRead),
+    created_at: firstText(item.created_at, item.createdAt, item.sent_at, item.sentAt)
+  };
+}
+
+function linkedMessageRecipientsText(message: LinkedMessage) {
+  if (Array.isArray(message.recipient_names) && message.recipient_names.length > 0) {
+    return message.recipient_names.join("، ");
+  }
+  if (message.recipients_count && message.recipients_count > 0) {
+    return `${message.recipients_count} مستلم`;
+  }
+  return "-";
+}
+
+function normalizeRecipientNames(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value
+      .map((entry) => {
+        if (typeof entry === "string") return entry.trim();
+        const recipient = toPlainRecord(entry);
+        return firstText(recipient.name_ar, recipient.nameAr, recipient.full_name_ar, recipient.fullNameAr, recipient.email, recipient.username);
+      })
+      .filter(Boolean);
+  }
+  if (typeof value === "string") {
+    return value
+      .split(/[،,]/)
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+  }
+  return [];
+}
+
+function toPlainRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+function firstText(...values: unknown[]) {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) return value.trim();
+    if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  }
+  return "";
+}
+
+function toNumber(...values: unknown[]) {
+  for (const value of values) {
+    const numberValue = Number(value);
+    if (Number.isFinite(numberValue) && numberValue > 0) return numberValue;
+  }
+  return 0;
 }
 
 function RequestSummaryChip({ label, value }: { label: string; value: string }) {
@@ -1040,8 +1157,13 @@ function statusTone(status: string) {
   return "bg-slate-100 text-slate-700";
 }
 
+const defaultAttachmentExtensions = ["pdf", "png", "jpg", "jpeg"];
+const imageAttachmentExtensions = ["png", "jpg", "jpeg", "webp", "heic", "heif"];
+const imageAttachmentExtensionSet = new Set(imageAttachmentExtensions);
+const imageExtensionAliases = new Set(["image", "images", "photo", "photos", "picture", "pictures", "صورة", "صور"]);
+
 function fileAcceptAttribute(type: TypeConfig) {
-  return (type.allowedExtensions ?? ["pdf", "png", "jpg", "jpeg"]).map((extension) => `.${String(extension).replace(/^\./, "")}`).join(",");
+  return normalizeAllowedExtensions(type.allowedExtensions).map((extension) => `.${extension}`).join(",");
 }
 
 function typeAllowsAttachments(type: TypeConfig | null | undefined) {
@@ -1049,7 +1171,7 @@ function typeAllowsAttachments(type: TypeConfig | null | undefined) {
 }
 
 function validateAttachmentForType(file: File, type: TypeConfig) {
-  const allowedExtensions = new Set((type.allowedExtensions ?? ["pdf", "png", "jpg", "jpeg"]).map((extension) => String(extension).toLowerCase().replace(/^\./, "")));
+  const allowedExtensions = new Set(normalizeAllowedExtensions(type.allowedExtensions));
   const extension = file.name.split(".").pop()?.toLowerCase() || "";
   if (!extension || !allowedExtensions.has(extension)) {
     return `امتداد الملف غير مسموح. الامتدادات المسموحة: ${Array.from(allowedExtensions).join(", ")}`;
@@ -1059,6 +1181,28 @@ function validateAttachmentForType(file: File, type: TypeConfig) {
     return `حجم الملف يتجاوز الحد المسموح (${type.maxFileSizeMb ?? 10} MB).`;
   }
   return "";
+}
+
+function normalizeAllowedExtensions(value?: string[] | string | null) {
+  const rawItems = Array.isArray(value)
+    ? value
+    : typeof value === "string"
+      ? value
+          .replace(/^\s*\[/, "")
+          .replace(/\]\s*$/, "")
+          .split(",")
+      : defaultAttachmentExtensions;
+  const normalized = rawItems.flatMap((item) => {
+    const extension = String(item).trim().replace(/^["']|["']$/g, "").replace(/^\./, "").toLowerCase();
+    if (!extension) return [];
+    if (imageExtensionAliases.has(extension) || imageAttachmentExtensionSet.has(extension)) return imageAttachmentExtensions;
+    return [extension];
+  });
+  return [...new Set(normalized)].filter(Boolean).sort();
+}
+
+function formatAllowedExtensions(type: TypeConfig) {
+  return normalizeAllowedExtensions(type.allowedExtensions).join(", ");
 }
 
 function validateAttachmentsForType(files: File[], type: TypeConfig) {
@@ -1078,6 +1222,14 @@ function validateAttachmentsForType(files: File[], type: TypeConfig) {
     if (fileError) return fileError;
   }
   return "";
+}
+
+function mergeAttachmentFiles(current: File[], selected: File[]) {
+  const map = new Map<string, File>();
+  for (const file of [...current, ...selected]) {
+    map.set(`${file.name}-${file.size}-${file.lastModified}`, file);
+  }
+  return Array.from(map.values());
 }
 
 function fieldValueAsString(value: FieldValue | undefined) {
@@ -1162,7 +1314,62 @@ async function uploadAttachment(requestId: number, file: File) {
     body
   });
   if (!response.ok) {
-    throw new Error(await response.text());
+    throw new Error(await extractResponseError(response));
+  }
+}
+
+async function uploadAttachments(requestId: number, files: File[]) {
+  if (files.length === 0) return;
+  if (files.length === 1) {
+    await uploadAttachment(requestId, files[0]);
+    return;
+  }
+
+  const token = localStorage.getItem("qib_token");
+  const body = new FormData();
+  for (const file of files) {
+    body.append("files", file);
+  }
+  const response = await fetch(`${API_BASE}/requests/${requestId}/attachments/batch`, {
+    method: "POST",
+    headers: {
+      ...(token ? { Authorization: `Bearer ${token}` } : {})
+    },
+    body
+  });
+
+  if (response.status === 404 || response.status === 405) {
+    for (const file of files) {
+      await uploadAttachment(requestId, file);
+    }
+    return;
+  }
+
+  if (!response.ok) {
+    throw new Error(await extractResponseError(response));
+  }
+}
+
+async function extractResponseError(response: Response) {
+  const text = await response.text();
+  if (!text) return "تعذر رفع المرفق.";
+  try {
+    const data = JSON.parse(text) as { detail?: string; Detail?: string; title?: string; Title?: string };
+    return data.detail || data.Detail || data.title || data.Title || text;
+  } catch {
+    return text;
+  }
+}
+
+function readableSubmitError(error: unknown) {
+  if (!(error instanceof Error)) return "";
+  const message = error.message.trim();
+  if (!message) return "";
+  try {
+    const data = JSON.parse(message) as { detail?: string; Detail?: string; title?: string; Title?: string };
+    return data.detail || data.Detail || data.title || data.Title || message;
+  } catch {
+    return message;
   }
 }
 

@@ -121,6 +121,7 @@ MESSAGE_TYPE_DEFAULTS = [
     {"value": "circular", "label": "تعميم", "is_system": True},
 ]
 MESSAGE_TYPES = {item["value"] for item in MESSAGE_TYPE_DEFAULTS}
+OFFICIAL_MESSAGE_TYPES = {"official_correspondence", "official_message"}
 MESSAGE_PRIORITIES = {"normal", "high", "urgent"}
 _MESSAGE_RUNTIME_COLUMNS_READY = False
 MESSAGE_CLASSIFICATION_DEFAULTS = [
@@ -385,7 +386,7 @@ def require_message_deletion_allowed(db: Session, message: InternalMessage) -> N
     retention = db.scalar(select(MessageRetentionPolicy).limit(1))
     if not retention or not retention.allow_user_delete_own_messages:
         raise HTTPException(status_code=403, detail="حذف الرسائل غير مفعل من إعدادات الأرشفة والاحتفاظ")
-    if retention.exclude_official_messages_from_delete and structured_message_type_code(message.message_type) == "official_message":
+    if retention.exclude_official_messages_from_delete and is_official_message_type(message.message_type):
         raise HTTPException(status_code=403, detail="لا يمكن حذف الرسائل الرسمية حسب إعدادات الاحتفاظ")
 
 
@@ -469,6 +470,11 @@ def message_type_setting(db: Session) -> PortalSetting | None:
 def structured_message_type_code(value: str | None) -> str:
     message_type = (value or DEFAULT_MESSAGE_TYPE).strip()
     return LEGACY_TO_STRUCTURED_MESSAGE_TYPES.get(message_type, message_type)
+
+
+def is_official_message_type(value: str | None) -> bool:
+    message_type = (value or "").strip()
+    return message_type in OFFICIAL_MESSAGE_TYPES or structured_message_type_code(message_type) == "official_message"
 
 
 def legacy_message_type_code(value: str | None) -> str:
@@ -666,7 +672,7 @@ def message_read(message: InternalMessage, current_user: User, recipient_state: 
         recipient_names=[recipient.recipient.full_name_ar for recipient in message.recipients if recipient.recipient],
         related_request_id=message.related_request_id,
         related_request_number=message.related_request.request_number if getattr(message, "related_request", None) else None,
-        is_official=bool(getattr(message, "is_official", False) or structured_message_type_code(message.message_type) == "official_message"),
+        is_official=bool(getattr(message, "is_official", False) or is_official_message_type(message.message_type)),
         official_reference_number=getattr(message, "official_reference_number", None),
         include_in_request_pdf=bool(getattr(message, "include_in_request_pdf", False)),
         official_pdf_document_id=getattr(message, "official_pdf_document_id", None),
@@ -827,7 +833,7 @@ def authorize_message_type(db: Session, user: User, value: str | None, message_s
     settings_value = message_settings or load_message_settings(db)
     if message_type == "circular" and not can_send_circular(settings_value, user):
         raise HTTPException(status_code=403, detail="لا تملك صلاحية إرسال التعاميم")
-    if structured_message_type_code(message_type) == "official_message" and not has_action_permission(db, user, "create_official_message", default=can_manage_official_assets(user)):
+    if is_official_message_type(message_type) and not has_action_permission(db, user, "create_official_message", default=can_manage_official_assets(user)):
         raise HTTPException(status_code=403, detail="لا تملك صلاحية إنشاء مراسلة رسمية")
     return message_type
 
@@ -907,8 +913,8 @@ def create_message_record(
         message_uid=generate_message_uid(db),
         sender_id=current_user.id,
         message_type=authorized_message_type,
-        is_official=structured_message_type_code(authorized_message_type) == "official_message",
-        official_status="sent" if structured_message_type_code(authorized_message_type) == "official_message" else None,
+        is_official=is_official_message_type(authorized_message_type),
+        official_status="sent" if is_official_message_type(authorized_message_type) else None,
         priority=normalize_message_priority(priority, message_settings),
         classification_code=normalize_message_classification(db, classification_code),
         subject=subject.strip(),
@@ -1395,12 +1401,14 @@ def create_draft(payload: InternalMessageDraftUpsert, db: Session = Depends(get_
     resolved_related_request_id = resolve_related_request_id(db, payload.related_request_id)
     if not resolved_related_request_id and not message_settings.get("allow_general_messages", True):
         raise HTTPException(status_code=403, detail="المراسلات العامة غير مفعلة. يجب ربط المسودة بطلب")
+    authorized_message_type = authorize_message_type(db, current_user, payload.message_type, message_settings)
+    is_official = is_official_message_type(authorized_message_type)
     draft = InternalMessage(
         message_uid=generate_message_uid(db),
         sender_id=current_user.id,
-        message_type=authorize_message_type(db, current_user, payload.message_type),
-        is_official=structured_message_type_code(payload.message_type) == "official_message",
-        official_status="draft" if structured_message_type_code(payload.message_type) == "official_message" else None,
+        message_type=authorized_message_type,
+        is_official=is_official,
+        official_status="draft" if is_official else None,
         priority=normalize_message_priority(payload.priority, message_settings),
         classification_code=normalize_message_classification(db, payload.classification_code),
         subject=payload.subject.strip(),
@@ -1438,13 +1446,15 @@ async def create_draft_with_attachments(
     resolved_related_request_id = resolve_related_request_id(db, related_request_id)
     if not resolved_related_request_id and not message_settings.get("allow_general_messages", True):
         raise HTTPException(status_code=403, detail="المراسلات العامة غير مفعلة. يجب ربط المسودة بطلب")
-    validate_message_type_rules(db, authorize_message_type(db, current_user, message_type, message_settings), resolved_related_request_id, len([file for file in attachments if file.filename]))
+    authorized_message_type = authorize_message_type(db, current_user, message_type, message_settings)
+    is_official = is_official_message_type(authorized_message_type)
+    validate_message_type_rules(db, authorized_message_type, resolved_related_request_id, len([file for file in attachments if file.filename]))
     draft = InternalMessage(
         message_uid=generate_message_uid(db),
         sender_id=current_user.id,
-        message_type=authorize_message_type(db, current_user, message_type),
-        is_official=structured_message_type_code(message_type) == "official_message",
-        official_status="draft" if structured_message_type_code(message_type) == "official_message" else None,
+        message_type=authorized_message_type,
+        is_official=is_official,
+        official_status="draft" if is_official else None,
         priority=normalize_message_priority(priority, message_settings),
         classification_code=normalize_message_classification(db, classification_code),
         subject=subject.strip(),
@@ -1476,7 +1486,7 @@ def update_draft(draft_id: int, payload: InternalMessageDraftUpsert, db: Session
         raise HTTPException(status_code=403, detail="المراسلات العامة غير مفعلة. يجب ربط المسودة بطلب")
     draft.subject = payload.subject.strip()
     draft.message_type = authorize_message_type(db, current_user, payload.message_type, message_settings)
-    draft.is_official = structured_message_type_code(draft.message_type) == "official_message"
+    draft.is_official = is_official_message_type(draft.message_type)
     draft.official_status = "draft" if draft.is_official else None
     draft.priority = normalize_message_priority(payload.priority, message_settings)
     draft.classification_code = normalize_message_classification(db, payload.classification_code)
@@ -1510,7 +1520,7 @@ def send_draft(draft_id: int, payload: InternalMessageDraftUpsert, db: Session =
     validate_message_type_rules(db, authorized_message_type, resolved_related_request_id, len(draft.attachments))
     draft.subject = subject
     draft.message_type = authorized_message_type
-    draft.is_official = structured_message_type_code(authorized_message_type) == "official_message"
+    draft.is_official = is_official_message_type(authorized_message_type)
     draft.official_status = "sent" if draft.is_official else None
     draft.priority = normalize_message_priority(payload.priority, message_settings)
     draft.classification_code = normalize_message_classification(db, payload.classification_code)
@@ -1750,12 +1760,15 @@ def reply_message(message_id: int, payload: InternalMessageReply, db: Session = 
     if not participant_ids:
         raise HTTPException(status_code=422, detail="لا يوجد مستلم للرد")
     authorized_message_type = authorize_message_type(db, current_user, payload.message_type)
+    is_official = is_official_message_type(authorized_message_type)
     validate_message_type_rules(db, authorized_message_type, original.related_request_id, 0)
     reply = InternalMessage(
         message_uid=generate_message_uid(db),
         thread_id=original.thread_id or original.id,
         sender_id=current_user.id,
         message_type=authorized_message_type,
+        is_official=is_official,
+        official_status="sent" if is_official else None,
         priority=normalize_message_priority(payload.priority, load_message_settings(db)),
         classification_code=normalize_message_classification(db, payload.classification_code),
         subject=original.subject if original.subject.startswith("رد:") else f"رد: {original.subject}",
@@ -1791,12 +1804,15 @@ async def reply_message_with_attachments(
     if not participant_ids:
         raise HTTPException(status_code=422, detail="لا يوجد مستلم للرد")
     authorized_message_type = authorize_message_type(db, current_user, message_type)
+    is_official = is_official_message_type(authorized_message_type)
     validate_message_type_rules(db, authorized_message_type, original.related_request_id, len([file for file in attachments if file.filename]))
     reply = InternalMessage(
         message_uid=generate_message_uid(db),
         thread_id=original.thread_id or original.id,
         sender_id=current_user.id,
         message_type=authorized_message_type,
+        is_official=is_official,
+        official_status="sent" if is_official else None,
         priority=normalize_message_priority(priority, load_message_settings(db)),
         classification_code=normalize_message_classification(db, classification_code),
         subject=original.subject if original.subject.startswith("رد:") else f"رد: {original.subject}",

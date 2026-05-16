@@ -60,7 +60,10 @@ export default function WorkflowStepForm({ form, setForm, roles = [], department
     }
     if (field === "can_return_for_edit" && !value) next.return_to_step_order = "";
     if (field === "step_type" && value !== "specific_role") next.approver_role_id = "";
-    if (field === "step_type" && value !== "specific_user") next.approver_user_id = "";
+    if (field === "step_type" && value !== "specific_user") {
+      next.approver_user_id = "";
+      next.approver_employee_number = "";
+    }
     if (field === "step_type" && value !== "specific_department_manager") next.target_department_id = "";
     setForm(next);
   }
@@ -118,7 +121,10 @@ export default function WorkflowStepForm({ form, setForm, roles = [], department
           <div className="hidden md:block" />
         )}
         {form.step_type === "specific_user" ? (
-          <Input placeholder="رقم المستخدم المعتمد" value={form.approver_user_id || ""} onChange={(event) => update("approver_user_id", event.target.value)} required />
+          <label className="grid gap-1">
+            <Input placeholder="الرقم الوظيفي للموظف" value={form.approver_employee_number || ""} onChange={(event) => update("approver_employee_number", event.target.value)} required />
+            <span className="text-xs font-semibold text-slate-500">سيتم تحويل الرقم الوظيفي إلى المستخدم الصحيح تلقائياً.</span>
+          </label>
         ) : (
           <div className="hidden md:block" />
         )}

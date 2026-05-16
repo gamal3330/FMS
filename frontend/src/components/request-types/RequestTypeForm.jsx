@@ -62,10 +62,21 @@ export default function RequestTypeForm({ value, onSubmit, onCancel, sectionsOpt
     setForm((current) => ({ ...current, [field]: value }));
   }
 
+  function updateAssignedSection(code) {
+    const selectedSection = sections.find(([sectionCode]) => sectionCode === code);
+    setForm((current) => ({
+      ...current,
+      assigned_section: code,
+      specialized_section_id: selectedSection?.[2] ? Number(selectedSection[2]) : null
+    }));
+  }
+
   function submit(event) {
     event.preventDefault();
+    const selectedSection = sections.find(([code]) => code === form.assigned_section);
     onSubmit({
       ...form,
+      specialized_section_id: selectedSection?.[2] ? Number(selectedSection[2]) : form.specialized_section_id ?? null,
       code: form.code.trim().toUpperCase().replace(/\s+/g, "_"),
       category: form.category || "general",
       assigned_department_id: null,
@@ -90,7 +101,7 @@ export default function RequestTypeForm({ value, onSubmit, onCancel, sectionsOpt
           <Input value={form.code} onChange={(event) => update("code", event.target.value.toUpperCase().replace(/\s+/g, "_"))} required placeholder="SYSTEM_ACCESS" />
         </Field>
         <Field label="القسم المختص باستقبال الطلب">
-          <select value={form.assigned_section || "networks"} onChange={(event) => update("assigned_section", event.target.value)} className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none focus:border-bank-600 focus:ring-2 focus:ring-bank-100" required>
+          <select value={form.assigned_section || "networks"} onChange={(event) => updateAssignedSection(event.target.value)} className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none focus:border-bank-600 focus:ring-2 focus:ring-bank-100" required>
             {sections.map(([value, label]) => (
               <option key={value} value={value}>{label}</option>
             ))}
@@ -212,7 +223,14 @@ function Field({ label, children }) {
 
 function normalizeExtensions(value) {
   const items = Array.isArray(value) ? value : String(value || "").split(",");
-  return [...new Set(items.map((item) => String(item).trim().toLowerCase().replace(/^\./, "")).filter(Boolean))].sort();
+  const imageAliases = new Set(["image", "images", "photo", "photos", "picture", "pictures", "صورة", "صور"]);
+  const imageExtensions = ["png", "jpg", "jpeg", "webp", "heic", "heif"];
+  const imageExtensionSet = new Set(imageExtensions);
+  return [...new Set(items.flatMap((item) => {
+    const extension = String(item).trim().toLowerCase().replace(/^\./, "");
+    if (!extension) return [];
+    return imageAliases.has(extension) || imageExtensionSet.has(extension) ? imageExtensions : [extension];
+  }))].sort();
 }
 
 function extensionsText(value) {

@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, JSON, String, Text, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.session import Base
@@ -109,22 +109,6 @@ class UserSignature(Base):
     verifier = relationship("User", foreign_keys=[verified_by])
 
 
-class OfficialStamp(Base):
-    __tablename__ = "official_stamps"
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    name_ar: Mapped[str] = mapped_column(String(160))
-    code: Mapped[str] = mapped_column(String(80), unique=True, index=True)
-    stamp_image_path: Mapped[str] = mapped_column(String(500))
-    allowed_roles_json: Mapped[list] = mapped_column(JSON, default=list)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
-    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
-
-    creator = relationship("User", foreign_keys=[created_by])
-
-
 class OfficialMessageDocument(Base):
     __tablename__ = "official_message_documents"
 
@@ -133,7 +117,6 @@ class OfficialMessageDocument(Base):
     related_request_id: Mapped[int | None] = mapped_column(ForeignKey("service_requests.id"), index=True)
     letterhead_template_id: Mapped[int] = mapped_column(ForeignKey("official_letterhead_templates.id"), index=True)
     signature_id: Mapped[int | None] = mapped_column(ForeignKey("user_signatures.id"), index=True)
-    stamp_id: Mapped[int | None] = mapped_column(ForeignKey("official_stamps.id"), index=True)
     reference_number: Mapped[str | None] = mapped_column(String(80), index=True)
     pdf_file_path: Mapped[str] = mapped_column(String(500))
     file_size: Mapped[int] = mapped_column(Integer, default=0)
@@ -145,7 +128,6 @@ class OfficialMessageDocument(Base):
     related_request = relationship("ServiceRequest", foreign_keys=[related_request_id])
     template = relationship("OfficialLetterheadTemplate", foreign_keys=[letterhead_template_id])
     signature = relationship("UserSignature", foreign_keys=[signature_id])
-    stamp = relationship("OfficialStamp", foreign_keys=[stamp_id])
     generator = relationship("User", foreign_keys=[generated_by])
 
 

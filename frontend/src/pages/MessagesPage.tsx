@@ -1,3 +1,4 @@
+import type { ClipboardEvent as ReactClipboardEvent, PointerEvent as ReactPointerEvent } from "react";
 import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import {
@@ -46,9 +47,11 @@ import {
   UserPlus,
   X
 } from "lucide-react";
-import { API_BASE, apiFetch } from "../lib/api";
+import { API_BASE, IS_DOTNET_API, apiFetch } from "../lib/api";
 import { formatSystemDateTime } from "../lib/datetime";
 import { Button } from "../components/ui/button";
+import { Pagination } from "../components/ui/Pagination";
+import { useAutoPagination } from "../components/ui/useAutoPagination";
 import AIAssistantBox from "../components/ai/AIAssistantBox";
 import AISuggestionPanel from "../components/ai/AISuggestionPanel";
 import AISummaryBox from "../components/ai/AISummaryBox";
@@ -117,9 +120,11 @@ type MessageTemplate = {
 };
 
 type MessageTypeOption = {
+  id?: number;
   value: string;
   label: string;
   is_system?: boolean;
+  is_active?: boolean;
   color?: string | null;
   icon?: string | null;
   is_official?: boolean;
@@ -130,6 +135,7 @@ type MessageTypeOption = {
 };
 
 type MessageClassificationOption = {
+  id?: number;
   code: string;
   name_ar: string;
   name_en?: string | null;
@@ -207,16 +213,11 @@ type OfficialSignature = {
   is_active: boolean;
 };
 
-type OfficialStamp = {
-  id: number;
-  name_ar: string;
-  code: string;
-  is_active: boolean;
-};
-
 type OfficialMessageSettings = {
   default_letterhead_template_id?: number | null;
   enable_official_letterhead?: boolean;
+  allow_preview_for_all_users?: boolean;
+  allow_signature_upload_by_user?: boolean;
   allow_unverified_signature: boolean;
   include_official_messages_in_request_pdf: boolean;
 };
@@ -227,8 +228,6 @@ type OfficialOptions = {
   correspondence_type: string;
   include_signature: boolean;
   signature_id: number | null;
-  include_stamp: boolean;
-  stamp_id: number | null;
   include_in_request_pdf: boolean;
   show_sender_department: boolean;
   show_recipients: boolean;
@@ -238,11 +237,18 @@ type OfficialOptions = {
 
 type AIStatus = {
   is_enabled: boolean;
+  assistant_name?: string;
+  assistant_description?: string;
+  max_input_chars?: number;
+  show_human_review_disclaimer?: boolean;
   allow_message_drafting: boolean;
   allow_summarization: boolean;
+  allow_message_summarization?: boolean;
+  allow_request_messages_summarization?: boolean;
   allow_reply_suggestion: boolean;
   allow_message_improvement?: boolean;
   allow_missing_info_detection?: boolean;
+  allow_translate_ar_en?: boolean;
   show_in_compose_message?: boolean;
   show_in_message_details?: boolean;
   show_in_request_messages_tab?: boolean;
@@ -250,7 +256,7 @@ type AIStatus = {
 
 type Mailbox = "inbox" | "sent" | "drafts" | "archived" | "unread" | "request-linked" | "official" | "clarifications" | "compose";
 const pageSize = 50;
-const defaultMessageType = "internal_correspondence";
+const defaultMessageType = IS_DOTNET_API ? "internal_message" : "internal_correspondence";
 const defaultMessageClassification = "internal";
 const mailboxPaths: Record<Mailbox, string> = {
   inbox: "/messages/inbox",
@@ -287,6 +293,8 @@ const defaultMessageSettings: MessageSettings = {
   enable_read_receipts: true,
   enable_unread_badge: true,
   enable_linked_requests: true,
+  require_request_for_clarification: true,
+  require_request_for_execution_note: true,
   enable_message_notifications: true,
   notify_on_new_message: true,
   notify_on_reply: true,
@@ -303,8 +311,8 @@ const defaultMessageSettings: MessageSettings = {
   default_message_type: defaultMessageType
 };
 const defaultMessageCapabilities: MessageCapabilities = {
-  can_send_circular: true,
-  can_send_department_broadcast: true,
+  can_send_circular: false,
+  can_send_department_broadcast: false,
   can_use_templates: true
 };
 const defaultOfficialOptions: OfficialOptions = {
@@ -313,14 +321,14 @@ const defaultOfficialOptions: OfficialOptions = {
   correspondence_type: "خطاب رسمي",
   include_signature: false,
   signature_id: null,
-  include_stamp: false,
-  stamp_id: null,
   include_in_request_pdf: true,
   show_sender_department: true,
   show_recipients: true,
   show_generated_by: true,
   show_generated_at: true
 };
+const maxOfficialSignatureImageBytes = 5 * 1024 * 1024;
+const officialSignatureImageTypes = new Set(["image/png", "image/jpeg"]);
 const defaultMessageTypeOptions = [
   { value: "internal_correspondence", label: "مراسلة داخلية" },
   { value: "official_correspondence", label: "مراسلة رسمية" },
@@ -385,9 +393,10 @@ export default function MessagesPage() {
   const [replySource, setReplySource] = useState<InternalMessage | null>(null);
   const [officialLetterheads, setOfficialLetterheads] = useState<OfficialLetterhead[]>([]);
   const [officialSignatures, setOfficialSignatures] = useState<OfficialSignature[]>([]);
-  const [officialStamps, setOfficialStamps] = useState<OfficialStamp[]>([]);
-  const [officialSettings, setOfficialSettings] = useState<OfficialMessageSettings>({ enable_official_letterhead: true, allow_unverified_signature: false, include_official_messages_in_request_pdf: true });
+  const [officialSettings, setOfficialSettings] = useState<OfficialMessageSettings>({ enable_official_letterhead: true, allow_signature_upload_by_user: true, allow_unverified_signature: false, include_official_messages_in_request_pdf: true });
   const [officialOptions, setOfficialOptions] = useState<OfficialOptions>(defaultOfficialOptions);
+  const [officialSignatureFile, setOfficialSignatureFile] = useState<File | null>(null);
+  const [officialSignatureHasDrawing, setOfficialSignatureHasDrawing] = useState(false);
   const [officialPreviewUrl, setOfficialPreviewUrl] = useState("");
   const [isOfficialPreviewLoading, setIsOfficialPreviewLoading] = useState(false);
   const [isOfficialGenerating, setIsOfficialGenerating] = useState(false);
@@ -398,8 +407,10 @@ export default function MessagesPage() {
   const [selectedAiSuggestion, setSelectedAiSuggestion] = useState<{ type: "reply"; body: string } | null>(null);
   const [selectedAiLoading, setSelectedAiLoading] = useState("");
   const [selectedAiError, setSelectedAiError] = useState("");
-  const [aiStatus, setAiStatus] = useState<AIStatus>({ is_enabled: false, allow_message_drafting: false, allow_summarization: false, allow_reply_suggestion: false });
+  const [aiStatus, setAiStatus] = useState<AIStatus>(disabledAiStatus());
   const bodyRef = useRef<HTMLDivElement | null>(null);
+  const officialSignatureCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const officialSignatureDrawingRef = useRef(false);
   const queryComposeInitialized = useRef(false);
 
   const selected = useMemo(() => messages.find((message) => message.id === selectedId) || null, [messages, selectedId]);
@@ -426,34 +437,46 @@ export default function MessagesPage() {
       .slice(0, 8);
   }, [users, form.recipient_ids, recipientSearch]);
   const usableMessageTypeOptions = useMemo(
-    () => messageTypeOptions.filter((option) => option.value !== "circular" || messageCapabilities.can_send_circular),
+    () => messageTypeOptions
+      .filter((option) => option.is_active !== false)
+      .filter((option) => option.value !== "circular" || messageCapabilities.can_send_circular),
     [messageTypeOptions, messageCapabilities.can_send_circular]
   );
   const selectedFormMessageType = useMemo(
-    () => messageTypeOptions.find((option) => option.value === form.message_type) || null,
-    [messageTypeOptions, form.message_type]
+    () => findMessageTypeOption(usableMessageTypeOptions, form.message_type),
+    [usableMessageTypeOptions, form.message_type]
   );
   const selectedMessageType = useMemo(
-    () => (selected ? messageTypeOptions.find((option) => option.value === selected.message_type) || null : null),
+    () => (selected ? findMessageTypeOption(messageTypeOptions, selected.message_type) : null),
     [messageTypeOptions, selected]
   );
   const selectedClassification = useMemo(
     () => (selected ? messageClassificationOptions.find((option) => option.code === (selected.classification_code || defaultMessageClassification)) || null : null),
     [messageClassificationOptions, selected]
   );
+  const usableClassificationOptions = useMemo(
+    () => messageClassificationOptions.filter((option) => option.is_active !== false),
+    [messageClassificationOptions]
+  );
   const selectedFormClassification = useMemo(
-    () => messageClassificationOptions.find((option) => option.code === form.classification_code) || null,
-    [messageClassificationOptions, form.classification_code]
+    () => usableClassificationOptions.find((option) => option.code === form.classification_code) || null,
+    [usableClassificationOptions, form.classification_code]
   );
   const selectedCanReply = Boolean(messageSettings.allow_replies && selectedMessageType?.allow_reply !== false);
   const requestLinkingBlocked = Boolean(form.related_request_id.trim() && !messageSettings.enable_linked_requests);
-  const requestLinkRequired = Boolean(!messageSettings.allow_general_messages || selectedFormMessageType?.requires_request);
+  const selectedTypeRequiresRequest = effectiveMessageTypeRequiresRequest(selectedFormMessageType, messageSettings);
+  const requestLinkRequired = Boolean(!messageSettings.allow_general_messages || selectedTypeRequiresRequest);
   const attachmentRequired = Boolean(selectedFormMessageType?.requires_attachment);
-  const isOfficialCompose = Boolean(selectedFormMessageType?.is_official || form.message_type === "official_correspondence");
+  const isOfficialCompose = Boolean(selectedFormMessageType?.is_official || isOfficialMessageType(form.message_type));
   const officialLetterheadEnabled = officialSettings.enable_official_letterhead !== false;
+  const officialSignatureEnabled = officialSettings.allow_signature_upload_by_user !== false;
   const canUseOfficialLetterhead = Boolean(isOfficialCompose && officialLetterheadEnabled);
-  const canUseAiDrafting = Boolean(aiStatus.is_enabled && aiStatus.allow_message_drafting && aiStatus.show_in_compose_message !== false);
-  const canUseAiSummaries = Boolean(aiStatus.is_enabled && aiStatus.allow_summarization && aiStatus.show_in_message_details !== false);
+  const canUseComposeAi = Boolean(
+    aiStatus.is_enabled &&
+      aiStatus.show_in_compose_message !== false &&
+      (aiStatus.allow_message_drafting || aiStatus.allow_message_improvement || aiStatus.allow_missing_info_detection || aiStatus.allow_translate_ar_en)
+  );
+  const canUseAiSummaries = Boolean(aiStatus.is_enabled && (aiStatus.allow_message_summarization ?? aiStatus.allow_summarization) && aiStatus.show_in_message_details !== false);
   const canUseAiReplies = Boolean(aiStatus.is_enabled && aiStatus.allow_reply_suggestion && aiStatus.show_in_message_details !== false);
   const composeBodyText = useMemo(() => messageBodyPreview(form.body), [form.body]);
   const composeBodyWords = useMemo(() => composeBodyText.split(/\s+/).filter(Boolean).length, [composeBodyText]);
@@ -509,7 +532,7 @@ export default function MessagesPage() {
           : nextMailbox === "official" || nextMailbox === "clarifications" || nextMailbox === "unread"
             ? "inbox"
             : nextMailbox;
-      const data = await apiFetch<InternalMessage[]>(`/messages/${endpoint}?${query.toString()}`);
+      const data = (await apiFetch<unknown[]>(`/messages/${endpoint}?${query.toString()}`)).map(normalizeInternalMessage);
       setHasMore(data.length === pageSize);
       if (mode === "append") {
         setMessages((current) => [...current, ...data]);
@@ -541,6 +564,10 @@ export default function MessagesPage() {
     loadAiStatus();
     loadOfficialAssets();
   }, []);
+
+  useEffect(() => {
+    if (isOfficialCompose) loadOfficialAssets();
+  }, [isOfficialCompose]);
 
   useEffect(() => {
     if (officialOptions.letterhead_template_id || officialLetterheads.length === 0) return;
@@ -634,26 +661,26 @@ export default function MessagesPage() {
   }, [form.message_type, messageCapabilities.can_send_circular, messageSettings.default_message_type]);
 
   useEffect(() => {
-    if (messageTypeOptions.length === 0) return;
-    const fallbackType = messageTypeOptions.some((option) => option.value === messageSettings.default_message_type)
+    if (usableMessageTypeOptions.length === 0) return;
+    const fallbackType = usableMessageTypeOptions.some((option) => option.value === messageSettings.default_message_type)
       ? messageSettings.default_message_type
-      : messageTypeOptions[0].value;
+      : usableMessageTypeOptions[0].value;
     setForm((current) => ({
       ...current,
-      message_type: messageTypeOptions.some((option) => option.value === current.message_type) ? current.message_type : fallbackType,
+      message_type: findMessageTypeOption(usableMessageTypeOptions, current.message_type) ? current.message_type : fallbackType,
       priority: current.priority && current.priority !== "normal" ? current.priority : messageSettings.default_priority || "normal"
     }));
-  }, [messageTypeOptions, messageSettings.default_message_type, messageSettings.default_priority]);
+  }, [usableMessageTypeOptions, messageSettings.default_message_type, messageSettings.default_priority]);
 
   useEffect(() => {
-    if (messageClassificationOptions.length === 0) return;
+    if (usableClassificationOptions.length === 0) return;
     setForm((current) => ({
       ...current,
-      classification_code: messageClassificationOptions.some((option) => option.code === current.classification_code)
+      classification_code: usableClassificationOptions.some((option) => option.code === current.classification_code)
         ? current.classification_code
-      : messageClassificationOptions.find((option) => option.code === defaultMessageClassification)?.code || messageClassificationOptions[0].code
+        : usableClassificationOptions.find((option) => option.code === defaultMessageClassification)?.code || usableClassificationOptions[0].code
     }));
-  }, [messageClassificationOptions]);
+  }, [usableClassificationOptions]);
 
   useEffect(() => {
     return () => {
@@ -663,7 +690,7 @@ export default function MessagesPage() {
 
   async function loadMessageDetails(messageId: number) {
     try {
-      const details = await apiFetch<InternalMessage>(`/messages/${messageId}`);
+      const details = normalizeInternalMessage(await apiFetch<unknown>(`/messages/${messageId}`));
       setMessages((current) => (current.some((item) => item.id === details.id) ? current.map((item) => (item.id === details.id ? details : item)) : [details, ...current]));
       setSelectedId(details.id);
     } catch {
@@ -673,18 +700,63 @@ export default function MessagesPage() {
 
   async function selectMessage(message: InternalMessage) {
     setSelectedId(message.id);
-    if (mailbox !== "inbox" || message.is_read) {
-      loadMessageDetails(message.id);
+    if (message.is_read || message.is_draft) {
+      await loadMessageDetails(message.id);
       return;
     }
+
+    let markedRead = false;
     try {
-      const updated = await apiFetch<InternalMessage>(`/messages/${message.id}/read`, { method: "POST" });
-      setMessages((current) => current.map((item) => (item.id === updated.id ? updated : item)));
+      if (IS_DOTNET_API) {
+        await apiFetch<void>(`/messages/${message.id}/mark-read`, { method: "POST" });
+        setMessages((current) => current.map((item) => (item.id === message.id ? { ...item, is_read: true } : item)));
+        markedRead = true;
+      } else {
+        const response = await apiFetch<unknown>(`/messages/${message.id}/read`, { method: "POST" });
+        const updated = response ? normalizeInternalMessage(response) : null;
+        setMessages((current) => current.map((item) => (item.id === message.id ? (updated?.id ? updated : { ...item, is_read: true }) : item)));
+        markedRead = true;
+      }
+    } catch {
+      // The details endpoint may still be readable for managers/admins who are not direct recipients.
+      // In that case the backend correctly refuses changing another user's read state.
+    } finally {
+      await loadMessageDetails(message.id);
+    }
+
+    if (markedRead) {
       await loadCounters();
       window.dispatchEvent(new Event("qib-messages-updated"));
-      await loadMessageDetails(message.id);
-    } catch {
-      undefined;
+    }
+  }
+
+  function buildDotnetCreateMessagePayload(messageForm: typeof form) {
+    const messageTypeId = selectedFormMessageType?.id;
+    if (!messageTypeId) {
+      throw new Error(JSON.stringify({ detail: "تعذر تحديد نوع الرسالة. حدّث الصفحة ثم حاول مرة أخرى." }));
+    }
+    const relatedRequestId = messageForm.related_request_id.trim() ? Number(messageForm.related_request_id.trim()) : null;
+    if (relatedRequestId !== null && !Number.isFinite(relatedRequestId)) {
+      throw new Error(JSON.stringify({ detail: "رقم الطلب المرتبط غير صالح." }));
+    }
+    return {
+      recipientIds: messageForm.recipient_ids,
+      messageTypeId,
+      classificationId: selectedFormClassification?.id ?? null,
+      relatedRequestId,
+      priority: messageForm.priority || "normal",
+      subject: messageForm.subject.trim(),
+      body: messageForm.body,
+      includeInRequestPdf: Boolean(canUseOfficialLetterhead && officialOptions.include_in_request_pdf && relatedRequestId)
+    };
+  }
+
+  async function uploadMessageAttachments(messageId: number) {
+    if (!IS_DOTNET_API || attachments.length === 0) return;
+    for (const file of attachments) {
+      const data = new FormData();
+      data.append("file", file);
+      await apiFetch(`/messages/${messageId}/attachments`, { method: "POST", body: data });
     }
   }
 
@@ -692,16 +764,35 @@ export default function MessagesPage() {
     event.preventDefault();
     setFeedback("");
     setError("");
+    const cleanBody = sanitizeMessageHtml(bodyRef.current?.innerHTML || form.body || "");
+    const bodyText = messageBodyPreview(cleanBody);
+    const cleanSubject = form.subject.trim();
+    const messageForm = { ...form, subject: cleanSubject, body: cleanBody };
+    if (form.body !== cleanBody || form.subject !== cleanSubject) {
+      setForm(messageForm);
+    }
     if (!messageSettings.enabled) {
       setError("نظام المراسلات غير مفعل من إعدادات المراسلات.");
+      return;
+    }
+    if (!replySource && !forwardSource && messageForm.recipient_ids.length === 0) {
+      setError("اختر مستلماً واحداً على الأقل قبل إرسال الرسالة.");
+      return;
+    }
+    if (!replySource && !forwardSource && !messageForm.subject) {
+      setError("اكتب عنوان الرسالة قبل الإرسال.");
+      return;
+    }
+    if (!bodyText) {
+      setError("اكتب نص الرسالة قبل الإرسال.");
       return;
     }
     if (requestLinkingBlocked) {
       setError("ربط المراسلات بالطلبات غير مفعل من إعدادات المراسلات.");
       return;
     }
-    if (requestLinkRequired && !form.related_request_id.trim()) {
-      setError(selectedFormMessageType?.requires_request ? "هذا النوع من الرسائل يتطلب ربط الرسالة بطلب." : "المراسلات العامة غير مفعلة. يجب إرسال الرسالة من داخل طلب أو ربطها بطلب.");
+    if (requestLinkRequired && !messageForm.related_request_id.trim()) {
+      setError(selectedTypeRequiresRequest ? "هذا النوع من الرسائل يتطلب ربط الرسالة بطلب." : "المراسلات العامة غير مفعلة. يجب إرسال الرسالة من داخل طلب أو ربطها بطلب.");
       return;
     }
     if (attachmentRequired && attachments.length === 0 && !editingDraftId) {
@@ -712,6 +803,16 @@ export default function MessagesPage() {
       setError("اختر قالب الترويسة قبل إرسال المراسلة الرسمية.");
       return;
     }
+    let officialSignatureId: number | null = null;
+    if (canUseOfficialLetterhead) {
+      try {
+        officialSignatureId = await ensureOfficialSignatureId();
+      } catch (error) {
+        const detail = error instanceof Error ? extractApiError(error.message) || error.message : "";
+        setError(detail || "تعذر تجهيز توقيع الخطاب الرسمي.");
+        return;
+      }
+    }
     try {
       let sentMessage: InternalMessage | null = null;
       if (replySource) {
@@ -719,18 +820,34 @@ export default function MessagesPage() {
           setError("الرد على الرسائل معطل من إعدادات المراسلات.");
           return;
         }
-        if (attachments.length > 0) {
+        if (IS_DOTNET_API) {
+          const replyMessageType = findMessageTypeOption(usableMessageTypeOptions, messageForm.message_type);
+          sentMessage = normalizeInternalMessage(await apiFetch<unknown>(`/messages/${replySource.id}/reply`, {
+            method: "POST",
+            body: JSON.stringify({
+              body: messageForm.body,
+              subject: messageForm.subject || undefined,
+              messageTypeId: replyMessageType?.id,
+              messageType: messageForm.message_type,
+              priority: messageForm.priority,
+              classificationId: selectedFormClassification?.id ?? null,
+              classificationCode: messageForm.classification_code,
+              includeInRequestPdf: Boolean(canUseOfficialLetterhead && officialOptions.include_in_request_pdf && messageForm.related_request_id.trim())
+            })
+          }));
+          await uploadMessageAttachments(sentMessage.id);
+        } else if (attachments.length > 0) {
           const data = new FormData();
-          data.append("message_type", form.message_type);
-          data.append("priority", form.priority);
-          data.append("classification_code", form.classification_code);
-          data.append("body", form.body);
+          data.append("message_type", messageForm.message_type);
+          data.append("priority", messageForm.priority);
+          data.append("classification_code", messageForm.classification_code);
+          data.append("body", messageForm.body);
           attachments.forEach((file) => data.append("attachments", file));
           sentMessage = await apiFetch<InternalMessage>(`/messages/${replySource.id}/reply-with-attachments`, { method: "POST", body: data });
         } else {
           sentMessage = await apiFetch<InternalMessage>(`/messages/${replySource.id}/reply`, {
             method: "POST",
-            body: JSON.stringify({ body: form.body, message_type: form.message_type, priority: form.priority, classification_code: form.classification_code })
+            body: JSON.stringify({ body: messageForm.body, message_type: messageForm.message_type, priority: messageForm.priority, classification_code: messageForm.classification_code })
           });
         }
       } else if (forwardSource) {
@@ -740,37 +857,44 @@ export default function MessagesPage() {
         }
         sentMessage = await apiFetch<InternalMessage>(`/messages/${forwardSource.id}/forward`, {
           method: "POST",
-          body: JSON.stringify({ recipient_ids: form.recipient_ids, message_type: form.message_type, priority: form.priority, classification_code: form.classification_code, note: form.body.trim() || undefined })
+          body: JSON.stringify({ recipient_ids: messageForm.recipient_ids, message_type: messageForm.message_type, priority: messageForm.priority, classification_code: messageForm.classification_code, note: messageBodyPreview(messageForm.body) || undefined })
         });
       } else if (editingDraftId) {
         sentMessage = await apiFetch<InternalMessage>(`/messages/drafts/${editingDraftId}/send`, {
           method: "POST",
-          body: JSON.stringify(form)
+          body: JSON.stringify(messageForm)
         });
+      } else if (IS_DOTNET_API) {
+        sentMessage = normalizeInternalMessage(await apiFetch<unknown>("/messages", {
+          method: "POST",
+          body: JSON.stringify(buildDotnetCreateMessagePayload(messageForm))
+        }));
+        await uploadMessageAttachments(sentMessage.id);
       } else if (attachments.length > 0) {
-        const relatedRequestId = form.related_request_id.trim() || undefined;
+        const relatedRequestId = messageForm.related_request_id.trim() || undefined;
         const data = new FormData();
-        data.append("recipient_ids", form.recipient_ids.join(","));
-        data.append("message_type", form.message_type);
-        data.append("priority", form.priority);
-        data.append("classification_code", form.classification_code);
-        data.append("subject", form.subject);
-        data.append("body", form.body);
+        data.append("recipient_ids", messageForm.recipient_ids.join(","));
+        data.append("message_type", messageForm.message_type);
+        data.append("priority", messageForm.priority);
+        data.append("classification_code", messageForm.classification_code);
+        data.append("subject", messageForm.subject);
+        data.append("body", messageForm.body);
         if (relatedRequestId) data.append("related_request_id", relatedRequestId);
         attachments.forEach((file) => data.append("attachments", file));
         sentMessage = await apiFetch<InternalMessage>("/messages/with-attachments", { method: "POST", body: data });
       } else {
-        const relatedRequestId = form.related_request_id.trim() || undefined;
+        const relatedRequestId = messageForm.related_request_id.trim() || undefined;
         sentMessage = await apiFetch<InternalMessage>("/messages", {
           method: "POST",
-          body: JSON.stringify({ ...form, related_request_id: relatedRequestId })
+          body: JSON.stringify({ ...messageForm, related_request_id: relatedRequestId })
         });
       }
       if (sentMessage && canUseOfficialLetterhead) {
-        await generateOfficialPdf(sentMessage);
+        await generateOfficialPdf(sentMessage, officialSignatureId, messageHtmlToPlainText(messageForm.body));
       }
       setForm({ recipient_ids: [], message_type: messageSettings.default_message_type || defaultMessageType, priority: messageSettings.default_priority || "normal", classification_code: defaultMessageClassification, subject: "", body: "", related_request_id: "" });
       setOfficialOptions((current) => ({ ...defaultOfficialOptions, letterhead_template_id: current.letterhead_template_id || null, include_in_request_pdf: officialSettings.include_official_messages_in_request_pdf }));
+      clearOfficialSignature();
       setSelectedDepartmentIds([]);
       setDepartmentRecipientIds([]);
       setAttachments([]);
@@ -848,6 +972,7 @@ export default function MessagesPage() {
     setForwardSource(null);
     setReplySource(null);
     setDepartmentBroadcastOpen(false);
+    clearOfficialSignature();
     if (bodyRef.current) bodyRef.current.innerHTML = "";
   }
 
@@ -872,9 +997,11 @@ export default function MessagesPage() {
     if (!selected) return;
     try {
       const endpoint = isRead ? "mark-read" : "mark-unread";
-      const updated = await apiFetch<InternalMessage>(`/messages/${selected.id}/${endpoint}`, { method: "POST" });
-      setMessages((current) => current.map((message) => (message.id === updated.id ? updated : message)));
-      setSelectedId(updated.id);
+      const selectedId = selected.id;
+      const response = await apiFetch<unknown>(`/messages/${selectedId}/${endpoint}`, { method: "POST" });
+      const updated = response ? normalizeInternalMessage(response) : null;
+      setMessages((current) => current.map((message) => (message.id === selectedId ? (updated?.id ? updated : { ...message, is_read: isRead }) : message)));
+      setSelectedId(updated?.id || selectedId);
       await loadCounters();
       window.dispatchEvent(new Event("qib-messages-updated"));
       setFeedback(isRead ? "تم تعليم الرسالة كمقروءة." : "تم تعليم الرسالة كغير مقروءة.");
@@ -1041,8 +1168,9 @@ export default function MessagesPage() {
 
   async function loadTypes() {
     try {
-      const types = await apiFetch<MessageTypeOption[]>("/messages/types");
-      setMessageTypeOptions(types.length ? types : defaultMessageTypeOptions);
+      const types = await apiFetch<unknown[]>("/messages/types");
+      const normalized = types.map(normalizeMessageTypeOption).filter(Boolean) as MessageTypeOption[];
+      setMessageTypeOptions(normalized.length ? normalized : defaultMessageTypeOptions);
     } catch {
       setMessageTypeOptions(defaultMessageTypeOptions);
     }
@@ -1050,8 +1178,9 @@ export default function MessagesPage() {
 
   async function loadClassifications() {
     try {
-      const classifications = await apiFetch<MessageClassificationOption[]>("/messages/classifications");
-      setMessageClassificationOptions(classifications.length ? classifications : defaultMessageClassificationOptions);
+      const classifications = await apiFetch<unknown[]>("/messages/classifications");
+      const normalized = classifications.map(normalizeMessageClassificationOption).filter(Boolean) as MessageClassificationOption[];
+      setMessageClassificationOptions(normalized.length ? normalized : defaultMessageClassificationOptions);
     } catch {
       setMessageClassificationOptions(defaultMessageClassificationOptions);
     }
@@ -1061,28 +1190,181 @@ export default function MessagesPage() {
     try {
       setAiStatus(await apiFetch<AIStatus>("/ai/status"));
     } catch {
-      setAiStatus({ is_enabled: false, allow_message_drafting: false, allow_summarization: false, allow_reply_suggestion: false });
+      setAiStatus(disabledAiStatus());
     }
   }
 
   async function loadOfficialAssets() {
-    const [letterheads, signatures, stamps, settingsData] = await Promise.allSettled([
+    const [letterheads, signatures, settingsData] = await Promise.allSettled([
       apiFetch<OfficialLetterhead[]>("/settings/official-letterheads"),
       apiFetch<OfficialSignature[]>("/signatures/me"),
-      apiFetch<OfficialStamp[]>("/settings/official-stamps"),
-      apiFetch<OfficialMessageSettings>("/settings/official-messages")
+      apiFetch<unknown>("/settings/official-messages")
     ]);
+    const resolvedSettings = normalizeOfficialMessageSettings(settingsData.status === "fulfilled" ? settingsData.value : null, officialSettings);
     if (letterheads.status === "fulfilled") setOfficialLetterheads(letterheads.value.filter((item) => item.is_active !== false));
-    if (signatures.status === "fulfilled") setOfficialSignatures(signatures.value.filter((item) => item.is_active !== false));
-    if (stamps.status === "fulfilled") setOfficialStamps(stamps.value.filter((item) => item.is_active !== false));
+    if (signatures.status === "fulfilled") {
+      const usableSignatures = signatures.value.filter((item) => item.is_active !== false && (item.is_verified || resolvedSettings.allow_unverified_signature));
+      setOfficialSignatures(usableSignatures);
+      if (!usableSignatures.some((item) => item.id === officialOptions.signature_id)) {
+        setOfficialOptions((current) => ({
+          ...current,
+          include_signature: resolvedSettings.allow_signature_upload_by_user !== false ? current.include_signature : false,
+          signature_id: null
+        }));
+      }
+    }
     if (settingsData.status === "fulfilled") {
-      setOfficialSettings(settingsData.value);
+      setOfficialSettings(resolvedSettings);
       setOfficialOptions((current) => ({
         ...current,
-        letterhead_template_id: current.letterhead_template_id || settingsData.value.default_letterhead_template_id || null,
-        include_in_request_pdf: Boolean(settingsData.value.include_official_messages_in_request_pdf)
+        letterhead_template_id: current.letterhead_template_id || resolvedSettings.default_letterhead_template_id || null,
+        include_signature: resolvedSettings.allow_signature_upload_by_user === false ? false : current.include_signature,
+        include_in_request_pdf: Boolean(resolvedSettings.include_official_messages_in_request_pdf)
       }));
     }
+  }
+
+  function officialSignatureCanvasPoint(event: ReactPointerEvent<HTMLCanvasElement>) {
+    const canvas = event.currentTarget;
+    const rect = canvas.getBoundingClientRect();
+    return {
+      x: ((event.clientX - rect.left) * canvas.width) / rect.width,
+      y: ((event.clientY - rect.top) * canvas.height) / rect.height
+    };
+  }
+
+  function getOfficialSignatureCanvasContext() {
+    const canvas = officialSignatureCanvasRef.current;
+    if (!canvas) return null;
+    const context = canvas.getContext("2d");
+    if (!context) return null;
+    context.lineCap = "round";
+    context.lineJoin = "round";
+    context.lineWidth = 5;
+    context.strokeStyle = "#111827";
+    context.fillStyle = "#111827";
+    return context;
+  }
+
+  function startOfficialSignatureDrawing(event: ReactPointerEvent<HTMLCanvasElement>) {
+    const context = getOfficialSignatureCanvasContext();
+    if (!context) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    const point = officialSignatureCanvasPoint(event);
+    officialSignatureDrawingRef.current = true;
+    context.beginPath();
+    context.arc(point.x, point.y, context.lineWidth / 2, 0, Math.PI * 2);
+    context.fill();
+    context.beginPath();
+    context.moveTo(point.x, point.y);
+    setOfficialSignatureHasDrawing(true);
+    setOfficialSignatureFile(null);
+    setOfficialOptions((current) => ({ ...current, signature_id: null }));
+    if (officialPreviewUrl) {
+      URL.revokeObjectURL(officialPreviewUrl);
+      setOfficialPreviewUrl("");
+    }
+  }
+
+  function drawOfficialSignature(event: ReactPointerEvent<HTMLCanvasElement>) {
+    if (!officialSignatureDrawingRef.current) return;
+    const context = getOfficialSignatureCanvasContext();
+    if (!context) return;
+    const point = officialSignatureCanvasPoint(event);
+    context.lineTo(point.x, point.y);
+    context.stroke();
+    setOfficialSignatureHasDrawing(true);
+  }
+
+  function stopOfficialSignatureDrawing(event?: ReactPointerEvent<HTMLCanvasElement>) {
+    officialSignatureDrawingRef.current = false;
+    if (event?.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  }
+
+  function clearOfficialSignature() {
+    const canvas = officialSignatureCanvasRef.current;
+    const context = canvas?.getContext("2d");
+    if (canvas && context) {
+      context.clearRect(0, 0, canvas.width, canvas.height);
+    }
+    setOfficialSignatureFile(null);
+    setOfficialSignatureHasDrawing(false);
+    setOfficialOptions((current) => ({ ...current, signature_id: null }));
+  }
+
+  async function officialSignatureFileFromCanvas() {
+    const canvas = officialSignatureCanvasRef.current;
+    if (!canvas) return null;
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
+    return blob ? new File([blob], "official-message-signature.png", { type: "image/png" }) : null;
+  }
+
+  async function prepareOfficialSignatureFile(input: File): Promise<File> {
+    if (!officialSignatureImageTypes.has(input.type) && !/\.(png|jpe?g)$/i.test(input.name)) {
+      throw new Error("يسمح بإدراج التوقيع بصيغة PNG أو JPG فقط.");
+    }
+    if (input.size <= maxOfficialSignatureImageBytes) return input;
+    const resized = await resizeOfficialSignatureImage(input);
+    if (resized.size > maxOfficialSignatureImageBytes) {
+      throw new Error("حجم صورة التوقيع كبير جداً. استخدم صورة أصغر من 5MB.");
+    }
+    return resized;
+  }
+
+  async function resizeOfficialSignatureImage(input: File): Promise<File> {
+    const imageUrl = URL.createObjectURL(input);
+    try {
+      const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+        const element = new Image();
+        element.onload = () => resolve(element);
+        element.onerror = () => reject(new Error("تعذر قراءة صورة التوقيع."));
+        element.src = imageUrl;
+      });
+      const maxWidth = 1200;
+      const maxHeight = 420;
+      const scale = Math.min(1, maxWidth / image.width, maxHeight / image.height);
+      const width = Math.max(1, Math.round(image.width * scale));
+      const height = Math.max(1, Math.round(image.height * scale));
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const context = canvas.getContext("2d");
+      if (!context) throw new Error("تعذر تجهيز صورة التوقيع.");
+      context.fillStyle = "#ffffff";
+      context.fillRect(0, 0, width, height);
+      context.drawImage(image, 0, 0, width, height);
+      const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.82));
+      if (!blob) throw new Error("تعذر ضغط صورة التوقيع.");
+      return new File([blob], "official-message-signature.jpg", { type: "image/jpeg" });
+    } finally {
+      URL.revokeObjectURL(imageUrl);
+    }
+  }
+
+  async function ensureOfficialSignatureId() {
+    if (!officialOptions.include_signature) return null;
+    if (!officialSignatureEnabled) {
+      throw new Error("التوقيع معطل من إعدادات المراسلات الرسمية.");
+    }
+    if (officialOptions.signature_id) return officialOptions.signature_id;
+    const rawSignature = officialSignatureFile || (officialSignatureHasDrawing ? await officialSignatureFileFromCanvas() : null);
+    if (!rawSignature) {
+      throw new Error("ارسم التوقيع أو ارفع صورة توقيع لهذه المراسلة.");
+    }
+    const signatureFile = await prepareOfficialSignatureFile(rawSignature);
+    const data = new FormData();
+    const label = form.subject.trim() ? `توقيع خطاب: ${form.subject.trim()}` : "توقيع مراسلة رسمية";
+    data.append("signature_label", label);
+    data.append("file", signatureFile);
+    const saved = normalizeOfficialSignature(await apiFetch<unknown>("/signatures/me", { method: "POST", body: data }));
+    if (!saved?.id) {
+      throw new Error("تعذر حفظ توقيع هذه المراسلة.");
+    }
+    setOfficialSignatures((current) => [saved, ...current.filter((item) => item.id !== saved.id)]);
+    setOfficialOptions((current) => ({ ...current, signature_id: saved.id }));
+    return saved.id;
   }
 
   function officialPayload(overrides: Partial<OfficialOptions> = {}) {
@@ -1091,10 +1373,8 @@ export default function MessagesPage() {
       letterhead_template_id: value.letterhead_template_id,
       official_reference_number: value.official_reference_number.trim() || undefined,
       correspondence_type: value.correspondence_type.trim() || undefined,
-      include_signature: value.include_signature,
-      signature_id: value.include_signature ? value.signature_id : undefined,
-      include_stamp: value.include_stamp,
-      stamp_id: value.include_stamp ? value.stamp_id : undefined,
+      include_signature: Boolean(value.include_signature && officialSignatureEnabled),
+      signature_id: value.include_signature && officialSignatureEnabled ? value.signature_id : undefined,
       include_in_request_pdf: Boolean(value.include_in_request_pdf && form.related_request_id.trim()),
       show_sender_department: value.show_sender_department,
       show_recipients: value.show_recipients,
@@ -1103,16 +1383,29 @@ export default function MessagesPage() {
     };
   }
 
+  function currentOfficialBodyText() {
+    return messageHtmlToPlainText(bodyRef.current?.innerHTML || form.body || "");
+  }
+
   async function previewOfficialPdf() {
     setError("");
     setFeedback("");
     if (!canUseOfficialLetterhead) return;
-    if (!form.subject.trim() || !form.body.trim()) {
+    const officialBody = currentOfficialBodyText();
+    if (!form.subject.trim() || !officialBody) {
       setError("اكتب الموضوع ونص الخطاب قبل معاينة PDF.");
       return;
     }
     if (!officialOptions.letterhead_template_id) {
       setError("اختر قالب الترويسة قبل معاينة الخطاب الرسمي.");
+      return;
+    }
+    let signatureId: number | null = null;
+    try {
+      signatureId = await ensureOfficialSignatureId();
+    } catch (error) {
+      const detail = error instanceof Error ? extractApiError(error.message) || error.message : "";
+      setError(detail || "تعذر تجهيز توقيع الخطاب الرسمي.");
       return;
     }
     setIsOfficialPreviewLoading(true);
@@ -1125,11 +1418,11 @@ export default function MessagesPage() {
           ...(token ? { Authorization: `Bearer ${token}` } : {})
         },
         body: JSON.stringify({
-          ...officialPayload(),
+          ...officialPayload({ signature_id: signatureId }),
           recipient_ids: form.recipient_ids,
           related_request_id: form.related_request_id.trim() || undefined,
           subject: form.subject,
-          body: form.body
+          body: officialBody
         })
       });
       if (!response.ok) throw new Error(await response.text());
@@ -1144,13 +1437,16 @@ export default function MessagesPage() {
     }
   }
 
-  async function generateOfficialPdf(message: InternalMessage) {
+  async function generateOfficialPdf(message: InternalMessage, signatureId?: number | null, bodyText?: string) {
     if (!canUseOfficialLetterhead) return;
     setIsOfficialGenerating(true);
     try {
       await apiFetch(`/messages/${message.id}/official/generate-pdf`, {
         method: "POST",
-        body: JSON.stringify(officialPayload())
+        body: JSON.stringify({
+          ...officialPayload({ signature_id: signatureId ?? officialOptions.signature_id }),
+          body: bodyText || messageHtmlToPlainText(message.body)
+        })
       });
     } finally {
       setIsOfficialGenerating(false);
@@ -1189,7 +1485,7 @@ export default function MessagesPage() {
     const replaceTokens = (value: string) => value.replace(/\{request_number\}/g, requestNumber);
     setForm((current) => ({
       ...current,
-      message_type: template.message_type || current.message_type,
+      message_type: findMessageTypeOption(usableMessageTypeOptions, template.message_type) ? template.message_type : current.message_type,
       subject: replaceTokens(template.subject || current.subject),
       body: replaceTokens(template.body || current.body)
     }));
@@ -1353,6 +1649,10 @@ export default function MessagesPage() {
   }
 
   function applyDepartmentRecipients(nextDepartmentIds: number[]) {
+    if (!messageCapabilities.can_send_circular || !messageCapabilities.can_send_department_broadcast) {
+      setError("لا تملك صلاحية إرسال التعاميم حسب الإدارات.");
+      return;
+    }
     const departmentUsers = users.filter((user) => user.department_id && nextDepartmentIds.includes(user.department_id));
     const ids =
       messageSettings.department_recipient_behavior === "department_manager_only"
@@ -1407,7 +1707,7 @@ export default function MessagesPage() {
   function addAttachments(files: FileList | null) {
     if (!files) return;
     const incoming = Array.from(files);
-    const allowed = new Set((messageSettings.allowed_extensions || []).map((item) => item.toLowerCase().replace(/^\./, "")));
+    const allowed = new Set(normalizeAttachmentExtensions(messageSettings.allowed_extensions || []));
     const blocked = new Set(["exe", "bat", "cmd", "ps1", "sh", "js", "vbs", "msi"]);
     const maxBytes = Number(messageSettings.max_attachment_mb || 25) * 1024 * 1024;
     const validFiles: File[] = [];
@@ -1468,7 +1768,7 @@ export default function MessagesPage() {
     try {
       const data = await apiFetch<{ body: string }>("/ai/messages/suggest-reply", {
         method: "POST",
-        body: JSON.stringify({ message_id: message.id })
+        body: JSON.stringify({ message_id: message.id, body: messageBodyPreview(message.body), related_request_id: message.related_request_id || undefined })
       });
       setSelectedAiSuggestion({ type: "reply", body: data.body || "" });
     } catch (error) {
@@ -1486,6 +1786,48 @@ export default function MessagesPage() {
   function syncEditorBody() {
     const html = bodyRef.current?.innerHTML || "";
     setForm((current) => ({ ...current, body: html }));
+  }
+
+  function insertPlainTextAtCursor(text: string) {
+    if (!bodyRef.current) return;
+    bodyRef.current.focus();
+
+    const normalizedText = normalizePastedEditorText(text);
+    const selection = window.getSelection();
+    const range =
+      selection && selection.rangeCount > 0 && selection.anchorNode && bodyRef.current.contains(selection.anchorNode)
+        ? selection.getRangeAt(0)
+        : document.createRange();
+
+    if (!selection || !selection.rangeCount || !selection.anchorNode || !bodyRef.current.contains(selection.anchorNode)) {
+      range.selectNodeContents(bodyRef.current);
+      range.collapse(false);
+    }
+
+    range.deleteContents();
+
+    const fragment = document.createDocumentFragment();
+    normalizedText.split("\n").forEach((line, index) => {
+      if (index > 0) fragment.appendChild(document.createElement("br"));
+      if (line) fragment.appendChild(document.createTextNode(line));
+    });
+
+    const lastNode = fragment.lastChild;
+    range.insertNode(fragment);
+    if (lastNode) {
+      range.setStartAfter(lastNode);
+      range.collapse(true);
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+    }
+    syncEditorBody();
+  }
+
+  function handleEditorPaste(event: ReactClipboardEvent<HTMLDivElement>) {
+    event.preventDefault();
+    const plainText = clipboardPlainText(event);
+    if (!plainText) return;
+    insertPlainTextAtCursor(plainText);
   }
 
   function editorCommand(command: string, value?: string) {
@@ -1941,7 +2283,7 @@ export default function MessagesPage() {
                           onChange={(event) => setForm({ ...form, classification_code: event.target.value })}
                           className="h-12 w-full rounded-md border border-slate-200 bg-white px-3 text-sm font-semibold outline-none focus:border-bank-600 focus:ring-2 focus:ring-bank-100"
                         >
-                          {messageClassificationOptions.map((option) => (
+                          {usableClassificationOptions.map((option) => (
                             <option key={option.code} value={option.code}>
                               {option.name_ar}
                             </option>
@@ -1971,13 +2313,13 @@ export default function MessagesPage() {
                         ) : (
                           <div className="space-y-1">
                             {form.related_request_id.trim() && <p>الطلب المرتبط: {form.related_request_id}</p>}
-                            {requestLinkRequired && <p>{selectedFormMessageType?.requires_request ? "هذا التصنيف يتطلب طلباً مرتبطاً." : "المراسلات العامة غير مفعلة، لذلك يجب إرسال الرسالة من داخل طلب."}</p>}
+                            {requestLinkRequired && <p>{selectedTypeRequiresRequest ? "هذا التصنيف يتطلب طلباً مرتبطاً." : "المراسلات العامة غير مفعلة، لذلك يجب إرسال الرسالة من داخل طلب."}</p>}
                             {attachmentRequired && <p>هذا التصنيف يتطلب مرفقاً قبل الإرسال.</p>}
                           </div>
                         )}
                       </div>
                     )}
-                    {canUseOfficialLetterhead && !replySource && !forwardSource && (
+                    {canUseOfficialLetterhead && !forwardSource && (
                       <div className="rounded-md border border-bank-200 bg-bank-50/70 p-4">
                         <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
                           <div>
@@ -2050,54 +2392,60 @@ export default function MessagesPage() {
                         </div>
                         <div className="mt-3 grid gap-3 lg:grid-cols-2">
                           <div className="rounded-md border border-bank-100 bg-white p-3">
-                            <label className="flex items-center justify-between gap-3 text-sm font-bold text-slate-700">
-                              <span>تضمين التوقيع</span>
+                            <label className={`flex items-center justify-between gap-3 text-sm font-bold ${officialSignatureEnabled ? "text-slate-700" : "text-slate-400"}`}>
+                              <span>إضافة توقيع لهذه المراسلة</span>
                               <input
                                 type="checkbox"
                                 checked={officialOptions.include_signature}
-                                disabled={officialSignatures.length === 0}
-                                onChange={(event) => setOfficialOptions((current) => ({ ...current, include_signature: event.target.checked, signature_id: event.target.checked ? current.signature_id || officialSignatures[0]?.id || null : null }))}
+                                disabled={!officialSignatureEnabled}
+                                onChange={(event) => {
+                                  const checked = event.target.checked;
+                                  setOfficialOptions((current) => ({ ...current, include_signature: checked, signature_id: checked ? current.signature_id : null }));
+                                  if (!checked) clearOfficialSignature();
+                                }}
                               />
                             </label>
+                            {!officialSignatureEnabled && (
+                              <p className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-bold leading-6 text-amber-800">
+                                خيار التوقيع غير مفعل من إعدادات المراسلات.
+                              </p>
+                            )}
                             {officialOptions.include_signature && (
-                              <select
-                                value={officialOptions.signature_id || ""}
-                                onChange={(event) => setOfficialOptions((current) => ({ ...current, signature_id: event.target.value ? Number(event.target.value) : null }))}
-                                className="mt-3 h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm font-semibold outline-none focus:border-bank-600 focus:ring-2 focus:ring-bank-100"
-                              >
-                                <option value="">اختر التوقيع</option>
-                                {officialSignatures.map((signature) => (
-                                  <option key={signature.id} value={signature.id}>
-                                    {signature.signature_label || `توقيع رقم ${signature.id}`}{signature.is_verified ? " - موثق" : " - غير موثق"}
-                                  </option>
-                                ))}
-                              </select>
+                              <div className="mt-3 space-y-3">
+                                <div className="rounded-md border border-slate-200 bg-slate-50 p-2">
+                                  <canvas
+                                    ref={officialSignatureCanvasRef}
+                                    width={900}
+                                    height={260}
+                                    onPointerDown={startOfficialSignatureDrawing}
+                                    onPointerMove={drawOfficialSignature}
+                                    onPointerUp={stopOfficialSignatureDrawing}
+                                    onPointerCancel={stopOfficialSignatureDrawing}
+                                    onPointerLeave={stopOfficialSignatureDrawing}
+                                    className="h-32 w-full touch-none rounded bg-white"
+                                  />
+                                </div>
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <label className="inline-flex h-9 cursor-pointer items-center justify-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-xs font-bold text-slate-700 hover:bg-slate-50">
+                                    رفع صورة توقيع
+                                    <input
+                                      type="file"
+                                      accept="image/png,image/jpeg"
+                                      className="hidden"
+                                      onChange={(event) => {
+                                        setOfficialSignatureFile(event.target.files?.[0] || null);
+                                        setOfficialOptions((current) => ({ ...current, signature_id: null }));
+                                      }}
+                                    />
+                                  </label>
+                                  <button type="button" onClick={clearOfficialSignature} className="h-9 rounded-md border border-slate-200 bg-white px-3 text-xs font-bold text-slate-600 hover:bg-slate-50">
+                                    مسح التوقيع
+                                  </button>
+                                  {officialSignatureFile && <span className="text-xs font-semibold text-slate-500">{officialSignatureFile.name}</span>}
+                                </div>
+                                <p className="text-xs leading-5 text-slate-500">يتم حفظ هذا التوقيع مع الخطاب الرسمي عند المعاينة أو الإرسال، ولن يظهر هذا الجزء إذا أوقفت التوقيع من إعدادات المراسلات.</p>
+                              </div>
                             )}
-                            {officialSignatures.length === 0 && <p className="mt-2 text-xs text-slate-500">لا يوجد توقيع صورة مرفوع لهذا المستخدم.</p>}
-                          </div>
-                          <div className="rounded-md border border-bank-100 bg-white p-3">
-                            <label className="flex items-center justify-between gap-3 text-sm font-bold text-slate-700">
-                              <span>تضمين الختم</span>
-                              <input
-                                type="checkbox"
-                                checked={officialOptions.include_stamp}
-                                disabled={officialStamps.length === 0}
-                                onChange={(event) => setOfficialOptions((current) => ({ ...current, include_stamp: event.target.checked, stamp_id: event.target.checked ? current.stamp_id || officialStamps[0]?.id || null : null }))}
-                              />
-                            </label>
-                            {officialOptions.include_stamp && (
-                              <select
-                                value={officialOptions.stamp_id || ""}
-                                onChange={(event) => setOfficialOptions((current) => ({ ...current, stamp_id: event.target.value ? Number(event.target.value) : null }))}
-                                className="mt-3 h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm font-semibold outline-none focus:border-bank-600 focus:ring-2 focus:ring-bank-100"
-                              >
-                                <option value="">اختر الختم</option>
-                                {officialStamps.map((stamp) => (
-                                  <option key={stamp.id} value={stamp.id}>{stamp.name_ar}</option>
-                                ))}
-                              </select>
-                            )}
-                            {officialStamps.length === 0 && <p className="mt-2 text-xs text-slate-500">لا توجد أختام رسمية مفعلة.</p>}
                           </div>
                         </div>
                         {officialPreviewUrl && (
@@ -2158,7 +2506,7 @@ export default function MessagesPage() {
                           </div>
                         )}
                       </div>}
-                      {messageSettings.allow_send_to_department && messageSettings.allow_multiple_recipients && messageSettings.enable_circulars && messageSettings.enable_department_broadcasts && messageCapabilities.can_send_department_broadcast && (
+                      {messageSettings.allow_send_to_department && messageSettings.allow_multiple_recipients && messageSettings.enable_circulars && messageSettings.enable_department_broadcasts && messageCapabilities.can_send_circular && messageCapabilities.can_send_department_broadcast && (
                         <div className="rounded-md border border-bank-100 bg-bank-50/60 p-3">
                           <div className="flex flex-wrap items-center justify-between gap-2">
                             <button
@@ -2211,12 +2559,12 @@ export default function MessagesPage() {
                 </div>
               </div>
 
-              {canUseAiDrafting && (
+              {canUseComposeAi && (
                 <div className="message-compose-ai-strip border-t border-slate-100 bg-slate-50/70 px-5 py-3">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div>
-                      <p className="text-sm font-black text-slate-800">المساعد الذكي</p>
-                      <p className="mt-1 text-xs text-slate-500">اختياري، افتحه فقط عند الحاجة لصياغة أو تحسين الرسالة.</p>
+                      <p className="text-sm font-black text-slate-800">{aiStatus.assistant_name || "المساعد الذكي"}</p>
+                      <p className="mt-1 text-xs text-slate-500">{aiStatus.assistant_description || "اختياري، افتحه فقط عند الحاجة لصياغة أو تحسين الرسالة."}</p>
                     </div>
                     <button
                       type="button"
@@ -2236,6 +2584,7 @@ export default function MessagesPage() {
                         requestType={form.message_type}
                         onUseDraft={applyAiDraft}
                         onUseBody={applyAiBody}
+                        status={aiStatus as never}
                       />
                     </div>
                   )}
@@ -2260,7 +2609,7 @@ export default function MessagesPage() {
                           <input
                             type="file"
                             multiple={messageSettings.max_attachments_per_message > 1}
-                            accept={(messageSettings.allowed_extensions || []).map((extension) => `.${extension}`).join(",")}
+                            accept={normalizeAttachmentExtensions(messageSettings.allowed_extensions || []).map((extension) => `.${extension}`).join(",")}
                             onChange={(event) => {
                               addAttachments(event.target.files);
                               event.currentTarget.value = "";
@@ -2360,6 +2709,7 @@ export default function MessagesPage() {
                     lang="ar"
                     data-placeholder="اكتب رسالتك هنا..."
                     onInput={syncEditorBody}
+                    onPaste={handleEditorPaste}
                     onBlur={syncEditorBody}
                     className="message-rich-editor message-editor-page mx-auto min-h-[360px] w-full max-w-5xl overflow-y-auto rounded-lg border border-slate-200 bg-white px-6 py-6 text-base leading-8 text-slate-800 outline-none transition focus:border-bank-300 focus:ring-4 focus:ring-bank-100/70"
                   />
@@ -2562,6 +2912,7 @@ export default function MessagesPage() {
                     onUse={() => useAiReply(selected, selectedAiSuggestion.body)}
                     onRetry={() => suggestAiReply(selected)}
                     onCancel={() => setSelectedAiSuggestion(null)}
+                    showDisclaimer={aiStatus.show_human_review_disclaimer !== false}
                   />
                 )}
                 {canUseAiSummaries && <AISummaryBox messageId={selected.id} buttonLabel="تلخيص الرسالة" compact />}
@@ -2613,33 +2964,13 @@ export default function MessagesPage() {
                 {messageSettings.enable_read_receipts && (selected.read_receipts || []).length > 0 && (
                   <div className="rounded-md border border-slate-200 bg-white p-4">
                     <h4 className="mb-3 text-sm font-bold text-slate-700">سجل القراءة</h4>
-                    <div className="grid gap-2 md:grid-cols-2">
-                      {(selected.read_receipts || []).map((receipt) => (
-                        <div key={receipt.recipient_id} className="flex items-center justify-between gap-3 rounded-md bg-slate-50 px-3 py-2 text-sm">
-                          <span className="font-semibold text-slate-800">{receipt.recipient_name}</span>
-                          <span className={`rounded-full px-2 py-1 text-xs font-bold ${receipt.is_read ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>
-                            {receipt.is_read ? `قرأها ${receipt.read_at ? formatDate(receipt.read_at) : ""}` : "لم يقرأها"}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
+                    <ReadReceiptsList receipts={selected.read_receipts || []} />
                   </div>
                 )}
                 {(selected.replies || []).length > 0 && (
                   <div className="space-y-3">
                     <h4 className="text-sm font-bold text-slate-700">سلسلة المحادثة</h4>
-                    {(selected.replies || []).map((reply) => (
-                      <div key={reply.id} className="rounded-md border border-slate-200 bg-white p-4">
-                        <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
-                          <span className="flex flex-wrap items-center gap-2 font-bold text-slate-700">
-                            {reply.sender_name}
-                            {reply.message_uid && <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] text-slate-500">{reply.message_uid}</span>}
-                          </span>
-                          <span>{formatDate(reply.created_at)}</span>
-                        </div>
-                        <div className="text-sm leading-7 text-slate-700" dangerouslySetInnerHTML={{ __html: sanitizeMessageHtml(reply.body) }} />
-                      </div>
-                    ))}
+                    <MessageRepliesList replies={selected.replies || []} />
                   </div>
                 )}
               </div>
@@ -2699,6 +3030,46 @@ function MessageSection({
   );
 }
 
+function ReadReceiptsList({ receipts }: { receipts: MessageReadReceipt[] }) {
+  const { page, setPage, visibleRows, showPagination, totalItems, pageSize } = useAutoPagination(receipts || [], 10);
+  return (
+    <>
+      <div className="grid gap-2 md:grid-cols-2">
+        {visibleRows.map((receipt) => (
+          <div key={receipt.recipient_id} className="flex items-center justify-between gap-3 rounded-md bg-slate-50 px-3 py-2 text-sm">
+            <span className="font-semibold text-slate-800">{receipt.recipient_name}</span>
+            <span className={`rounded-full px-2 py-1 text-xs font-bold ${receipt.is_read ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>
+              {receipt.is_read ? `قرأها ${receipt.read_at ? formatDate(receipt.read_at) : ""}` : "لم يقرأها"}
+            </span>
+          </div>
+        ))}
+      </div>
+      {showPagination && <Pagination page={page} totalItems={totalItems} pageSize={pageSize} onPageChange={setPage} />}
+    </>
+  );
+}
+
+function MessageRepliesList({ replies }: { replies: InternalMessage[] }) {
+  const { page, setPage, visibleRows, showPagination, totalItems, pageSize } = useAutoPagination(replies || [], 10);
+  return (
+    <>
+      {visibleRows.map((reply) => (
+        <div key={reply.id} className="rounded-md border border-slate-200 bg-white p-4">
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
+            <span className="flex flex-wrap items-center gap-2 font-bold text-slate-700">
+              {reply.sender_name}
+              {reply.message_uid && <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] text-slate-500">{reply.message_uid}</span>}
+            </span>
+            <span>{formatDate(reply.created_at)}</span>
+          </div>
+          <div className="text-sm leading-7 text-slate-700" dangerouslySetInnerHTML={{ __html: sanitizeMessageHtml(reply.body) }} />
+        </div>
+      ))}
+      {showPagination && <Pagination page={page} totalItems={totalItems} pageSize={pageSize} onPageChange={setPage} />}
+    </>
+  );
+}
+
 function MessageListItem({
   message,
   messageTypeOptions,
@@ -2743,7 +3114,7 @@ function MessageListItem({
         />
         <div className="min-w-0 flex-1 text-right">
           <div className="flex min-w-0 flex-wrap items-center justify-start gap-2 text-right">
-            <span style={messageTypeBadgeStyle(messageTypeOptions.find((option) => option.value === message.message_type))} className="shrink-0 rounded-full border border-slate-200 bg-slate-100 px-2 py-0.5 text-[11px] font-bold text-slate-600">{getMessageTypeLabel(message.message_type, messageTypeOptions)}</span>
+            <span style={messageTypeBadgeStyle(findMessageTypeOption(messageTypeOptions, message.message_type))} className="shrink-0 rounded-full border border-slate-200 bg-slate-100 px-2 py-0.5 text-[11px] font-bold text-slate-600">{getMessageTypeLabel(message.message_type, messageTypeOptions)}</span>
             <span className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-bold ${messagePriorityBadgeClass(message.priority)}`}>{messagePriorityLabel(message.priority)}</span>
             <span className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-bold ${messageClassificationBadgeClass(classification)}`}>{messageClassificationLabel(message.classification_code, messageClassificationOptions)}</span>
             <p className={`min-w-0 flex-1 truncate font-semibold ${message.is_read ? "text-slate-700" : "text-slate-950"}`}>{message.subject || "بدون موضوع"}</p>
@@ -2815,7 +3186,211 @@ function sortByNewest(first: InternalMessage, second: InternalMessage) {
 }
 
 function getMessageTypeLabel(value: string, options: MessageTypeOption[] = defaultMessageTypeOptions) {
-  return options.find((option) => option.value === value)?.label || "مراسلة داخلية";
+  return findMessageTypeOption(options, value)?.label || "مراسلة داخلية";
+}
+
+function findMessageTypeOption(options: MessageTypeOption[], value?: string | number | null) {
+  if (value === undefined || value === null || value === "") return null;
+  const normalized = String(value);
+  return options.find((option) => option.value === normalized || String(option.id || "") === normalized) || null;
+}
+
+function isOfficialMessageType(value?: string | null) {
+  return value === "official_correspondence" || value === "official_message";
+}
+
+function isClarificationMessageType(value?: string | null) {
+  return ["clarification", "clarification_request", "request_clarification", "clarification_response", "reply_to_clarification", "clarification_reply"].includes(String(value || ""));
+}
+
+function isExecutionNoteMessageType(value?: string | null) {
+  return ["execution_note", "implementation_note"].includes(String(value || ""));
+}
+
+function effectiveMessageTypeRequiresRequest(type: MessageTypeOption | null | undefined, settings: MessageSettings) {
+  if (!type) return false;
+  if (isClarificationMessageType(type.value)) return settings.require_request_for_clarification !== false;
+  if (isExecutionNoteMessageType(type.value)) return settings.require_request_for_execution_note !== false;
+  return Boolean(type.requires_request);
+}
+
+function normalizeMessageTypeOption(raw: unknown): MessageTypeOption | null {
+  const item = asRecord(raw);
+  if (!item) return null;
+  const id = optionalNumber(item.id ?? item.Id ?? item.messageTypeId ?? item.message_type_id);
+  const value = stringValue(item.value ?? item.code ?? item.Code ?? item.message_type ?? item.messageType ?? (id ? String(id) : ""));
+  if (!value) return null;
+  return {
+    id,
+    value,
+    label: stringValue(item.label ?? item.name_ar ?? item.nameAr ?? item.NameAr ?? item.name ?? item.Name ?? item.name_en ?? item.nameEn) || value,
+    color: stringValue(item.color ?? item.Color) || null,
+    icon: stringValue(item.icon ?? item.Icon) || null,
+    is_active: item.is_active !== undefined || item.isActive !== undefined || item.IsActive !== undefined
+      ? boolValue(item.is_active ?? item.isActive ?? item.IsActive)
+      : true,
+    is_official: boolValue(item.is_official ?? item.isOfficial ?? item.IsOfficial),
+    requires_request: boolValue(item.requires_request ?? item.requiresRequest ?? item.RequiresRequest),
+    requires_attachment: boolValue(item.requires_attachment ?? item.requiresAttachment ?? item.RequiresAttachment),
+    show_in_pdf: boolValue(item.show_in_pdf ?? item.showInPdf ?? item.ShowInPdf),
+    allow_reply: item.allow_reply !== undefined || item.allowReply !== undefined || item.AllowReply !== undefined
+      ? boolValue(item.allow_reply ?? item.allowReply ?? item.AllowReply)
+      : true,
+    is_system: boolValue(item.is_system ?? item.isSystem)
+  };
+}
+
+function normalizeMessageClassificationOption(raw: unknown): MessageClassificationOption | null {
+  const item = asRecord(raw);
+  if (!item) return null;
+  const code = stringValue(item.code ?? item.Code ?? item.value);
+  if (!code) return null;
+  return {
+    id: optionalNumber(item.id ?? item.Id ?? item.classificationId ?? item.classification_id),
+    code,
+    name_ar: stringValue(item.name_ar ?? item.nameAr ?? item.NameAr ?? item.label ?? item.name) || code,
+    name_en: stringValue(item.name_en ?? item.nameEn ?? item.NameEn) || null,
+    description: stringValue(item.description ?? item.Description) || null,
+    is_active: item.is_active !== undefined || item.isActive !== undefined ? boolValue(item.is_active ?? item.isActive) : true,
+    restricted_access: boolValue(item.restricted_access ?? item.requires_permission ?? item.requiresPermission ?? item.is_confidential ?? item.isConfidential),
+    show_in_pdf: boolValue(item.show_in_pdf ?? item.showInPdf),
+    show_in_reports: boolValue(item.show_in_reports ?? item.showInReports),
+    allow_attachment_download: item.allow_attachment_download !== undefined || item.allowAttachmentDownload !== undefined
+      ? boolValue(item.allow_attachment_download ?? item.allowAttachmentDownload)
+      : true,
+    log_downloads: boolValue(item.log_downloads ?? item.logDownloads),
+    requires_special_permission: boolValue(item.requires_special_permission ?? item.requiresSpecialPermission)
+  };
+}
+
+function normalizeInternalMessage(raw: unknown): InternalMessage {
+  const item = asRecord(raw) || {};
+  const recipients = Array.isArray(item.recipients ?? item.Recipients) ? (item.recipients ?? item.Recipients) as unknown[] : [];
+  const attachments = Array.isArray(item.attachments ?? item.Attachments) ? (item.attachments ?? item.Attachments) as unknown[] : [];
+  const readReceipts = normalizeMessageReadReceipts(item.read_receipts ?? item.readReceipts ?? item.ReadReceipts, recipients);
+  return {
+    id: numberValue(item.id ?? item.Id),
+    message_uid: stringValue(item.message_uid ?? item.messageUid) || null,
+    thread_id: optionalNumber(item.thread_id ?? item.threadId),
+    message_type: stringValue(item.message_type ?? item.messageType ?? item.message_type_code ?? item.messageTypeCode ?? item.messageTypeId ?? item.message_type_id) || defaultMessageType,
+    priority: stringValue(item.priority ?? item.Priority) || "normal",
+    classification_code: stringValue(item.classification_code ?? item.classificationCode ?? item.classification_id ?? item.classificationId) || defaultMessageClassification,
+    subject: stringValue(item.subject ?? item.Subject),
+    body: stringValue(item.body ?? item.Body ?? item.preview ?? item.Preview),
+    sender_id: numberValue(item.sender_id ?? item.senderId ?? item.SenderId),
+    sender_name: stringValue(item.sender_name ?? item.senderName ?? item.senderNameAr ?? item.SenderNameAr),
+    recipient_ids: arrayNumbers(item.recipient_ids ?? item.recipientIds).length
+      ? arrayNumbers(item.recipient_ids ?? item.recipientIds)
+      : recipients.map((recipient) => optionalNumber(asRecord(recipient)?.user_id ?? asRecord(recipient)?.userId ?? asRecord(recipient)?.UserId)).filter((id): id is number => Boolean(id)),
+    recipient_names: Array.isArray(item.recipient_names ?? item.recipientNames)
+      ? ((item.recipient_names ?? item.recipientNames) as unknown[]).map((name) => stringValue(name)).filter(Boolean)
+      : recipients.map((recipient) => stringValue(asRecord(recipient)?.name_ar ?? asRecord(recipient)?.nameAr ?? asRecord(recipient)?.NameAr)).filter(Boolean),
+    related_request_id: optionalNumber(item.related_request_id ?? item.relatedRequestId),
+    related_request_number: stringValue(item.related_request_number ?? item.relatedRequestNumber) || null,
+    is_official: boolValue(item.is_official ?? item.isOfficial),
+    official_reference_number: stringValue(item.official_reference_number ?? item.officialReferenceNumber) || null,
+    include_in_request_pdf: boolValue(item.include_in_request_pdf ?? item.includeInRequestPdf),
+    official_pdf_document_id: optionalNumber(item.official_pdf_document_id ?? item.officialPdfDocumentId),
+    official_status: stringValue(item.official_status ?? item.officialStatus) || null,
+    is_read: item.is_read !== undefined || item.isRead !== undefined ? boolValue(item.is_read ?? item.isRead) : true,
+    is_archived: boolValue(item.is_archived ?? item.isArchived),
+    is_draft: boolValue(item.is_draft ?? item.isDraft),
+    created_at: stringValue(item.created_at ?? item.createdAt ?? item.sent_at ?? item.sentAt),
+    updated_at: stringValue(item.updated_at ?? item.updatedAt) || null,
+    attachments: attachments.map(normalizeMessageAttachment),
+    read_receipts: readReceipts,
+    replies: []
+  };
+}
+
+function normalizeMessageReadReceipts(receiptsValue: unknown, recipients: unknown[]): MessageReadReceipt[] {
+  const explicitReceipts = Array.isArray(receiptsValue) ? receiptsValue : [];
+  const source = explicitReceipts.length > 0 ? explicitReceipts : recipients;
+  const receipts: MessageReadReceipt[] = [];
+  for (const entry of source) {
+    const item = asRecord(entry);
+    if (!item) continue;
+    const recipientId = optionalNumber(item.recipient_id ?? item.recipientId ?? item.user_id ?? item.userId ?? item.UserId);
+    if (!recipientId) continue;
+    receipts.push({
+        recipient_id: recipientId,
+        recipient_name:
+          stringValue(item.recipient_name ?? item.recipientName ?? item.name_ar ?? item.nameAr ?? item.NameAr ?? item.full_name_ar ?? item.fullNameAr ?? item.email ?? item.Email) || "-",
+        is_read: boolValue(item.is_read ?? item.isRead ?? item.IsRead),
+        read_at: stringValue(item.read_at ?? item.readAt ?? item.ReadAt) || null
+      });
+  }
+  return receipts;
+}
+
+function normalizeMessageAttachment(raw: unknown): MessageAttachment {
+  const item = asRecord(raw) || {};
+  return {
+    id: numberValue(item.id ?? item.Id),
+    original_name: stringValue(item.original_name ?? item.originalName ?? item.file_name ?? item.fileName ?? item.FileName),
+    content_type: stringValue(item.content_type ?? item.contentType ?? item.ContentType),
+    size_bytes: numberValue(item.size_bytes ?? item.sizeBytes ?? item.file_size ?? item.fileSize ?? item.FileSize),
+    created_at: stringValue(item.created_at ?? item.createdAt ?? item.uploaded_at ?? item.uploadedAt)
+  };
+}
+
+function normalizeOfficialSignature(raw: unknown): OfficialSignature | null {
+  const item = asRecord(raw);
+  if (!item) return null;
+  const id = optionalNumber(item.id ?? item.Id);
+  if (!id) return null;
+  return {
+    id,
+    signature_label: stringValue(item.signature_label ?? item.signatureLabel ?? item.SignatureLabel) || null,
+    is_verified: boolValue(item.is_verified ?? item.isVerified ?? item.IsVerified),
+    is_active: item.is_active !== undefined || item.isActive !== undefined || item.IsActive !== undefined ? boolValue(item.is_active ?? item.isActive ?? item.IsActive) : true
+  };
+}
+
+function normalizeOfficialMessageSettings(raw: unknown, fallback: OfficialMessageSettings): OfficialMessageSettings {
+  const item = asRecord(raw) || {};
+  return {
+    default_letterhead_template_id: optionalNumber(item.default_letterhead_template_id ?? item.defaultLetterheadTemplateId ?? item.DefaultLetterheadTemplateId) ?? fallback.default_letterhead_template_id ?? null,
+    enable_official_letterhead: boolSetting(item.enable_official_letterhead ?? item.is_enabled ?? item.isEnabled ?? item.IsEnabled, fallback.enable_official_letterhead ?? true),
+    allow_preview_for_all_users: boolSetting(item.allow_preview_for_all_users ?? item.allowPreviewForAllUsers ?? item.AllowPreviewForAllUsers, fallback.allow_preview_for_all_users ?? true),
+    allow_signature_upload_by_user: boolSetting(item.allow_signature_upload_by_user ?? item.allowSignatureUploadByUser ?? item.AllowSignatureUploadByUser, fallback.allow_signature_upload_by_user ?? true),
+    allow_unverified_signature: boolSetting(item.allow_unverified_signature ?? item.allowUnverifiedSignature ?? item.AllowUnverifiedSignature, fallback.allow_unverified_signature ?? false),
+    include_official_messages_in_request_pdf: boolSetting(item.include_official_messages_in_request_pdf ?? item.includeOfficialMessagesInRequestPdf ?? item.IncludeOfficialMessagesInRequestPdf, fallback.include_official_messages_in_request_pdf ?? true)
+  };
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" ? value as Record<string, unknown> : null;
+}
+
+function stringValue(value: unknown) {
+  return value === undefined || value === null ? "" : String(value);
+}
+
+function optionalNumber(value: unknown) {
+  if (value === undefined || value === null || value === "") return undefined;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : undefined;
+}
+
+function numberValue(value: unknown) {
+  return optionalNumber(value) || 0;
+}
+
+function boolValue(value: unknown) {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value !== 0;
+  if (typeof value === "string") return ["true", "1", "yes", "نعم"].includes(value.toLowerCase());
+  return false;
+}
+
+function boolSetting(value: unknown, fallback: boolean) {
+  return value === undefined || value === null ? fallback : boolValue(value);
+}
+
+function arrayNumbers(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => optionalNumber(item)).filter((item): item is number => item !== undefined);
 }
 
 function messageTypeBadgeStyle(option?: MessageTypeOption | null) {
@@ -2894,11 +3469,61 @@ function escapeHtml(value: string) {
     .replace(/'/g, "&#039;");
 }
 
+function decodeHtmlEntities(value: string) {
+  const textarea = document.createElement("textarea");
+  textarea.innerHTML = value;
+  return textarea.value;
+}
+
+function normalizePastedEditorText(value: string) {
+  let text = value.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  for (let index = 0; index < 2; index += 1) {
+    const decoded = decodeHtmlEntities(text);
+    if (decoded === text) break;
+    text = decoded;
+  }
+  return text
+    .replace(/<\s*br\s*\/?\s*>/gi, "\n")
+    .replace(/<\/\s*(p|div|li|tr|h[1-6]|blockquote)\s*>/gi, "\n")
+    .replace(/<\s*(p|div|li|tr|h[1-6]|blockquote)(?:\s[^>]*)?>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/\u00a0/g, " ")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n[ \t]+/g, "\n")
+    .replace(/\n{3,}/g, "\n\n");
+}
+
+function clipboardPlainText(event: ReactClipboardEvent<HTMLDivElement>) {
+  const plainText = event.clipboardData.getData("text/plain");
+  if (plainText) return normalizePastedEditorText(plainText);
+
+  const html = event.clipboardData.getData("text/html");
+  if (!html) return "";
+  const template = document.createElement("template");
+  template.innerHTML = html;
+  template.content.querySelectorAll("br").forEach((node) => node.replaceWith("\n"));
+  template.content.querySelectorAll("p, div, li, tr, h1, h2, h3, h4, h5, h6, blockquote").forEach((node) => {
+    node.appendChild(document.createTextNode("\n"));
+  });
+  return normalizePastedEditorText(template.content.textContent || "");
+}
+
 function messageBodyPreview(value: string) {
   if (!value) return "";
   const template = document.createElement("template");
   template.innerHTML = value;
   return (template.content.textContent || value).replace(/\s+/g, " ").trim();
+}
+
+function messageHtmlToPlainText(value: string) {
+  if (!value) return "";
+  const template = document.createElement("template");
+  template.innerHTML = value;
+  template.content.querySelectorAll("br").forEach((node) => node.replaceWith("\n"));
+  template.content.querySelectorAll("p, div, li, tr, h1, h2, h3, h4, h5, h6, blockquote").forEach((node) => {
+    node.appendChild(document.createTextNode("\n"));
+  });
+  return normalizePastedEditorText(template.content.textContent || value).trim();
 }
 
 function sanitizeMessageHtml(value: string) {
@@ -2964,10 +3589,38 @@ function readApiError(error: unknown) {
   }
 }
 
+function disabledAiStatus(): AIStatus {
+  return {
+    is_enabled: false,
+    allow_message_drafting: false,
+    allow_summarization: false,
+    allow_message_summarization: false,
+    allow_request_messages_summarization: false,
+    allow_reply_suggestion: false,
+    allow_message_improvement: false,
+    allow_missing_info_detection: false,
+    allow_translate_ar_en: false,
+    show_in_compose_message: false,
+    show_in_message_details: false,
+    show_in_request_messages_tab: false
+  };
+}
+
 function formatBytes(value: number) {
   if (value < 1024) return `${value} B`;
   if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
   return `${(value / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function normalizeAttachmentExtensions(value: string[]) {
+  const imageAliases = new Set(["image", "images", "photo", "photos", "picture", "pictures", "صورة", "صور"]);
+  const imageExtensions = ["png", "jpg", "jpeg", "webp", "heic", "heif"];
+  const imageExtensionSet = new Set(imageExtensions);
+  return [...new Set(value.flatMap((item) => {
+    const extension = String(item).trim().replace(/^\./, "").toLowerCase();
+    if (!extension) return [];
+    return imageAliases.has(extension) || imageExtensionSet.has(extension) ? imageExtensions : [extension];
+  }))].sort();
 }
 
 function extractApiError(raw: string) {

@@ -4,6 +4,8 @@ import { Link, useParams } from "react-router-dom";
 import { ClassificationBadge, DocumentStatusBadge } from "../../components/documents/DocumentBadges";
 import { PDFDocumentViewer } from "../../components/documents/PDFDocumentViewer";
 import { Card } from "../../components/ui/card";
+import { Pagination } from "../../components/ui/Pagination";
+import { useAutoPagination } from "../../components/ui/useAutoPagination";
 import { apiFetch } from "../../lib/api";
 import { formatSystemDate, formatSystemDateTime } from "../../lib/datetime";
 import { fetchDocumentFile } from "./documentFile";
@@ -18,6 +20,8 @@ export default function DocumentDetailsPage() {
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const versionsPagination = useAutoPagination(versions, 10);
+  const logsPagination = useAutoPagination(logs, 10);
 
   useEffect(() => {
     load();
@@ -114,7 +118,7 @@ export default function DocumentDetailsPage() {
           <Card className="p-5">
             <h2 className="mb-4 text-xl font-black text-slate-950">سجل الإصدارات</h2>
             <div className="space-y-3">
-              {versions.map((version) => (
+              {versionsPagination.visibleRows.map((version) => (
                 <div key={version.id} className="rounded-md border border-slate-100 bg-slate-50 p-3">
                   <div className="flex items-center justify-between gap-3">
                     <p className="font-black text-slate-900">الإصدار {version.version_number}</p>
@@ -125,19 +129,35 @@ export default function DocumentDetailsPage() {
               ))}
               {!versions.length && <p className="text-sm text-slate-500">لا توجد إصدارات معروضة.</p>}
             </div>
+            {versionsPagination.showPagination && (
+              <Pagination
+                page={versionsPagination.page}
+                totalItems={versionsPagination.totalItems}
+                pageSize={versionsPagination.pageSize}
+                onPageChange={versionsPagination.setPage}
+              />
+            )}
           </Card>
 
           {logs.length > 0 && (
             <Card className="p-5">
               <h2 className="mb-4 text-xl font-black text-slate-950">سجل الوصول</h2>
               <div className="space-y-2 text-sm">
-                {logs.slice(0, 8).map((log) => (
+                {logsPagination.visibleRows.map((log) => (
                   <div key={log.id} className="flex justify-between gap-3 border-b border-slate-100 py-2">
                     <span className="font-bold text-slate-700">{log.user?.full_name_ar || "-"}</span>
                     <span className="text-slate-500">{log.action} - {formatSystemDateTime(log.created_at)}</span>
                   </div>
                 ))}
               </div>
+              {logsPagination.showPagination && (
+                <Pagination
+                  page={logsPagination.page}
+                  totalItems={logsPagination.totalItems}
+                  pageSize={logsPagination.pageSize}
+                  onPageChange={logsPagination.setPage}
+                />
+              )}
             </Card>
           )}
         </div>

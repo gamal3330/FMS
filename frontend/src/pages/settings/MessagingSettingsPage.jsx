@@ -25,6 +25,8 @@ import { formatSystemDateTime } from "../../lib/datetime";
 import FeedbackDialog from "../../components/ui/FeedbackDialog";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
+import { Pagination } from "../../components/ui/Pagination";
+import { useAutoPagination } from "../../components/ui/useAutoPagination";
 
 const tabs = [
   ["general", "الإعدادات العامة", Mail],
@@ -80,6 +82,16 @@ const defaultTemplate = {
   is_active: true
 };
 
+const defaultOfficialMessageSettings = {
+  enable_official_letterhead: true,
+  default_letterhead_template_id: null,
+  official_message_requires_approval: false,
+  allow_preview_for_all_users: true,
+  allow_unverified_signature: false,
+  allow_signature_upload_by_user: true,
+  include_official_messages_in_request_pdf: true
+};
+
 const variables = ["employee_name", "request_number", "request_type", "department", "created_at", "current_user", "message_subject", "request_status"];
 const hiddenFieldsBySection = {
   recipients: ["allow_send_to_role", "role_recipient_behavior", "allow_send_to_specialized_section", "circular_allowed_user_ids"]
@@ -107,6 +119,7 @@ export default function MessagingSettingsPage() {
     analytics: null,
     auditLogs: [],
     generalProfile: null,
+    officialMessages: null,
     users: []
   });
   const [typeModal, setTypeModal] = useState(null);
@@ -115,7 +128,12 @@ export default function MessagingSettingsPage() {
   const [templatePreview, setTemplatePreview] = useState(null);
   const [search, setSearch] = useState("");
 
-  const canEdit = currentUser?.role === "super_admin";
+  const roleCode = getCurrentUserRoleCode(currentUser);
+  const roleName = getCurrentUserRoleName(currentUser);
+  const userPermissions = getCurrentUserPermissionCodes(currentUser);
+  const isSystemAdmin = roleCode === "super_admin" || roleName === "مدير النظام";
+  const canEdit = isSystemAdmin || hasPermissionCode(userPermissions, "settings.manage");
+  const canEditOfficialMessages = canEdit || hasPermissionCode(userPermissions, "official_letterheads.manage");
   const typeOptions = useMemo(() => data.types.map((item) => [item.id, item.name_ar]), [data.types]);
 
   function notify(message, type = "success") {
@@ -142,6 +160,7 @@ export default function MessagingSettingsPage() {
         analytics,
         auditLogs,
         generalProfile,
+        officialMessages,
         users
       ] = await Promise.all([
         api.get("/auth/me"),
@@ -160,6 +179,7 @@ export default function MessagingSettingsPage() {
         api.get("/settings/messaging/analytics"),
         api.get("/settings/messaging/audit-logs"),
         api.get("/settings/general-profile"),
+        api.get("/settings/official-messages").catch(() => ({ data: defaultOfficialMessageSettings })),
         api.get("/users").catch(() => ({ data: [] }))
       ]);
       setCurrentUser(userRes.data);
@@ -179,6 +199,7 @@ export default function MessagingSettingsPage() {
         analytics: analytics.data,
         auditLogs: auditLogs.data || [],
         generalProfile: generalProfile.data,
+        officialMessages: normalizeOfficialMessageSettingsForForm(officialMessages.data),
         users: users.data || []
       });
     } catch (error) {
@@ -244,6 +265,21 @@ export default function MessagingSettingsPage() {
       const { data: response } = await api.put("/settings/messaging", data.general);
       setData((current) => ({ ...current, general: response }));
       notify(response.enable_templates ? "تم تفعيل قوالب الرسائل" : "تم تعطيل قوالب الرسائل");
+      await load();
+    } catch (error) {
+      notify(getErrorMessage(error), "error");
+    } finally {
+      setSaving("");
+    }
+  }
+
+  async function saveOfficialMessageSettings() {
+    setSaving("officialMessages");
+    try {
+      const payload = normalizeOfficialMessageSettingsPayload(data.officialMessages);
+      const { data: response } = await api.put("/settings/official-messages", payload);
+      setData((current) => ({ ...current, officialMessages: normalizeOfficialMessageSettingsForForm(response || payload) }));
+      notify(payload.allow_signature_upload_by_user ? "تم تفعيل التوقيع داخل المراسلة الرسمية" : "تم إخفاء خيار التوقيع من المراسلة الرسمية");
       await load();
     } catch (error) {
       notify(getErrorMessage(error), "error");
@@ -382,8 +418,8 @@ export default function MessagingSettingsPage() {
   return (
     <section className="space-y-6 text-right" dir="rtl">
       <FeedbackDialog open={Boolean(dialog.message)} type={dialog.type} message={dialog.message} onClose={() => setDialog({ ...dialog, message: "" })} />
-      <Header canEdit={canEdit} />
-      {!canEdit && <WarningBox>لديك صلاحية عرض فقط. تعديل إعدادات المراسلات متاح لمدير النظام فقط.</WarningBox>}
+      <Header canEdit={canEdit || canEditOfficialMessages} />
+      {!canEdit && !canEditOfficialMessages && <WarningBox>لديك صلاحية عرض فقط. تعديل إعدادات المراسلات متاح لمدير النظام فقط.</WarningBox>}
 
       <div className="grid gap-5 xl:grid-cols-[300px_minmax(0,1fr)]">
         <div className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
@@ -399,24 +435,41 @@ export default function MessagingSettingsPage() {
 
         <div className="min-w-0 space-y-5">
           {active === "general" && data.general && (
-            <Section title="الإعدادات العامة" description="تحكم في تشغيل وحدة المراسلات وسلوك الردود والتحويل والأرشفة.">
-              <Grid>
-                <Toggle label="تفعيل نظام المراسلات" checked={data.general.enable_messaging} disabled={!canEdit} onChange={(value) => update("general", "enable_messaging", value)} />
-                <Toggle label="السماح بالمراسلات العامة" checked={data.general.allow_general_messages} disabled={!canEdit} onChange={(value) => update("general", "allow_general_messages", value)} />
-                <Toggle label="السماح بالرد" checked={data.general.allow_replies} disabled={!canEdit} onChange={(value) => update("general", "allow_replies", value)} />
-                <Toggle label="السماح بالتحويل" checked={data.general.allow_forwarding} disabled={!canEdit} onChange={(value) => update("general", "allow_forwarding", value)} />
-                <Toggle label="السماح بالأرشفة" checked={data.general.allow_archiving} disabled={!canEdit} onChange={(value) => update("general", "allow_archiving", value)} />
-                <Toggle label="تفعيل حالة القراءة" checked={data.general.enable_read_receipts} disabled={!canEdit} onChange={(value) => update("general", "enable_read_receipts", value)} />
-                <Toggle label="إظهار عداد الرسائل غير المقروءة" checked={data.general.enable_unread_badge} disabled={!canEdit} onChange={(value) => update("general", "enable_unread_badge", value)} />
-                <Toggle label="السماح بأكثر من مستلم" checked={data.general.allow_multiple_recipients} disabled={!canEdit} onChange={(value) => update("general", "allow_multiple_recipients", value)} />
-                <Toggle label="السماح بالتعاميم" checked={data.general.allow_broadcast_messages} disabled={!canEdit} onChange={(value) => update("general", "allow_broadcast_messages", value)} />
-                <Field label="اسم وحدة المراسلات بالعربي" value={data.general.module_name_ar} disabled={!canEdit} onChange={(value) => update("general", "module_name_ar", value)} />
-                <Field label="اسم وحدة المراسلات بالإنجليزي" value={data.general.module_name_en} disabled={!canEdit} onChange={(value) => update("general", "module_name_en", value)} />
-                <SelectField label="الأولوية الافتراضية" value={data.general.default_priority} disabled={!canEdit} onChange={(value) => update("general", "default_priority", value)} options={[["normal", "عادية"], ["high", "مرتفعة"], ["urgent", "عاجلة"]]} />
-                <Field label="الحد الأقصى للمستلمين" type="number" value={data.general.max_recipients} disabled={!canEdit} onChange={(value) => update("general", "max_recipients", Number(value))} />
-              </Grid>
-              <SaveBar disabled={!canEdit || saving === "general"} saving={saving === "general"} onSave={() => saveSection("general", "/settings/messaging")} />
-            </Section>
+            <div className="space-y-5">
+              <Section title="الإعدادات العامة" description="تحكم في تشغيل وحدة المراسلات وسلوك الردود والتحويل والأرشفة.">
+                <Grid>
+                  <Toggle label="تفعيل نظام المراسلات" checked={data.general.enable_messaging} disabled={!canEdit} onChange={(value) => update("general", "enable_messaging", value)} />
+                  <Toggle label="السماح بالمراسلات العامة" checked={data.general.allow_general_messages} disabled={!canEdit} onChange={(value) => update("general", "allow_general_messages", value)} />
+                  <Toggle label="السماح بالرد" checked={data.general.allow_replies} disabled={!canEdit} onChange={(value) => update("general", "allow_replies", value)} />
+                  <Toggle label="السماح بالتحويل" checked={data.general.allow_forwarding} disabled={!canEdit} onChange={(value) => update("general", "allow_forwarding", value)} />
+                  <Toggle label="السماح بالأرشفة" checked={data.general.allow_archiving} disabled={!canEdit} onChange={(value) => update("general", "allow_archiving", value)} />
+                  <Toggle label="تفعيل حالة القراءة" checked={data.general.enable_read_receipts} disabled={!canEdit} onChange={(value) => update("general", "enable_read_receipts", value)} />
+                  <Toggle label="إظهار عداد الرسائل غير المقروءة" checked={data.general.enable_unread_badge} disabled={!canEdit} onChange={(value) => update("general", "enable_unread_badge", value)} />
+                  <Toggle label="السماح بأكثر من مستلم" checked={data.general.allow_multiple_recipients} disabled={!canEdit} onChange={(value) => update("general", "allow_multiple_recipients", value)} />
+                  <Toggle label="السماح بالتعاميم" checked={data.general.allow_broadcast_messages} disabled={!canEdit} onChange={(value) => update("general", "allow_broadcast_messages", value)} />
+                  <Field label="اسم وحدة المراسلات بالعربي" value={data.general.module_name_ar} disabled={!canEdit} onChange={(value) => update("general", "module_name_ar", value)} />
+                  <Field label="اسم وحدة المراسلات بالإنجليزي" value={data.general.module_name_en} disabled={!canEdit} onChange={(value) => update("general", "module_name_en", value)} />
+                  <SelectField label="الأولوية الافتراضية" value={data.general.default_priority} disabled={!canEdit} onChange={(value) => update("general", "default_priority", value)} options={[["normal", "عادية"], ["high", "مرتفعة"], ["urgent", "عاجلة"]]} />
+                  <Field label="الحد الأقصى للمستلمين" type="number" value={data.general.max_recipients} disabled={!canEdit} onChange={(value) => update("general", "max_recipients", Number(value))} />
+                </Grid>
+                <SaveBar disabled={!canEdit || saving === "general"} saving={saving === "general"} onSave={() => saveSection("general", "/settings/messaging")} />
+              </Section>
+
+              {data.officialMessages && (
+                <Section title="المراسلات الرسمية والتوقيع" description="التوقيع يظهر فقط عند إنشاء مراسلة رسمية، ويمكن تعطيله من هنا دون وجود شاشة توقيع منفصلة للمستخدم.">
+                  <Grid>
+                    <Toggle label="تفعيل المراسلات الرسمية بترويسة البنك" checked={data.officialMessages.enable_official_letterhead !== false} disabled={!canEditOfficialMessages} onChange={(value) => update("officialMessages", "enable_official_letterhead", value)} />
+                    <Toggle label="إظهار خيار التوقيع داخل المراسلة الرسمية" checked={data.officialMessages.allow_signature_upload_by_user !== false} disabled={!canEditOfficialMessages} onChange={(value) => update("officialMessages", "allow_signature_upload_by_user", value)} />
+                    <Toggle label="قبول التواقيع غير الموثقة سابقاً" checked={Boolean(data.officialMessages.allow_unverified_signature)} disabled={!canEditOfficialMessages} onChange={(value) => update("officialMessages", "allow_unverified_signature", value)} />
+                    <Toggle label="تضمين المراسلات الرسمية في PDF الطلب" checked={data.officialMessages.include_official_messages_in_request_pdf !== false} disabled={!canEditOfficialMessages} onChange={(value) => update("officialMessages", "include_official_messages_in_request_pdf", value)} />
+                  </Grid>
+                  {data.officialMessages.allow_signature_upload_by_user === false && (
+                    <WarningBox>خيار التوقيع مخفي حالياً من شاشة إنشاء المراسلة الرسمية.</WarningBox>
+                  )}
+                  <SaveBar disabled={!canEditOfficialMessages || saving === "officialMessages"} saving={saving === "officialMessages"} onSave={saveOfficialMessageSettings} />
+                </Section>
+              )}
+            </div>
           )}
 
           {active === "types" && (
@@ -777,16 +830,20 @@ function SaveBar({ onSave, disabled, saving }) {
   );
 }
 
-function SimpleTable({ headers, rows }) {
+function SimpleTable({ headers, rows, pageSize = 10 }) {
+  const { page, setPage, visibleRows, showPagination, totalItems } = useAutoPagination(rows || [], pageSize);
   if (!rows?.length) return <div className="rounded-md border border-dashed border-slate-200 bg-slate-50 p-5 text-center text-sm text-slate-500">لا توجد بيانات حالياً.</div>;
   return (
-    <div className="overflow-x-auto rounded-lg border border-slate-200">
-      <table className="min-w-full text-right text-sm">
-        <thead className="bg-slate-50 text-slate-700"><tr>{headers.map((header) => <th key={header} className="whitespace-nowrap px-3 py-3 font-black">{header}</th>)}</tr></thead>
-        <tbody className="divide-y divide-slate-100 bg-white">
-          {rows.map((row, rowIndex) => <tr key={rowIndex}>{row.map((cell, index) => <td key={index} className="max-w-md px-3 py-3 text-slate-700">{cell}</td>)}</tr>)}
-        </tbody>
-      </table>
+    <div className="overflow-hidden rounded-lg border border-slate-200">
+      <div className="overflow-x-auto">
+        <table className="min-w-full text-right text-sm">
+          <thead className="bg-slate-50 text-slate-700"><tr>{headers.map((header) => <th key={header} className="whitespace-nowrap px-3 py-3 font-black">{header}</th>)}</tr></thead>
+          <tbody className="divide-y divide-slate-100 bg-white">
+            {visibleRows.map((row, rowIndex) => <tr key={`${page}-${rowIndex}`}>{row.map((cell, index) => <td key={index} className="max-w-md px-3 py-3 text-slate-700">{cell}</td>)}</tr>)}
+          </tbody>
+        </table>
+      </div>
+      {showPagination && <Pagination page={page} totalItems={totalItems} pageSize={pageSize} onPageChange={setPage} />}
     </div>
   );
 }
@@ -936,6 +993,63 @@ function normalizeEmptyStrings(value) {
   return next;
 }
 
+function getCurrentUserRoleCode(user) {
+  const role = user?.role ?? user?.Role;
+  const value = typeof role === "string"
+    ? role
+    : role?.code ?? role?.Code ?? user?.role_code ?? user?.roleCode ?? user?.RoleCode;
+  return String(value || "").trim().toLowerCase();
+}
+
+function getCurrentUserRoleName(user) {
+  const role = user?.role ?? user?.Role;
+  const value = typeof role === "string"
+    ? ""
+    : role?.name_ar ?? role?.nameAr ?? role?.NameAr ?? role?.name ?? role?.Name;
+  return String(value || "").trim();
+}
+
+function getCurrentUserPermissionCodes(user) {
+  const raw = user?.permissions ?? user?.Permissions ?? user?.effective_permissions ?? user?.effectivePermissions ?? user?.EffectivePermissions ?? [];
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((item) => typeof item === "string" ? item : item?.code ?? item?.Code ?? item?.permission_code ?? item?.permissionCode ?? item?.PermissionCode)
+    .filter(Boolean)
+    .map((item) => String(item).trim().toLowerCase());
+}
+
+function hasPermissionCode(permissions, code) {
+  return permissions.includes(String(code).trim().toLowerCase());
+}
+
+function normalizeOfficialMessageSettingsForForm(value = {}) {
+  const source = value || {};
+  return {
+    ...defaultOfficialMessageSettings,
+    enable_official_letterhead: booleanSetting(source.enable_official_letterhead ?? source.enableOfficialLetterhead ?? source.is_enabled ?? source.isEnabled ?? source.IsEnabled, true),
+    default_letterhead_template_id: numericSetting(source.default_letterhead_template_id ?? source.defaultLetterheadTemplateId ?? source.DefaultLetterheadTemplateId, null),
+    official_message_requires_approval: booleanSetting(source.official_message_requires_approval ?? source.officialMessageRequiresApproval ?? source.OfficialMessageRequiresApproval, false),
+    allow_preview_for_all_users: booleanSetting(source.allow_preview_for_all_users ?? source.allowPreviewForAllUsers ?? source.AllowPreviewForAllUsers, true),
+    allow_unverified_signature: booleanSetting(source.allow_unverified_signature ?? source.allowUnverifiedSignature ?? source.AllowUnverifiedSignature, false),
+    allow_signature_upload_by_user: booleanSetting(source.allow_signature_upload_by_user ?? source.allowSignatureUploadByUser ?? source.AllowSignatureUploadByUser, true),
+    include_official_messages_in_request_pdf: booleanSetting(source.include_official_messages_in_request_pdf ?? source.includeOfficialMessagesInRequestPdf ?? source.IncludeOfficialMessagesInRequestPdf, true)
+  };
+}
+
+function booleanSetting(value, fallback) {
+  if (value === undefined || value === null || value === "") return fallback;
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value !== 0;
+  if (typeof value === "string") return !["false", "0", "no", "لا"].includes(value.trim().toLowerCase());
+  return Boolean(value);
+}
+
+function numericSetting(value, fallback) {
+  if (value === undefined || value === null || value === "") return fallback;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : fallback;
+}
+
 function normalizeSectionPayload(section, payload) {
   if (section !== "recipients") return payload;
   return {
@@ -943,6 +1057,18 @@ function normalizeSectionPayload(section, payload) {
     allow_send_to_role: false,
     allow_send_to_specialized_section: false,
     role_recipient_behavior: "role_users_only"
+  };
+}
+
+function normalizeOfficialMessageSettingsPayload(value = {}) {
+  return {
+    enable_official_letterhead: value.enable_official_letterhead !== false,
+    default_letterhead_template_id: value.default_letterhead_template_id || null,
+    official_message_requires_approval: Boolean(value.official_message_requires_approval),
+    allow_preview_for_all_users: value.allow_preview_for_all_users !== false,
+    allow_unverified_signature: Boolean(value.allow_unverified_signature),
+    allow_signature_upload_by_user: value.allow_signature_upload_by_user !== false,
+    include_official_messages_in_request_pdf: value.include_official_messages_in_request_pdf !== false
   };
 }
 

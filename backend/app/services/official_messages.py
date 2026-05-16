@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from html import unescape
 from html.parser import HTMLParser
 from io import BytesIO
 from pathlib import Path
@@ -24,7 +25,6 @@ from app.models.message import (
     OfficialLetterheadTemplate,
     OfficialMessageDocument,
     OfficialMessageSettings,
-    OfficialStamp,
     UserSignature,
 )
 from app.models.settings import SettingsGeneral
@@ -66,9 +66,15 @@ class HtmlTextExtractor(HTMLParser):
 
 
 def html_to_text(value: str | None) -> str:
+    source = value or ""
+    for _ in range(2):
+        decoded = unescape(source)
+        if decoded == source:
+            break
+        source = decoded
     parser = HtmlTextExtractor()
-    parser.feed(value or "")
-    return parser.text() or str(value or "").strip()
+    parser.feed(source)
+    return parser.text() or source.strip()
 
 
 def official_storage_dir() -> Path:
@@ -113,7 +119,6 @@ def ensure_official_message_runtime(db: Session) -> None:
             tables=[
                 OfficialLetterheadTemplate.__table__,
                 UserSignature.__table__,
-                OfficialStamp.__table__,
                 OfficialMessageDocument.__table__,
                 OfficialMessageSettings.__table__,
             ],
@@ -194,29 +199,12 @@ def ensure_official_message_runtime(db: Session) -> None:
             db,
             inspector,
             table_names,
-            "official_stamps",
-            {
-                "name_ar": "VARCHAR(160)",
-                "code": "VARCHAR(80)",
-                "stamp_image_path": "VARCHAR(500)",
-                "allowed_roles_json": "JSON",
-                "is_active": "BOOLEAN DEFAULT TRUE",
-                "created_by": "INTEGER",
-                "created_at": "TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
-                "updated_at": "TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
-            },
-        )
-        ensure_table_columns(
-            db,
-            inspector,
-            table_names,
             "official_message_documents",
             {
                 "message_id": "INTEGER",
                 "related_request_id": "INTEGER",
                 "letterhead_template_id": "INTEGER",
                 "signature_id": "INTEGER",
-                "stamp_id": "INTEGER",
                 "reference_number": "VARCHAR(80)",
                 "pdf_file_path": "VARCHAR(500)",
                 "file_size": "INTEGER DEFAULT 0",
@@ -268,7 +256,7 @@ def seed_default_letterhead(db: Session) -> OfficialLetterheadTemplate:
 
 
 def seed_default_official_settings(db: Session) -> OfficialMessageSettings:
-    settings_row = db.scalar(select(OfficialMessageSettings).limit(1))
+    settings_row = db.scalar(select(OfficialMessageSettings).order_by(OfficialMessageSettings.id).limit(1))
     if settings_row:
         return settings_row
     template = seed_default_letterhead(db)
@@ -347,20 +335,6 @@ def validate_signature_usage(db: Session, user: User, signature_id: int | None, 
     return signature
 
 
-def validate_stamp_usage(db: Session, user: User, stamp_id: int | None) -> OfficialStamp | None:
-    if not stamp_id:
-        return None
-    stamp = db.get(OfficialStamp, stamp_id)
-    if not stamp or not stamp.is_active:
-        raise ValueError("الختم غير موجود أو غير مفعل")
-    allowed_roles = {str(item) for item in (stamp.allowed_roles_json or []) if str(item).strip()}
-    if allowed_roles and user_role_code(user) not in allowed_roles and str(user.role) not in allowed_roles:
-        raise PermissionError("لا تملك صلاحية استخدام هذا الختم")
-    if not has_action_permission(db, user, "use_official_stamp", default=can_manage_official_assets(user)):
-        raise PermissionError("لا تملك صلاحية استخدام الأختام الرسمية")
-    return stamp
-
-
 def wrap_arabic_text(text_value: str, max_chars: int = 74) -> list[str]:
     lines: list[str] = []
     for raw_line in (text_value or "").splitlines() or [""]:
@@ -428,7 +402,6 @@ def generate_official_pdf_bytes(
     reference_number: str | None,
     correspondence_type: str | None,
     signature: UserSignature | None,
-    stamp: OfficialStamp | None,
     show_sender_department: bool = True,
     show_recipients: bool = True,
     show_generated_by: bool = True,
@@ -545,15 +518,6 @@ def generate_official_pdf_bytes(
                 pass
         draw_right(pdf, font_name, signature.signature_label or "التوقيع", right, y - 82, 8, (0.42, 0.47, 0.53))
 
-    if stamp:
-        stamp_path = resolve_upload_path(stamp.stamp_image_path)
-        if stamp_path:
-            try:
-                pdf.drawImage(ImageReader(str(stamp_path)), left + 24, y - 86, width=92, height=72, preserveAspectRatio=True, mask="auto")
-            except Exception:
-                pass
-        draw_center(pdf, font_name, stamp.name_ar, left + 70, y - 96, 8, (0.42, 0.47, 0.53))
-
     if not uses_pdf_template:
         draw_footer(pdf, font_name, actor, template, show_generated_by, show_generated_at, now, left, right)
     elif template.show_page_number:
@@ -615,8 +579,6 @@ def generate_official_document(
     correspondence_type: str | None = None,
     include_signature: bool = False,
     signature_id: int | None = None,
-    include_stamp: bool = False,
-    stamp_id: int | None = None,
     include_in_request_pdf: bool = False,
     show_sender_department: bool = True,
     show_recipients: bool = True,
@@ -630,7 +592,6 @@ def generate_official_document(
     if not template or not template.is_active:
         raise ValueError("قالب الترويسة غير موجود أو غير مفعل")
     signature = validate_signature_usage(db, actor, signature_id if include_signature else None, settings_row.allow_unverified_signature)
-    stamp = validate_stamp_usage(db, actor, stamp_id if include_stamp else None)
     content = generate_official_pdf_bytes(
         db=db,
         message=message,
@@ -639,7 +600,6 @@ def generate_official_document(
         reference_number=reference_number,
         correspondence_type=correspondence_type,
         signature=signature,
-        stamp=stamp,
         show_sender_department=show_sender_department,
         show_recipients=show_recipients,
         show_generated_by=show_generated_by,
@@ -654,7 +614,6 @@ def generate_official_document(
         related_request_id=message.related_request_id,
         letterhead_template_id=template.id,
         signature_id=signature.id if signature else None,
-        stamp_id=stamp.id if stamp else None,
         reference_number=reference_number or message.message_uid,
         pdf_file_path=relative_path,
         file_size=size,
@@ -674,7 +633,7 @@ def generate_official_document(
         "internal_message",
         actor=actor,
         entity_id=str(message.id),
-        metadata={"document_id": document.id, "template_id": template.id, "signature_id": signature.id if signature else None, "stamp_id": stamp.id if stamp else None},
+        metadata={"document_id": document.id, "template_id": template.id, "signature_id": signature.id if signature else None},
     )
     return content, document
 
