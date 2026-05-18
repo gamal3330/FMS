@@ -1,24 +1,87 @@
 ![QIB Service Portal](docs/assets/qib-service-portal-hero.svg)
 
-# نظام إدارة طلبات الخدمات التقنية
+# QIB Service Portal
 
-نظام داخلي لإدارة طلبات الخدمات التقنية داخل المؤسسة، يدعم اللغة العربية واتجاه RTL، ويغطي دورة الطلب كاملة: إنشاء الطلب، رفع المرفقات، الموافقات، الإرجاع للتعديل، التنفيذ، الطباعة، التقارير، وإدارة إعدادات النظام.
+نظام بوابة خدمات داخلي لبنك القطيبي الإسلامي، يدعم العربية واتجاه RTL، ويغطي دورة العمل كاملة: الطلبات، الموافقات، التنفيذ، المراسلات، مكتبة الوثائق، التقارير، الإعدادات، التدقيق، الصحة التشغيلية، وأدوات قاعدة البيانات.
+
+يوجد حالياً مساران للتشغيل:
+
+- **FastAPI الحالي**: الخلفية الأصلية على `/api/v1`.
+- **ASP.NET Core المستقل**: خلفية جديدة تعمل بالتوازي على `/api/dotnet/v1` مع قاعدة بيانات PostgreSQL منفصلة، ولا تستبدل النظام الحالي إلا بعد اختبار كامل.
 
 ## التثبيت السريع
 
-للتثبيت والتشغيل المحلي بأمر واحد على macOS أو Linux:
+### تشغيل النظام الحالي FastAPI
+
+على macOS أو Linux:
 
 ```bash
-bash scripts/install-local.sh
+bash scripts/run-local.sh
 ```
 
-وعلى Windows PowerShell:
+أو تشغيل الخلفية فقط:
+
+```bash
+bash scripts/start-fastapi-api.sh
+```
+
+المنافذ الافتراضية:
+
+- الواجهة: `http://localhost:5173`
+- FastAPI: `http://127.0.0.1:8000`
+- API Base: `http://127.0.0.1:8000/api/v1`
+
+### تشغيل نسخة .NET المستقلة
+
+تشغيل الواجهة مع ASP.NET Core API المستقل:
+
+```bash
+bash scripts/start-frontend-dotnet.sh
+```
+
+هذا الأمر يقوم بتشغيل:
+
+- ASP.NET Core API عبر Docker.
+- PostgreSQL مستقل لنسخة .NET.
+- الواجهة على منفذ مستقل.
+
+المنافذ الافتراضية:
+
+- الواجهة: `http://localhost:5174`
+- .NET API: `http://localhost:8088`
+- .NET API Base: `http://localhost:8088/api/dotnet/v1`
+- Swagger: `http://localhost:8088/swagger/index.html`
+- PostgreSQL المستقل: `localhost:55432`
+
+لتشغيل .NET API فقط:
+
+```bash
+bash scripts/start-dotnet-api.sh
+```
+
+على Windows PowerShell يمكن تشغيل .NET عبر Docker مباشرة:
+
+```powershell
+cd Qib.ServicePortal.Api
+docker compose up -d --build
+```
+
+ثم تشغيل الواجهة وربطها بـ .NET:
+
+```powershell
+cd frontend
+npm install
+$env:VITE_API_BASE_URL="http://localhost:8088/api/dotnet/v1"
+npm run dev -- --mode dotnet --host 0.0.0.0 --port 5174
+```
+
+للتثبيت التقليدي لنسخة FastAPI على Windows:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/install-local.ps1
 ```
 
-للتفاصيل وخيارات التشغيل راجع [INSTALL.md](INSTALL.md).
+للمزيد من التفاصيل راجع [INSTALL.md](INSTALL.md).
 
 ## التقنيات المستخدمة
 
@@ -31,311 +94,377 @@ powershell -ExecutionPolicy Bypass -File scripts/install-local.ps1
 - React Router
 - Fetch / Axios
 - Lucide Icons
+- دعم الوضع الليلي والنهاري
+- دعم ربط الواجهة إما بـ FastAPI أو .NET عبر `VITE_API_BASE_URL`
 
-### الخلفية
+### الخلفية الحالية FastAPI
 
 - FastAPI
 - Uvicorn
 - SQLAlchemy
 - Pydantic
 - JWT Authentication
-- Passlib / bcrypt لتشفير كلمات المرور
-- python-multipart لرفع الملفات
-- ReportLab لتصدير PDF
+- Passlib / bcrypt
+- python-multipart
+- ReportLab
 - arabic-reshaper و python-bidi لدعم العربية في PDF
-- OpenPyXL لاستيراد وتصدير ملفات Excel
+- OpenPyXL لاستيراد وتصدير Excel
+- SQLite للتطوير المحلي أو PostgreSQL للنشر
 
-### قاعدة البيانات
+### الخلفية المستقلة ASP.NET Core
 
-- SQLite للتطوير المحلي.
-- PostgreSQL للتشغيل عبر Docker أو بيئات النشر.
+- ASP.NET Core Web API
+- .NET 8 LTS
+- Entity Framework Core
+- PostgreSQL
+- JWT Authentication و Refresh Tokens
+- Permission-Based Authorization
+- FluentValidation
+- Serilog
+- Health Checks
+- Swagger / OpenAPI
+- Quartz للمهام المجدولة
+- QuestPDF لتوليد PDF
+- Docker Compose لتشغيل API وقاعدة البيانات بشكل مستقل
+
+## قاعدة البيانات
+
+### FastAPI
+
+- يدعم SQLite للتطوير المحلي.
+- يدعم PostgreSQL عبر Docker أو بيئات النشر.
+- المسار الافتراضي للتطوير المحلي: `backend/qib_local.db`.
+
+### ASP.NET Core
+
+- يستخدم PostgreSQL مستقل حتى لا يؤثر على قاعدة النظام الحالية.
+- Docker Compose ينشئ قاعدة:
+  - Database: `qib_service_portal_dotnet`
+  - User: `qib_dotnet`
+  - Port: `55432`
+- لا يتم ترحيل بيانات الإنتاج تلقائياً إلى .NET.
+- أي Cutover لاحق يجب أن يتم بعد اختبار السيناريوهات والترحيل المخطط.
 
 ## الخصائص الرئيسية
 
 ### تسجيل الدخول والأمان
 
-- تسجيل الدخول بالبريد الإلكتروني وكلمة المرور.
-- حماية الجلسات باستخدام JWT Token.
-- تشفير كلمات المرور.
-- تغيير كلمة المرور من داخل النظام.
-- سياسة أمان قابلة للإعداد.
-- دعم قفل الحساب بعد محاولات دخول فاشلة.
-- عرض حالة المستخدم المعطل أو المقفل مؤقتاً في شاشة المستخدمين والصلاحيات.
-- صلاحيات وصول للشاشات حسب المستخدم.
+- تسجيل الدخول بالبريد الإلكتروني أو الرقم الوظيفي حسب الإعداد.
+- JWT لحماية الجلسات.
+- Refresh Tokens في نسخة .NET.
+- تغيير كلمة المرور.
+- قفل الحساب بعد محاولات فاشلة.
+- محاولات الدخول وسجلات الجلسات.
+- صلاحيات حسب الدور والمستخدم.
+- سجل تدقيق للعمليات الحساسة.
 
-### إدارة المستخدمين والصلاحيات
+### المستخدمون والصلاحيات
 
 - إضافة وتعديل وتعطيل المستخدمين.
 - إعادة تعيين كلمة المرور.
 - ربط المستخدم بإدارة.
 - ربط الموظف بمدير مباشر.
-- تحديد دور المستخدم، مثل:
-  - موظف
-  - مدير مباشر
-  - موظف تقنية معلومات
-  - مدير تقنية معلومات
-  - أمن المعلومات
-  - الإدارة التنفيذية
-  - مدير النظام
-- تحديد القسم المختص لموظف تقنية المعلومات.
-- استيراد المستخدمين دفعة واحدة من ملف Excel.
-- تحميل نموذج Excel لإضافة المستخدمين بشكل جماعي.
-- تحديد الشاشات المسموح للمستخدم بالوصول إليها.
+- تحديد نوع العلاقة الوظيفية.
+- ربط مختص التنفيذ بقسم مختص.
+- إدارة الأدوار والصلاحيات.
+- صلاحيات افتراضية للموظف: الطلبات، الموافقات عند وجود تكليف، المراسلات إذا كانت مفعلة، ومكتبة الوثائق.
+
+### الإدارات والأقسام المختصة
+
+- إدارة الإدارات.
+- تحديد مدير الإدارة.
+- إدارة الأقسام المختصة.
+- ربط القسم المختص بإدارة.
+- تحديد مدير القسم المختص ومختصي التنفيذ.
+- استخدام هذه الروابط في التوجيه ومسارات الموافقات.
+
+### إدارة الطلبات
+
+- أنواع طلبات ديناميكية.
+- إصدارات لأنواع الطلبات.
+- حقول ديناميكية لكل نوع طلب.
+- مسارات موافقات مخصصة.
+- قواعد مرفقات لكل نوع طلب.
+- SLA وأولوية افتراضية.
+- توجيه للقسم المختص.
+- نشر النسخ الجديدة بدون التأثير على الطلبات القائمة.
 
 ### الطلبات
 
-- إنشاء طلب جديد من شاشة الطلبات.
-- دعم أنواع طلبات ثابتة وأنواع طلبات معرفة من شاشة إدارة أنواع الطلبات.
-- دعم الحقول الديناميكية لكل نوع طلب.
-- تحديد أولوية الطلب.
-- إدخال مبرر العمل.
-- توجيه الطلب تلقائياً للقسم المختص.
-- رفع المرفقات عند تفعيل خيار أن نوع الطلب يتطلب مرفقاً.
-- السماح برفع ملفات PDF أو صور فقط.
-- عرض آخر الطلبات وحالتها.
-- منع إرسال طلب من موظف غير مرتبط بمدير مباشر عند الحاجة لذلك.
+- إنشاء طلب جديد من أنواع الطلبات الفعالة فقط.
+- عرض الحقول الديناميكية من النسخة الفعالة.
+- حفظ Snapshot للحقول ومسار الموافقات عند الإرسال.
+- رفع المرفقات حسب قواعد نوع الطلب.
+- إلغاء، إرجاع للتعديل، إعادة إرسال، وإعادة فتح حسب الصلاحيات والإعدادات.
+- PDF للطلب باللغة العربية واتجاه RTL.
 
-### الموافقات وسير العمل
+### الموافقات والتنفيذ
 
-- عرض الطلبات التي تحتاج موافقة أو تنفيذ.
-- عرض بطاقة بيانات الطلب كاملة.
-- عرض مسار الموافقات بشكل مرئي.
-- إظهار اسم من قام بالموافقة أو الرفض أو الإرجاع، مع التاريخ والوقت.
-- دعم قرارات:
-  - موافقة
-  - رفض
-  - إرجاع للتعديل
-- يظهر زر **إرجاع للتعديل** فقط إذا كانت خطوة الموافقة مفعلاً فيها خيار **يسمح بالإرجاع للتعديل**.
-- عند إرجاع الطلب للتعديل تصبح حالة الطلب **معاد للتعديل**.
-- يظهر لصاحب الطلب زر **تعديل وإعادة إرسال**.
-- عند إعادة الإرسال يتم تصفير خطوات الموافقات وإرجاع الطلب إلى أول خطوة في المسار.
-- موظف تقنية المعلومات يرى طلبات القسم المختص به فقط، مع معالجة الحالات التي لا يوجد فيها موظف مخصص للقسم.
+- مركز موافقات وتنفيذ.
+- عرض الطلبات بانتظار موافقتي.
+- عرض طلبات التنفيذ حسب القسم المختص.
+- موافقة، رفض، إرجاع للتعديل، تنفيذ، وإغلاق.
+- إخفاء أزرار القرار عند عدم امتلاك المستخدم صلاحية على المرحلة الحالية.
+- عرض سجل الموافقات مع من قام بالإجراء والتاريخ والملاحظات.
+- استخدام Workflow Snapshot للطلبات القائمة.
 
-### إدارة أنواع الطلبات
+### المراسلات الداخلية
 
-- إضافة وتعديل وتعطيل وحذف أنواع الطلبات.
-- تحديد القسم المختص لكل نوع طلب.
-- تحديد هل نوع الطلب يتطلب مرفقاً.
-- بناء الحقول الديناميكية لكل نوع طلب.
-- بناء مسار موافقات مخصص.
-- تحديد هل خطوة الموافقة تسمح بالرفض.
-- تحديد هل خطوة الموافقة تسمح بالإرجاع للتعديل.
-- ترتيب خطوات الموافقات.
-- معاينة مسار الموافقات.
+- صندوق وارد ومرسل ومؤرشف وغير مقروء.
+- إرسال ورد وأرشفة وقراءة/غير مقروء.
+- ربط المراسلات بالطلبات.
+- تصنيفات السرية.
+- أنواع رسائل قابلة للإدارة من الإعدادات.
+- إعدادات مراسلات تنعكس على شاشة المراسلات والطلبات.
+- محرر نصوص يدعم العربية ويلصق النص كنص نظيف بدون تنسيق خارجي.
 
-### الطباعة والتقارير
+### المراسلات الرسمية
 
-- طباعة الطلب من شاشة الموافقات بصيغة PDF.
-- يحتوي PDF على:
-  - شعار النظام عند توفره.
-  - رقم الطلب.
-  - تاريخ الطباعة حسب التوقيت المحدد في الإعدادات العامة.
-  - اسم المستخدم الذي قام بالطباعة.
-  - مسار الموافقات بشكل دوائر ملوّنة.
-  - مبرر العمل.
-  - بيانات الطلب كاملة.
-- تقارير حسب الفترة.
-- تقارير حسب الموظف.
-- تقارير حسب نوع الطلب.
-- تصدير Excel.
-- تصدير PDF مع دعم العربية.
+- قوالب ترويسة رسمية.
+- معاينة PDF للخطاب الرسمي.
+- توليد PDF رسمي للرسالة.
+- خيار توقيع المستخدم داخل الخطاب الرسمي حسب إعدادات المراسلات.
+- تضمين الرسائل الرسمية في PDF الطلب عند تفعيل الإعداد.
+- حذف فكرة الأختام من النظام.
 
-### الإحصائيات
+### مكتبة الوثائق
 
-- عدد الطلبات المفتوحة.
-- عدد الطلبات بانتظار الموافقة.
-- عدد الطلبات المكتملة.
-- إحصائيات شهرية.
-- الطلبات حسب الإدارة.
-- مؤشرات حسب صلاحيات المستخدم.
+- مكتبة وثائق PDF فقط.
+- تصنيفات وثائق.
+- رفع وعرض وتحميل الوثائق حسب الصلاحيات.
+- إصدارات للوثائق.
+- إقرار بالاطلاع.
+- صلاحيات عرض وتحميل وطباعة وإدارة.
+- سجل وصول وتدقيق.
 
-### الإعدادات العامة
+### التقارير والإحصائيات
 
-- تغيير اسم النظام.
-- تغيير لون الهوية باستخدام HEX.
-- رفع شعار النظام.
-- تحديد توقيت النظام المستخدم في عرض التواريخ والطباعة.
-- إعداد اللغة وحجم الملفات المسموح.
-- عرض الاسم والشعار في شاشة الدخول وداخل النظام.
+- تقارير الطلبات والموافقات والمراسلات والتدقيق.
+- تصدير Excel و PDF.
+- لوحة إحصائيات تشغيلية قابلة للتخصيص بالـ Widgets.
+- مؤشرات حسب صلاحيات المستخدم ونطاقه.
 
-### إعدادات قاعدة البيانات
+### إعدادات النظام
 
-- عرض حالة قاعدة البيانات.
-- إنشاء نسخة احتياطية.
-- تحميل النسخة الاحتياطية.
-- استرداد نسخة احتياطية.
-- معاينة الجداول التي سيتم حذفها قبل إعادة ضبط البيانات.
-- إعادة ضبط بيانات النظام وإعادة إنشاء بيانات البداية.
+- الإعدادات العامة.
+- إعدادات الأمان.
+- إعدادات المرفقات.
+- إعدادات المراسلات.
+- إعدادات الذكاء الاصطناعي.
+- إعدادات قاعدة البيانات.
+- إعدادات الصحة التشغيلية.
+- إعدادات التحديثات.
+- صفحة حول النظام.
 
-### مراقبة صحة النظام والسجلات
+### الصحة التشغيلية وقاعدة البيانات
 
-- فحص حالة النظام.
-- عرض حالة قاعدة البيانات والخدمات.
-- عرض سجلات وأخطاء النظام في بطاقة السجلات.
-- تسجيل العمليات المهمة في Audit Log.
+- فحص صحة النظام.
+- فحص قاعدة البيانات.
+- سجلات الصحة والتنبيهات.
+- نسخ احتياطي واستعادة.
+- سجل عمليات قاعدة البيانات.
+- العمليات الخطرة محمية بإعداد `EnableDangerousDatabaseOperations`.
 
 ## وثائق النظام
 
 - [وثيقة النظام الكاملة](docs/QIB_SERVICE_PORTAL_SYSTEM_DOCUMENTATION.md)
 - [مخطط قاعدة البيانات](docs/database-schema.md)
 - [دليل مجلدات النظام والتثبيت على Windows](docs/WINDOWS_INSTALLATION_AND_STRUCTURE_AR.md)
+- [توثيق ASP.NET Core Backend](docs/ASP_NET_BACKEND_AR.md)
 
 ## هيكل المشروع
 
 ```text
 backend/
   app/
-    api/v1/        واجهات API
+    api/v1/        واجهات FastAPI
     core/          الإعدادات والأمان
     db/            الاتصال بقاعدة البيانات وتهيئة البيانات
     models/        نماذج SQLAlchemy
     schemas/       مخططات Pydantic
     services/      خدمات سير العمل والتدقيق
     utils/         أدوات مساعدة
-  qib_local.db     قاعدة SQLite المحلية
+
+Qib.ServicePortal.Api/
+  Controllers/     Controllers الخاصة بـ ASP.NET Core
+  Application/     DTOs والخدمات والواجهات والتحقق
+  Domain/          الكيانات والأنواع الأساسية
+  Infrastructure/  EF Core والملفات وPDF والمهام
+  Common/          Middleware والصلاحيات والأدوات المشتركة
+  Program.cs
+  docker-compose.yml
 
 frontend/
   src/
     components/    مكونات الواجهة
     pages/         صفحات النظام
-    lib/           الاتصال بالـ API وأدوات الوقت والهوية
+    lib/           الاتصال بالـ API وتطبيع استجابات FastAPI/.NET
 
 docs/
+  assets/
   database-schema.md
 ```
 
-## التشغيل المحلي
+## التشغيل المحلي بالتفصيل
 
-### تشغيل الخلفية
+### FastAPI مع الواجهة
+
+```bash
+bash scripts/run-local.sh
+```
+
+أو يدوياً:
 
 ```bash
 cd backend
 python -m venv .venv
-.venv\Scripts\activate
+source .venv/bin/activate
 pip install -r requirements.txt
 uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-مثال ملف البيئة المحلي:
-
-```env
-DATABASE_URL=sqlite:///./qib_local.db
-SECRET_KEY=local-development-secret
-CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173,http://172.16.23.37:5173,http://172.16.23.37
-SEED_ADMIN_EMAIL=admin@qib.internal-bank.qa
-SEED_ADMIN_PASSWORD=Admin@12345
-```
-
-### تشغيل الواجهة
+ثم:
 
 ```bash
 cd frontend
 npm install
-npm run dev
+VITE_API_BASE_URL=http://127.0.0.1:8000/api/v1 npm run dev -- --port 5173
 ```
 
-مثال ملف البيئة للواجهة:
+مثال ملف بيئة FastAPI:
 
 ```env
-VITE_API_BASE_URL=http://172.16.23.37:8000/api/v1
+DATABASE_URL=sqlite:///./qib_local.db
+SECRET_KEY=local-development-secret
+CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
+SEED_ADMIN_EMAIL=admin@qib.internal-bank.qa
+SEED_ADMIN_PASSWORD=Admin@12345
+```
+
+### .NET API المستقل مع الواجهة
+
+```bash
+bash scripts/start-frontend-dotnet.sh
+```
+
+أو يدوياً:
+
+```bash
+cd Qib.ServicePortal.Api
+docker compose up -d --build
+```
+
+ثم:
+
+```bash
+cd frontend
+npm install
+VITE_API_BASE_URL=http://localhost:8088/api/dotnet/v1 npm run dev -- --mode dotnet --host 0.0.0.0 --port 5174
+```
+
+أهم متغيرات .NET داخل Docker:
+
+```env
+ConnectionStrings__DefaultConnection=Host=qib-dotnet-postgres;Port=5432;Database=qib_service_portal_dotnet;Username=qib_dotnet;Password=qib_dotnet_dev_password
+Jwt__Issuer=Qib.ServicePortal.DotNet
+Jwt__Audience=Qib.ServicePortal
+Jwt__Secret=CHANGE_ME_TO_A_LONG_RANDOM_SECRET_AT_LEAST_32_CHARS
+SeedAdmin__Email=admin@qib.internal-bank.qa
+SeedAdmin__Password=ChangeMe@12345
+Storage__UploadsPath=/data/uploads
+Storage__BackupsPath=/data/backups
+Swagger__Enabled=true
 ```
 
 ## التشغيل عبر Docker
+
+### FastAPI الحالي
 
 ```bash
 docker compose up --build -d
 ```
 
-الخدمات:
+### ASP.NET Core المستقل
 
-- الواجهة: `http://172.16.23.37:5173`
-- الخلفية: `http://172.16.23.37:8000`
-- توثيق API: `http://172.16.23.37:8000/docs`
-- فحص الصحة: `http://172.16.23.37:8000/health`
+```bash
+cd Qib.ServicePortal.Api
+docker compose up -d --build
+```
 
-## الحساب الافتراضي
+إيقاف نسخة .NET:
+
+```bash
+cd Qib.ServicePortal.Api
+docker compose down
+```
+
+متابعة سجلات .NET:
+
+```bash
+cd Qib.ServicePortal.Api
+docker compose logs -f qib-dotnet-api
+```
+
+## الحسابات الافتراضية
+
+### FastAPI
 
 ```text
 Email: admin@qib.internal-bank.qa
 Password: Admin@12345
 ```
 
-يجب تغيير كلمة المرور الافتراضية و `SECRET_KEY` قبل أي تشغيل رسمي.
+### ASP.NET Core
+
+```text
+Email: admin@qib.internal-bank.qa
+Password: ChangeMe@12345
+```
+
+يجب تغيير كلمات المرور الافتراضية قبل أي تشغيل رسمي.
+
+لإعادة ضبط كلمة مرور مدير النظام في نسخة .NET:
+
+```bash
+DOTNET_ADMIN_IDENTIFIER=admin@qib.internal-bank.qa DOTNET_ADMIN_PASSWORD='NewPassword' bash scripts/reset-dotnet-admin-password.sh
+```
 
 ## أهم واجهات API
 
-### المصادقة
+### FastAPI
+
+- Base URL: `http://127.0.0.1:8000/api/v1`
+- Docs: `http://127.0.0.1:8000/docs`
+- Health: `http://127.0.0.1:8000/health`
+
+أمثلة:
 
 - `POST /api/v1/auth/login`
 - `GET /api/v1/auth/me`
-- `POST /api/v1/auth/change-password`
-
-### الطلبات
-
 - `GET /api/v1/requests`
 - `POST /api/v1/requests`
-- `POST /api/v1/requests/dynamic`
-- `GET /api/v1/requests/{request_id}`
-- `PATCH /api/v1/requests/{request_id}`
 - `POST /api/v1/requests/{request_id}/approval`
-- `POST /api/v1/requests/{request_id}/resubmit`
-- `GET /api/v1/requests/{request_id}/print.pdf`
-- `POST /api/v1/requests/{request_id}/comments`
-- `POST /api/v1/requests/{request_id}/attachments`
-- `GET /api/v1/requests/{request_id}/attachments`
-- `GET /api/v1/requests/{request_id}/attachments/{attachment_id}/download`
+- `GET /api/v1/messages/inbox`
+- `GET /api/v1/settings/request-management/overview`
 
-### المستخدمون
+### ASP.NET Core
 
-- `GET /api/v1/users`
-- `POST /api/v1/users`
-- `PUT /api/v1/users/{user_id}`
-- `POST /api/v1/users/{user_id}/disable`
-- `POST /api/v1/users/{user_id}/reset-password`
-- `GET /api/v1/users/import-template`
-- `POST /api/v1/users/import`
-- `GET /api/v1/users/screen-permissions/me`
-- `GET /api/v1/users/{user_id}/screen-permissions`
-- `PUT /api/v1/users/{user_id}/screen-permissions`
+- Base URL: `http://localhost:8088/api/dotnet/v1`
+- Swagger: `http://localhost:8088/swagger/index.html`
+- Health: `http://localhost:8088/api/dotnet/v1/health/live`
 
-### أنواع الطلبات
+أمثلة:
 
-- `GET /api/v1/request-types`
-- `GET /api/v1/request-types/active`
-- `POST /api/v1/request-types`
-- `PUT /api/v1/request-types/{request_type_id}`
-- `DELETE /api/v1/request-types/{request_type_id}`
-- `PATCH /api/v1/request-types/{request_type_id}/status`
-- `GET /api/v1/request-types/{request_type_id}/fields`
-- `POST /api/v1/request-types/{request_type_id}/fields`
-- `GET /api/v1/request-types/{request_type_id}/workflow`
-- `POST /api/v1/request-types/{request_type_id}/workflow/steps`
-- `GET /api/v1/request-types/{request_type_id}/workflow/preview`
-- `GET /api/v1/request-types/{request_type_id}/form-schema`
-
-### الإعدادات
-
-- `GET /api/v1/settings/public-profile`
-- `GET /api/v1/settings/general-profile`
-- `PUT /api/v1/settings/general-profile`
-- `POST /api/v1/settings/general-profile/logo`
-- `GET /api/v1/settings/security`
-- `PUT /api/v1/settings/security`
-- `GET /api/v1/settings/database/status`
-- `GET /api/v1/settings/database/reset-preview`
-- `GET /api/v1/settings/database/backup`
-- `POST /api/v1/settings/database/restore`
-- `POST /api/v1/settings/database/reset`
-- `GET /api/v1/settings/specialized-sections`
-- `POST /api/v1/settings/specialized-sections`
-- `PUT /api/v1/settings/specialized-sections/{section_id}`
-- `DELETE /api/v1/settings/specialized-sections/{section_id}`
-
-### الإحصائيات والتقارير
-
-- `GET /api/v1/dashboard/stats`
-- `GET /api/v1/reports/requests.xlsx`
-- `GET /api/v1/reports/requests.pdf`
+- `POST /api/dotnet/v1/auth/login`
+- `POST /api/dotnet/v1/auth/refresh-token`
+- `GET /api/dotnet/v1/auth/me`
+- `GET /api/dotnet/v1/users`
+- `GET /api/dotnet/v1/request-types`
+- `GET /api/dotnet/v1/requests`
+- `GET /api/dotnet/v1/approvals`
+- `GET /api/dotnet/v1/messages/inbox`
+- `GET /api/dotnet/v1/documents/categories`
+- `GET /api/dotnet/v1/reports/summary`
 
 ## أوامر مفيدة
 
@@ -346,48 +475,50 @@ cd frontend
 npm run build
 ```
 
-فحص الخلفية:
+فحص FastAPI:
 
 ```bash
 cd backend
-.venv\Scripts\python.exe -m compileall app
+python -m compileall app
 ```
 
-تشغيل Docker:
+فحص .NET:
 
 ```bash
-docker compose up --build -d
+cd Qib.ServicePortal.Api
+dotnet build
 ```
 
-إيقاف Docker:
+تشغيل اختبارات السيناريوهات:
 
 ```bash
-docker compose down
+bash scripts/run-scenario-tests.sh
 ```
 
-عرض السجلات:
+عرض حالة Docker لنسخة .NET:
 
 ```bash
-docker compose logs -f backend
-docker compose logs -f frontend
+cd Qib.ServicePortal.Api
+docker compose ps
 ```
 
-## ملاحظات النشر
+## ملاحظات مهمة قبل الإنتاج
 
-- استخدم PostgreSQL بدلاً من SQLite في البيئة الرسمية.
-- غيّر `SECRET_KEY`.
-- غيّر بيانات الحساب الافتراضي.
-- اضبط `CORS_ORIGINS` حسب عنوان الواجهة.
-- اضبط `VITE_API_BASE_URL` حسب عنوان الخلفية.
+- نسخة .NET تعمل بالتوازي ولا يجب توصيلها بقاعدة الإنتاج الحالية قبل خطة ترحيل واختبار كاملة.
+- غيّر كل القيم الافتراضية: كلمات المرور، `SECRET_KEY`، و`Jwt__Secret`.
+- اضبط `CORS_ORIGINS` أو `Cors__Origins` حسب عنوان الواجهة الرسمي.
 - فعّل HTTPS عبر Nginx أو Reverse Proxy.
-- احتفظ بنسخ احتياطية من قاعدة البيانات ومجلد المرفقات.
-- لا تفعّل إعادة ضبط قاعدة البيانات إلا للمستخدمين المخولين.
+- اضبط مسارات المرفقات والنسخ الاحتياطية على تخزين دائم.
+- احتفظ بنسخ احتياطية مجدولة من قاعدة البيانات والمرفقات.
+- لا تفعّل `EnableDangerousDatabaseOperations` إلا بعد أخذ نسخة احتياطية ومراجعة خطة التنفيذ.
+- راجع صلاحيات الشاشات والصلاحيات الإجرائية قبل فتح النظام للمستخدمين.
+- اختبر سيناريوهات الطلبات والموافقات والمراسلات والوثائق والتقارير قبل الإنتاج.
 
 ## ملاحظات أمنية
 
-- لا تستخدم كلمة مرور افتراضية في الإنتاج.
-- لا تستخدم `SECRET_KEY` الافتراضي.
-- راجع صلاحيات الشاشات لكل مستخدم.
-- لا تمنح صلاحيات إدارة النظام إلا للمخولين.
-- افحص الملفات المرفوعة بآلية مكافحة فيروسات عند النشر الرسمي.
-- راقب سجلات التدقيق وسجلات النظام بشكل دوري.
+- لا تستخدم كلمات مرور افتراضية في الإنتاج.
+- لا تمنح صلاحيات مدير النظام إلا للمخولين.
+- لا تعرض مسارات الملفات الحقيقية للمستخدمين.
+- اجعل تحميل الملفات عبر API محمية فقط.
+- استخدم فحص فيروسات فعلي للملفات في بيئة الإنتاج.
+- راقب سجلات التدقيق وسجلات الصحة التشغيلية بشكل دوري.
