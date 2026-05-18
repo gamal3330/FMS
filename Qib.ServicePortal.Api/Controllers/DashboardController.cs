@@ -1,4 +1,6 @@
 using System.Linq;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -13,9 +15,184 @@ namespace Qib.ServicePortal.Api.Controllers;
 [ApiController]
 [Route("api/dotnet/v1/dashboard")]
 [Authorize(Policy = "Permission:dashboard.view")]
-public class DashboardController(ServicePortalDbContext db, ICurrentUserService currentUser, IPermissionService permissionService) : ControllerBase
+public class DashboardController(
+    ServicePortalDbContext db,
+    ICurrentUserService currentUser,
+    IPermissionService permissionService,
+    IAuditService auditService) : ControllerBase
 {
     private static readonly HashSet<string> FinalStatuses = ["completed", "closed", "rejected", "cancelled"];
+    private static readonly HashSet<string> DefaultEnabledWidgets =
+    [
+        "open_requests",
+        "pending_approvals",
+        "completed_requests",
+        "message_summary",
+        "attention_items",
+        "requests_by_status",
+        "requests_by_type",
+        "recent_messages",
+        "recent_requests",
+        "monthly_statistics",
+        "requests_by_department"
+    ];
+
+    private static readonly IReadOnlyList<DashboardWidgetDefinition> WidgetCatalog =
+    [
+        new("open_requests", "الطلبات المفتوحة", "طلبات قيد المعالجة ضمن نطاق صلاحياتك.", "metric", "small", 10, "file-clock"),
+        new("pending_approvals", "بانتظار الموافقة", "خطوات اعتماد معلقة تحتاج إجراء.", "metric", "small", 20, "clock"),
+        new("completed_requests", "طلبات مكتملة", "طلبات تم إغلاقها أو إكمالها.", "metric", "small", 30, "check-circle"),
+        new("delayed_requests", "طلبات متأخرة", "طلبات تجاوزت وقت الإنجاز المتوقع.", "metric", "small", 40, "alert-triangle"),
+        new("message_summary", "ملخص المراسلات", "الوارد والمرسل والمسودات والرسائل المرتبطة بالطلبات.", "summary", "large", 50, "messages"),
+        new("attention_items", "تحتاج انتباهك", "أهم المؤشرات والتنبيهات الحالية.", "list", "medium", 60, "alert-triangle"),
+        new("requests_by_status", "الطلبات حسب الحالة", "توزيع الطلبات حسب حالتها الحالية.", "chart", "medium", 70, "bar-chart"),
+        new("requests_by_type", "أنواع الطلبات الأكثر استخداماً", "أعلى أنواع الطلبات إنشاءً.", "chart", "medium", 80, "trending-up"),
+        new("recent_messages", "آخر الرسائل الواردة", "آخر رسائل وصلت للمستخدم الحالي.", "list", "medium", 90, "inbox"),
+        new("recent_requests", "آخر نشاطات الطلبات", "آخر الطلبات التي تم تحديثها.", "list", "medium", 100, "file-clock"),
+        new("monthly_statistics", "الإحصائيات الشهرية", "حركة إنشاء الطلبات حسب الشهر.", "chart", "medium", 110, "bar-chart"),
+        new("requests_by_department", "الطلبات حسب الإدارة", "توزيع الطلبات حسب الإدارات.", "chart", "medium", 120, "building"),
+        new("messages_by_type", "تصنيفات المراسلات", "توزيع الرسائل حسب التصنيف.", "chart", "medium", 130, "mail"),
+        new("it_staff_statistics", "إحصائية معالجة الطلبات", "أداء معالجة وتنفيذ الطلبات حسب الموظف.", "table", "large", 140, "users")
+    ];
+
+    [HttpGet("widgets/catalog")]
+    public async Task<ActionResult<object>> GetWidgetCatalog(CancellationToken cancellationToken)
+    {
+        var actor = await LoadActorAsync(cancellationToken);
+        var canSeeAllRequests = await permissionService.HasPermissionAsync(actor.Id, "requests.manage", cancellationToken);
+        var widgets = AvailableWidgetCatalog(canSeeAllRequests)
+            .Select(x => MapWidget(x, saved: null, hasSavedLayout: false))
+            .ToList();
+
+        return Ok(new { widgets });
+    }
+
+    [HttpGet("widgets/me")]
+    public async Task<ActionResult<object>> GetMyWidgets(CancellationToken cancellationToken)
+    {
+        var actor = await LoadActorAsync(cancellationToken);
+        var canSeeAllRequests = await permissionService.HasPermissionAsync(actor.Id, "requests.manage", cancellationToken);
+        var saved = await db.UserDashboardWidgets
+            .AsNoTracking()
+            .Where(x => x.UserId == actor.Id)
+            .ToListAsync(cancellationToken);
+        var savedByCode = saved.ToDictionary(x => x.WidgetCode, StringComparer.OrdinalIgnoreCase);
+        var hasSavedLayout = saved.Count > 0;
+
+        var widgets = AvailableWidgetCatalog(canSeeAllRequests)
+            .Select(x => MapWidget(x, savedByCode.GetValueOrDefault(x.Code), hasSavedLayout))
+            .OrderBy(x => x.SortOrder)
+            .ToList();
+
+        return Ok(new { widgets });
+    }
+
+    [HttpPut("widgets/me/layout")]
+    public async Task<ActionResult<object>> SaveMyWidgets([FromBody] DashboardLayoutRequest request, CancellationToken cancellationToken)
+    {
+        var actor = await LoadActorAsync(cancellationToken);
+        var canSeeAllRequests = await permissionService.HasPermissionAsync(actor.Id, "requests.manage", cancellationToken);
+        var allowedCodes = AvailableWidgetCatalog(canSeeAllRequests).Select(x => x.Code).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var items = request.Widgets
+            .Where(x => !string.IsNullOrWhiteSpace(x.Code) && allowedCodes.Contains(x.Code))
+            .GroupBy(x => x.Code.Trim(), StringComparer.OrdinalIgnoreCase)
+            .Select(x => x.Last())
+            .ToList();
+
+        var existing = await db.UserDashboardWidgets
+            .Where(x => x.UserId == actor.Id)
+            .ToListAsync(cancellationToken);
+        var existingByCode = existing.ToDictionary(x => x.WidgetCode, StringComparer.OrdinalIgnoreCase);
+
+        foreach (var item in items)
+        {
+            var widgetCode = item.Code.Trim();
+            if (!existingByCode.TryGetValue(widgetCode, out var widget))
+            {
+                widget = new UserDashboardWidget
+                {
+                    UserId = actor.Id,
+                    WidgetCode = widgetCode
+                };
+                db.UserDashboardWidgets.Add(widget);
+            }
+
+            widget.IsEnabled = item.Enabled;
+            widget.SortOrder = item.SortOrder <= 0 ? 100 : item.SortOrder;
+            widget.Size = NormalizeWidgetSize(item.Size);
+            widget.SettingsJson = item.Settings.HasValue ? item.Settings.Value.GetRawText() : widget.SettingsJson;
+        }
+
+        await db.SaveChangesAsync(cancellationToken);
+        await auditService.LogAsync(
+            "dashboard_widgets_updated",
+            "dashboard",
+            actor.Id.ToString(),
+            actor.Id,
+            newValue: new { widgets = items.Select(x => new { x.Code, x.Enabled, x.SortOrder, size = NormalizeWidgetSize(x.Size) }) },
+            cancellationToken: cancellationToken);
+
+        return await GetMyWidgets(cancellationToken);
+    }
+
+    [HttpPost("widgets/me")]
+    public async Task<ActionResult<object>> EnableWidget([FromBody] DashboardWidgetToggleRequest request, CancellationToken cancellationToken)
+    {
+        var actor = await LoadActorAsync(cancellationToken);
+        var canSeeAllRequests = await permissionService.HasPermissionAsync(actor.Id, "requests.manage", cancellationToken);
+        var definition = AvailableWidgetCatalog(canSeeAllRequests).FirstOrDefault(x => x.Code.Equals(request.Code, StringComparison.OrdinalIgnoreCase));
+        if (definition is null)
+        {
+            return NotFound(new { message = "الـ Widget غير متاح لهذا المستخدم." });
+        }
+
+        var widget = await db.UserDashboardWidgets.FirstOrDefaultAsync(
+            x => x.UserId == actor.Id && x.WidgetCode == definition.Code,
+            cancellationToken);
+        if (widget is null)
+        {
+            widget = new UserDashboardWidget
+            {
+                UserId = actor.Id,
+                WidgetCode = definition.Code,
+                SortOrder = request.SortOrder ?? definition.SortOrder,
+                Size = NormalizeWidgetSize(request.Size ?? definition.DefaultSize)
+            };
+            db.UserDashboardWidgets.Add(widget);
+        }
+
+        widget.IsEnabled = true;
+        await db.SaveChangesAsync(cancellationToken);
+        return await GetMyWidgets(cancellationToken);
+    }
+
+    [HttpDelete("widgets/me/{code}")]
+    public async Task<ActionResult<object>> DisableWidget(string code, CancellationToken cancellationToken)
+    {
+        var actor = await LoadActorAsync(cancellationToken);
+        var widget = await db.UserDashboardWidgets.FirstOrDefaultAsync(
+            x => x.UserId == actor.Id && x.WidgetCode == code,
+            cancellationToken);
+        if (widget is null)
+        {
+            widget = new UserDashboardWidget
+            {
+                UserId = actor.Id,
+                WidgetCode = code,
+                IsEnabled = false,
+                SortOrder = 999,
+                Size = "medium"
+            };
+            db.UserDashboardWidgets.Add(widget);
+        }
+        else
+        {
+            widget.IsEnabled = false;
+        }
+
+        await db.SaveChangesAsync(cancellationToken);
+        return await GetMyWidgets(cancellationToken);
+    }
 
     [HttpGet("stats")]
     public async Task<ActionResult<object>> GetStats(CancellationToken cancellationToken)
@@ -237,6 +414,69 @@ public class DashboardController(ServicePortalDbContext db, ICurrentUserService 
         "reopened" => "معاد فتحه",
         _ => status
     };
+
+    private static IReadOnlyList<DashboardWidgetDefinition> AvailableWidgetCatalog(bool canSeeAllRequests) =>
+        WidgetCatalog
+            .Where(x => x.Code != "it_staff_statistics" || canSeeAllRequests)
+            .ToList();
+
+    private static DashboardWidgetResponse MapWidget(DashboardWidgetDefinition definition, UserDashboardWidget? saved, bool hasSavedLayout)
+    {
+        var isEnabled = saved?.IsEnabled ?? (!hasSavedLayout && DefaultEnabledWidgets.Contains(definition.Code));
+        return new DashboardWidgetResponse(
+            definition.Code,
+            definition.Title,
+            definition.Description,
+            definition.Type,
+            definition.Icon,
+            isEnabled,
+            saved?.SortOrder ?? definition.SortOrder,
+            NormalizeWidgetSize(saved?.Size ?? definition.DefaultSize),
+            definition.DefaultSize);
+    }
+
+    private static string NormalizeWidgetSize(string? size) =>
+        size?.Trim().ToLowerInvariant() switch
+        {
+            "small" => "small",
+            "large" => "large",
+            _ => "medium"
+        };
+
+    private sealed record DashboardWidgetDefinition(
+        string Code,
+        string Title,
+        string Description,
+        string Type,
+        string DefaultSize,
+        int SortOrder,
+        string Icon);
+
+    private sealed record DashboardWidgetResponse(
+        [property: JsonPropertyName("code")] string Code,
+        [property: JsonPropertyName("title")] string Title,
+        [property: JsonPropertyName("description")] string Description,
+        [property: JsonPropertyName("type")] string Type,
+        [property: JsonPropertyName("icon")] string Icon,
+        [property: JsonPropertyName("enabled")] bool Enabled,
+        [property: JsonPropertyName("sort_order")] int SortOrder,
+        [property: JsonPropertyName("size")] string Size,
+        [property: JsonPropertyName("default_size")] string DefaultSize);
+
+    public sealed record DashboardLayoutRequest(
+        [property: JsonPropertyName("widgets")] IReadOnlyCollection<DashboardWidgetLayoutItem> Widgets);
+
+    public sealed record DashboardWidgetLayoutItem(
+        [property: JsonPropertyName("code")] string Code,
+        [property: JsonPropertyName("enabled")] bool Enabled,
+        [property: JsonPropertyName("sort_order")] int SortOrder,
+        [property: JsonPropertyName("size")] string? Size,
+        [property: JsonPropertyName("settings")] JsonElement? Settings);
+
+    public sealed record DashboardWidgetToggleRequest(
+        [property: JsonPropertyName("code")] string Code,
+        [property: JsonPropertyName("sort_order")] int? SortOrder,
+        [property: JsonPropertyName("size")] string? Size);
 
     private sealed class MessageStats
     {

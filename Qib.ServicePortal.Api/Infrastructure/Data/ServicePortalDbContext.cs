@@ -83,6 +83,7 @@ public class ServicePortalDbContext(DbContextOptions<ServicePortalDbContext> opt
     public DbSet<MessageAutoRule> MessageAutoRules => Set<MessageAutoRule>();
     public DbSet<UserSignature> UserSignatures => Set<UserSignature>();
     public DbSet<RequestTypeDocument> RequestTypeDocuments => Set<RequestTypeDocument>();
+    public DbSet<UserDashboardWidget> UserDashboardWidgets => Set<UserDashboardWidget>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -819,6 +820,16 @@ public class ServicePortalDbContext(DbContextOptions<ServicePortalDbContext> opt
             entity.HasIndex(x => new { x.RequestTypeId, x.DocumentId }).IsUnique();
             entity.HasOne(x => x.RequestType).WithMany().HasForeignKey(x => x.RequestTypeId).OnDelete(DeleteBehavior.Cascade);
             entity.HasOne(x => x.Document).WithMany().HasForeignKey(x => x.DocumentId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<UserDashboardWidget>(entity =>
+        {
+            entity.ToTable("user_dashboard_widgets");
+            entity.HasIndex(x => new { x.UserId, x.WidgetCode }).IsUnique();
+            entity.Property(x => x.WidgetCode).HasMaxLength(120);
+            entity.Property(x => x.Size).HasMaxLength(30);
+            entity.Property(x => x.SettingsJson).HasColumnType("jsonb");
+            entity.HasOne(x => x.User).WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
         });
     }
 
