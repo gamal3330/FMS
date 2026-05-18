@@ -1,0 +1,137 @@
+<svg width="1600" height="720" viewBox="0 0 1600 720" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">QIB Service Portal Hero</title>
+  <desc id="desc">Professional banking service portal illustration showing requests, approvals, messaging, documents, reports, and security modules.</desc>
+  <defs>
+    <linearGradient id="bg" x1="80" y1="60" x2="1460" y2="700" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#061A12"/>
+      <stop offset="0.46" stop-color="#0A2B1D"/>
+      <stop offset="1" stop-color="#0D3A24"/>
+    </linearGradient>
+    <linearGradient id="panel" x1="280" y1="106" x2="1274" y2="626" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFFFF" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0.06"/>
+    </linearGradient>
+    <linearGradient id="lime" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#B8F05E"/>
+      <stop offset="1" stop-color="#42C77A"/>
+    </linearGradient>
+    <filter id="softShadow" x="-20%" y="-20%" width="140%" height="140%" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="22" stdDeviation="24" flood-color="#000000" flood-opacity="0.24"/>
+    </filter>
+    <filter id="glow" x="-60%" y="-60%" width="220%" height="220%" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="18" result="blur"/>
+      <feColorMatrix in="blur" type="matrix" values="0 0 0 0 0.45 0 0 0 0 0.95 0 0 0 0 0.62 0 0 0 0.38 0"/>
+      <feBlend in2="SourceGraphic" mode="screen"/>
+    </filter>
+    <pattern id="grid" width="44" height="44" patternUnits="userSpaceOnUse">
+      <path d="M44 0H0V44" stroke="#A7F3D0" stroke-opacity="0.08" stroke-width="1"/>
+    </pattern>
+  </defs>
+
+  <rect width="1600" height="720" rx="34" fill="url(#bg)"/>
+  <rect width="1600" height="720" rx="34" fill="url(#grid)"/>
+  <circle cx="1340" cy="118" r="220" fill="#7DF3A5" opacity="0.08"/>
+  <circle cx="214" cy="610" r="260" fill="#B8F05E" opacity="0.08"/>
+  <path d="M88 594C254 482 374 513 524 390C692 252 863 234 1020 300C1193 373 1290 282 1514 142" stroke="#9AF0BD" stroke-opacity="0.18" stroke-width="3"/>
+  <path d="M122 190C290 238 402 186 558 246C720 309 862 208 1015 170C1198 125 1340 176 1480 252" stroke="#B8F05E" stroke-opacity="0.14" stroke-width="2"/>
+
+  <g filter="url(#softShadow)">
+    <rect x="180" y="92" width="1240" height="536" rx="30" fill="url(#panel)" stroke="#D8FBE5" stroke-opacity="0.22"/>
+    <rect x="214" y="128" width="1172" height="72" rx="22" fill="#F8FFF9" fill-opacity="0.12" stroke="#EFFFF4" stroke-opacity="0.18"/>
+    <circle cx="254" cy="164" r="10" fill="#B8F05E"/>
+    <circle cx="288" cy="164" r="10" fill="#86EFAC"/>
+    <circle cx="322" cy="164" r="10" fill="#E8FFF0" fill-opacity="0.56"/>
+
+    <g transform="translate(920 145)">
+      <text x="420" y="18" text-anchor="end" fill="#F7FFF9" font-family="Tajawal, Cairo, Segoe UI, Arial, sans-serif" font-size="28" font-weight="900">بوابة خدمات البنك</text>
+      <text x="420" y="48" text-anchor="end" fill="#B7C7BE" font-family="Tajawal, Cairo, Segoe UI, Arial, sans-serif" font-size="16" font-weight="700">طلبات، موافقات، مراسلات، وثائق، وتقارير في منصة واحدة</text>
+    </g>
+
+    <g transform="translate(230 234)">
+      <rect width="322" height="314" rx="22" fill="#081912" stroke="#9AF0BD" stroke-opacity="0.18"/>
+      <text x="282" y="44" text-anchor="end" fill="#F7FFF9" font-family="Tajawal, Cairo, Segoe UI, Arial, sans-serif" font-size="24" font-weight="900">مركز الطلبات</text>
+      <text x="282" y="74" text-anchor="end" fill="#A7B8AF" font-family="Tajawal, Cairo, Segoe UI, Arial, sans-serif" font-size="15" font-weight="700">نماذج ديناميكية ومسارات اعتماد</text>
+
+      <rect x="28" y="104" width="266" height="58" rx="15" fill="#FFFFFF" fill-opacity="0.08"/>
+      <rect x="232" y="122" width="34" height="22" rx="11" fill="url(#lime)"/>
+      <text x="208" y="137" text-anchor="end" fill="#ECFFF2" font-family="Tajawal, Cairo, Segoe UI, Arial, sans-serif" font-size="14" font-weight="800">طلب جديد</text>
+      <path d="M52 132h126" stroke="#A7F3D0" stroke-opacity="0.38" stroke-width="8" stroke-linecap="round"/>
+
+      <rect x="28" y="180" width="266" height="58" rx="15" fill="#FFFFFF" fill-opacity="0.08"/>
+      <rect x="225" y="198" width="41" height="22" rx="11" fill="#FACC15" fill-opacity="0.86"/>
+      <text x="204" y="213" text-anchor="end" fill="#ECFFF2" font-family="Tajawal, Cairo, Segoe UI, Arial, sans-serif" font-size="14" font-weight="800">قيد الموافقة</text>
+      <path d="M52 208h104" stroke="#A7F3D0" stroke-opacity="0.28" stroke-width="8" stroke-linecap="round"/>
+
+      <rect x="28" y="256" width="266" height="30" rx="15" fill="#FFFFFF" fill-opacity="0.08"/>
+      <path d="M52 271h214" stroke="#B8F05E" stroke-opacity="0.75" stroke-width="8" stroke-linecap="round"/>
+    </g>
+
+    <g transform="translate(594 234)">
+      <rect width="472" height="314" rx="22" fill="#0A1F16" stroke="#9AF0BD" stroke-opacity="0.2"/>
+      <text x="432" y="44" text-anchor="end" fill="#F7FFF9" font-family="Tajawal, Cairo, Segoe UI, Arial, sans-serif" font-size="24" font-weight="900">مسار الموافقات</text>
+      <text x="432" y="74" text-anchor="end" fill="#A7B8AF" font-family="Tajawal, Cairo, Segoe UI, Arial, sans-serif" font-size="15" font-weight="700">لقطات محفوظة لكل طلب</text>
+
+      <path d="M76 166H398" stroke="#D8FBE5" stroke-opacity="0.22" stroke-width="8" stroke-linecap="round"/>
+      <path d="M76 166H238" stroke="url(#lime)" stroke-width="8" stroke-linecap="round"/>
+      <g filter="url(#glow)">
+        <circle cx="76" cy="166" r="32" fill="#0B2C1D" stroke="#7DF3A5" stroke-width="4"/>
+        <path d="M63 166l9 9 18-20" stroke="#A7F3D0" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+      </g>
+      <circle cx="238" cy="166" r="32" fill="#1C1F12" stroke="#FACC15" stroke-width="4"/>
+      <path d="M238 151v18l14 8" stroke="#FACC15" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+      <circle cx="398" cy="166" r="32" fill="#0B2C1D" stroke="#7DF3A5" stroke-opacity="0.56" stroke-width="4"/>
+
+      <text x="76" y="226" text-anchor="middle" fill="#DFFFEA" font-family="Tajawal, Cairo, Segoe UI, Arial, sans-serif" font-size="15" font-weight="900">مدير مباشر</text>
+      <text x="238" y="226" text-anchor="middle" fill="#FACC15" font-family="Tajawal, Cairo, Segoe UI, Arial, sans-serif" font-size="15" font-weight="900">مدير الإدارة</text>
+      <text x="398" y="226" text-anchor="middle" fill="#DFFFEA" font-family="Tajawal, Cairo, Segoe UI, Arial, sans-serif" font-size="15" font-weight="900">مختص التنفيذ</text>
+    </g>
+
+    <g transform="translate(1106 234)">
+      <rect width="256" height="314" rx="22" fill="#081912" stroke="#9AF0BD" stroke-opacity="0.18"/>
+      <text x="218" y="44" text-anchor="end" fill="#F7FFF9" font-family="Tajawal, Cairo, Segoe UI, Arial, sans-serif" font-size="24" font-weight="900">مراسلات ووثائق</text>
+      <text x="218" y="74" text-anchor="end" fill="#A7B8AF" font-family="Tajawal, Cairo, Segoe UI, Arial, sans-serif" font-size="15" font-weight="700">PDF، تعاميم، وسياسات</text>
+
+      <rect x="30" y="104" width="196" height="54" rx="15" fill="#FFFFFF" fill-opacity="0.08"/>
+      <path d="M58 130h72M58 144h116" stroke="#D8FBE5" stroke-opacity="0.62" stroke-width="6" stroke-linecap="round"/>
+      <path d="M186 122l18 12-18 12v-24z" fill="#9AF0BD"/>
+
+      <rect x="30" y="178" width="196" height="54" rx="15" fill="#FFFFFF" fill-opacity="0.08"/>
+      <path d="M70 195h82l22 22H70z" fill="#D8FBE5" fill-opacity="0.16" stroke="#9AF0BD" stroke-opacity="0.6"/>
+      <path d="M70 195v34h104v-12" stroke="#9AF0BD" stroke-opacity="0.6" stroke-width="3"/>
+
+      <rect x="30" y="252" width="196" height="30" rx="15" fill="#FFFFFF" fill-opacity="0.08"/>
+      <path d="M58 267h40M116 267h82" stroke="#B8F05E" stroke-opacity="0.68" stroke-width="8" stroke-linecap="round"/>
+    </g>
+
+    <g transform="translate(258 574)">
+      <rect width="1084" height="34" rx="17" fill="#FFFFFF" fill-opacity="0.08"/>
+      <g transform="translate(948 8)">
+        <circle cx="9" cy="9" r="9" fill="#9AF0BD"/>
+        <path d="M5 9l3 3 6-7" stroke="#082016" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+        <text x="-14" y="14" text-anchor="end" fill="#D8FBE5" font-family="Tajawal, Cairo, Segoe UI, Arial, sans-serif" font-size="13" font-weight="800">صلاحيات</text>
+      </g>
+      <g transform="translate(752 8)">
+        <circle cx="9" cy="9" r="9" fill="#9AF0BD"/>
+        <path d="M5 9l3 3 6-7" stroke="#082016" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+        <text x="-14" y="14" text-anchor="end" fill="#D8FBE5" font-family="Tajawal, Cairo, Segoe UI, Arial, sans-serif" font-size="13" font-weight="800">تدقيق</text>
+      </g>
+      <g transform="translate(556 8)">
+        <circle cx="9" cy="9" r="9" fill="#9AF0BD"/>
+        <path d="M5 9l3 3 6-7" stroke="#082016" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+        <text x="-14" y="14" text-anchor="end" fill="#D8FBE5" font-family="Tajawal, Cairo, Segoe UI, Arial, sans-serif" font-size="13" font-weight="800">تقارير</text>
+      </g>
+      <g transform="translate(360 8)">
+        <circle cx="9" cy="9" r="9" fill="#9AF0BD"/>
+        <path d="M5 9l3 3 6-7" stroke="#082016" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+        <text x="-14" y="14" text-anchor="end" fill="#D8FBE5" font-family="Tajawal, Cairo, Segoe UI, Arial, sans-serif" font-size="13" font-weight="800">مرفقات آمنة</text>
+      </g>
+    </g>
+  </g>
+
+  <g transform="translate(118 104)">
+    <rect width="186" height="56" rx="18" fill="#FFFFFF" fill-opacity="0.1" stroke="#D8FBE5" stroke-opacity="0.22"/>
+    <path d="M38 29h36M38 42h78M38 16h104" stroke="#D8FBE5" stroke-opacity="0.6" stroke-width="6" stroke-linecap="round"/>
+  </g>
+
+  <text x="1406" y="666" text-anchor="end" fill="#D8FBE5" fill-opacity="0.72" font-family="Tajawal, Cairo, Segoe UI, Arial, sans-serif" font-size="18" font-weight="800">QIB Service Portal</text>
+</svg>
