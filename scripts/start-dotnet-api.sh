@@ -31,7 +31,7 @@ for _ in $(seq 1 "${DOTNET_WAIT_SECONDS:-90}"); do
   if curl -fsS "$HEALTH_URL" >/dev/null 2>&1; then
     echo "تم تشغيل .NET API بنجاح."
     echo "Health: $HEALTH_URL"
-    echo "Swagger: $API_URL/swagger/index.html"
+    echo "Swagger: $API_URL/api/dotnet/v1/docs"
     echo "PostgreSQL المستقل: localhost:55432"
     echo
     echo "بيانات المدير الافتراضي:"
