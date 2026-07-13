@@ -179,7 +179,8 @@ async function readLoginError(response: Response) {
   }
   try {
     const data = await response.json();
-    if (typeof data.detail === "string") return data.detail;
+    const detail = data?.detail ?? data?.Detail;
+    if (typeof detail === "string" && detail.trim()) return detail;
   } catch {
     const text = await response.text().catch(() => "");
     if (text.toLowerCase().includes("bad gateway")) {
