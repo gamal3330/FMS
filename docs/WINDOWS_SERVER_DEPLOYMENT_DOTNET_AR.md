@@ -238,6 +238,54 @@ C:\QIB\ServicePortal\api\appsettings.Production.json
 - لا تضع أسرار الإنتاج داخل Git.
 - `EnableDangerousDatabaseOperations` يبقى `false` إلا لحالة صيانة مخططة وبعد نسخة احتياطية.
 
+### استعادة كلمة مرور مدير النظام عند نسيانها
+
+يحتوي المشروع على سكربت Windows مخصص يعيد تعيين كلمة المرور مباشرة في قاعدة .NET المستقلة، ويفك قفل الحساب، ويلغي الجلسات القديمة، ويسجل العملية في سجل التدقيق:
+
+```text
+deploy\windows\reset-dotnet-admin-password.ps1
+```
+
+شغله من **جذر المشروع** في PowerShell:
+
+```powershell
+Set-Location C:\QIB\Source\FMS
+
+.\deploy\windows\reset-dotnet-admin-password.ps1 `
+  -Identifier "admin@qib.internal-bank.qa"
+```
+
+سيطلب السكربت بصورة مخفية:
+
+1. كلمة مرور مستخدم PostgreSQL `qib_dotnet`.
+2. كلمة المرور الجديدة لمدير النظام.
+3. تأكيد كلمة المرور الجديدة.
+
+إذا كنت داخل مجلد `scripts` فاستخدم المسار التالي:
+
+```powershell
+..\deploy\windows\reset-dotnet-admin-password.ps1 `
+  -Identifier "admin@qib.internal-bank.qa"
+```
+
+يمكن استخدام اسم المستخدم أو الرقم الوظيفي بدلاً من البريد. افتراضياً يُطلب من مدير النظام تغيير كلمة المرور بعد أول دخول، ويمكن تعطيل ذلك في حالة الطوارئ:
+
+```powershell
+.\deploy\windows\reset-dotnet-admin-password.ps1 `
+  -Identifier "admin@qib.internal-bank.qa" `
+  -ForcePasswordChange:$false
+```
+
+إذا لم يعثر السكربت تلقائياً على PostgreSQL 18، مرر مسار `psql.exe`:
+
+```powershell
+.\deploy\windows\reset-dotnet-admin-password.ps1 `
+  -Identifier "admin@qib.internal-bank.qa" `
+  -PsqlPath "C:\Program Files\PostgreSQL\18\bin\psql.exe"
+```
+
+> لا تمرر كلمات المرور كنص صريح في سطر الأوامر. السكربت يطلبها عبر `SecureString` ولا يطبعها أو يطبع قيمة التشفير.
+
 ---
 
 ## 9. ملف web.config للـ API
