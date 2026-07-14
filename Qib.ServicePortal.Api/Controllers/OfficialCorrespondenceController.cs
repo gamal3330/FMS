@@ -88,7 +88,10 @@ public class OfficialCorrespondenceController(
         item.NameAr = request.NameAr.Trim();
         item.NameEn = request.NameEn?.Trim();
         item.Code = code;
-        item.LogoPath = request.LogoPath?.Trim();
+        if (!string.IsNullOrWhiteSpace(request.LogoPath))
+        {
+            item.LogoPath = request.LogoPath.Trim();
+        }
         item.HeaderHtml = request.HeaderHtml ?? string.Empty;
         item.FooterHtml = request.FooterHtml ?? string.Empty;
         item.PrimaryColor = request.PrimaryColor.Trim();
@@ -160,7 +163,17 @@ public class OfficialCorrespondenceController(
             throw new ApiException("يسمح برفع شعار بصيغة PNG أو JPG فقط");
         }
 
-        var uploadsRoot = configuration["Storage:UploadsPath"] ?? "/data/uploads";
+        if (file.Length > 5 * 1024 * 1024)
+        {
+            throw new ApiException("حجم شعار القالب يتجاوز 5 MB");
+        }
+
+        if (!await LooksLikeAllowedImageAsync(file, extension, cancellationToken))
+        {
+            throw new ApiException("ملف الشعار ليس صورة PNG/JPG صالحة");
+        }
+
+        var uploadsRoot = GetUploadsRoot();
         var directory = Path.Combine(uploadsRoot, "official-letterheads", id.ToString());
         Directory.CreateDirectory(directory);
         var storedName = $"logo-{Guid.NewGuid():N}.{extension}";
@@ -170,7 +183,9 @@ public class OfficialCorrespondenceController(
             await file.CopyToAsync(stream, cancellationToken);
         }
 
-        item.LogoPath = path;
+        // Keep a portable relative path in the database. Absolute paths break when
+        // the application moves between Docker, Linux, and Windows deployments.
+        item.LogoPath = ToStoredAssetPath(uploadsRoot, path);
         item.UpdatedAt = DateTimeOffset.UtcNow;
         await db.SaveChangesAsync(cancellationToken);
         await auditService.LogAsync("official_letterhead_logo_uploaded", "official_letterhead_template", id.ToString(), metadata: new { file.FileName, file.Length }, cancellationToken: cancellationToken);
@@ -220,6 +235,7 @@ public class OfficialCorrespondenceController(
             "بنك القطيبي الإسلامي",
             "Al-Qutaibi Islamic Bank",
             template.NameAr,
+            ResolveStoredAssetPath(template.LogoPath),
             template.HeaderHtml,
             template.FooterHtml,
             template.PrimaryColor,
@@ -539,6 +555,7 @@ public class OfficialCorrespondenceController(
             "بنك القطيبي الإسلامي",
             "Al-Qutaibi Islamic Bank",
             template.NameAr,
+            ResolveStoredAssetPath(template.LogoPath),
             template.HeaderHtml,
             template.FooterHtml,
             template.PrimaryColor,
@@ -778,6 +795,70 @@ public class OfficialCorrespondenceController(
 
     private static string ComputeChecksum(byte[] bytes) =>
         Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+
+    private string GetUploadsRoot()
+    {
+        var configuredRoot = configuration["Storage:UploadsPath"];
+        if (string.IsNullOrWhiteSpace(configuredRoot))
+        {
+            configuredRoot = Path.Combine(AppContext.BaseDirectory, "uploads");
+        }
+
+        return Path.GetFullPath(configuredRoot);
+    }
+
+    private static string ToStoredAssetPath(string uploadsRoot, string absolutePath) =>
+        Path.GetRelativePath(uploadsRoot, absolutePath).Replace('\\', '/');
+
+    private string? ResolveStoredAssetPath(string? storedPath)
+    {
+        if (string.IsNullOrWhiteSpace(storedPath))
+        {
+            return null;
+        }
+
+        var uploadsRoot = GetUploadsRoot();
+        var candidate = storedPath.Trim();
+
+        // New records contain a path relative to Storage:UploadsPath.
+        var relativePath = candidate.Replace('/', Path.DirectorySeparatorChar);
+        if (!Path.IsPathRooted(relativePath))
+        {
+            var relativeCandidate = Path.GetFullPath(Path.Combine(uploadsRoot, relativePath));
+            if (IsWithinDirectory(relativeCandidate, uploadsRoot) && File.Exists(relativeCandidate))
+            {
+                return relativeCandidate;
+            }
+        }
+
+        // Backward compatibility for records created before paths became portable.
+        // If the configured storage directory changed, reuse the known asset suffix.
+        var normalized = candidate.Replace('\\', '/');
+        const string marker = "official-letterheads/";
+        var markerIndex = normalized.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+        if (markerIndex >= 0)
+        {
+            var legacyRelative = normalized[markerIndex..].Replace('/', Path.DirectorySeparatorChar);
+            var migratedCandidate = Path.GetFullPath(Path.Combine(uploadsRoot, legacyRelative));
+            if (IsWithinDirectory(migratedCandidate, uploadsRoot) && File.Exists(migratedCandidate))
+            {
+                return migratedCandidate;
+            }
+        }
+
+        return Path.IsPathRooted(candidate) && File.Exists(candidate) ? candidate : null;
+    }
+
+    private static bool IsWithinDirectory(string path, string directory)
+    {
+        var normalizedPath = Path.GetFullPath(path)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+            + Path.DirectorySeparatorChar;
+        var normalizedDirectory = Path.GetFullPath(directory)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+            + Path.DirectorySeparatorChar;
+        return normalizedPath.StartsWith(normalizedDirectory, StringComparison.OrdinalIgnoreCase);
+    }
 
     private static OfficialLetterheadTemplateDto MapLetterhead(OfficialLetterheadTemplate item) =>
         new(item.Id, item.NameAr, item.NameEn, item.Code, item.LogoPath, null, item.HeaderHtml, item.FooterHtml, item.PrimaryColor, item.SecondaryColor, item.ShowPageNumber, item.ShowConfidentialityLabel, item.IsDefault, item.IsActive, item.CreatedAt, item.UpdatedAt);
