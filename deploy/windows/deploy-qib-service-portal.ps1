@@ -198,6 +198,17 @@ if ($ConfigureIis) {
     Write-Step "Configuring IIS"
     Import-Module WebAdministration
 
+    $arrModule = Get-WebGlobalModule | Where-Object { $_.Name -eq "ApplicationRequestRouting" }
+    if ($null -ne $arrModule) {
+        Set-WebConfigurationProperty `
+            -PSPath "MACHINE/WEBROOT/APPHOST" `
+            -Filter "system.webServer/proxy" `
+            -Name "enabled" `
+            -Value $true
+    } else {
+        Write-Warning "IIS Application Request Routing is not installed. The frontend API proxy will not work until ARR is installed and enabled."
+    }
+
     if (-not (Test-Path "IIS:\AppPools\$ApiSiteName")) {
         New-WebAppPool -Name $ApiSiteName | Out-Null
     }

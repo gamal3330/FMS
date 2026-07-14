@@ -175,19 +175,28 @@ export function Login({ onLogin }: { onLogin: (token: string) => void }) {
 
 async function readLoginError(response: Response) {
   if ([502, 503, 504].includes(response.status)) {
-    return "الخادم الخلفي غير متصل حالياً. شغّل backend على المنفذ 8000 ثم حاول مرة أخرى.";
+    return IS_DOTNET_API
+      ? "تعذر الوصول إلى خدمة .NET عبر IIS. تحقق من تشغيل API وإعداد ARR Proxy."
+      : "الخادم الخلفي غير متصل حالياً. شغّل backend على المنفذ 8000 ثم حاول مرة أخرى.";
   }
+
+  const responseText = await response.text().catch(() => "");
   try {
-    const data = await response.json();
+    const data = responseText ? JSON.parse(responseText) : null;
     const detail = data?.detail ?? data?.Detail;
     if (typeof detail === "string" && detail.trim()) return detail;
   } catch {
-    const text = await response.text().catch(() => "");
-    if (text.toLowerCase().includes("bad gateway")) {
-      return "الخادم الخلفي غير متصل حالياً. شغّل backend على المنفذ 8000 ثم حاول مرة أخرى.";
+    if (responseText.toLowerCase().includes("bad gateway")) {
+      return IS_DOTNET_API
+        ? "تعذر الوصول إلى خدمة .NET عبر IIS. تحقق من تشغيل API وإعداد ARR Proxy."
+        : "الخادم الخلفي غير متصل حالياً. شغّل backend على المنفذ 8000 ثم حاول مرة أخرى.";
     }
-    return "تعذر تسجيل الدخول. يرجى التحقق من البريد الإلكتروني وكلمة المرور.";
   }
+
+  if (IS_DOTNET_API && [404, 500].includes(response.status)) {
+    return `تعذر الوصول إلى مسار .NET API عبر IIS (HTTP ${response.status}).`;
+  }
+
   return "تعذر تسجيل الدخول. يرجى التحقق من البريد الإلكتروني وكلمة المرور.";
 }
 
