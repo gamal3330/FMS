@@ -833,7 +833,24 @@ public class ServicePortalDbContext(DbContextOptions<ServicePortalDbContext> opt
         });
     }
 
-    public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
+    public override int SaveChanges() => SaveChanges(acceptAllChangesOnSuccess: true);
+
+    public override int SaveChanges(bool acceptAllChangesOnSuccess)
+    {
+        PrepareEntitiesForSave();
+        return base.SaveChanges(acceptAllChangesOnSuccess);
+    }
+
+    public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default) =>
+        SaveChangesAsync(acceptAllChangesOnSuccess: true, cancellationToken);
+
+    public override Task<int> SaveChangesAsync(bool acceptAllChangesOnSuccess, CancellationToken cancellationToken = default)
+    {
+        PrepareEntitiesForSave();
+        return base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
+    }
+
+    private void PrepareEntitiesForSave()
     {
         var now = DateTimeOffset.UtcNow;
         foreach (var entry in ChangeTracker.Entries<BaseEntity>())
@@ -850,6 +867,19 @@ public class ServicePortalDbContext(DbContextOptions<ServicePortalDbContext> opt
             }
         }
 
-        return base.SaveChangesAsync(cancellationToken);
+        // Npgsql maps DateTimeOffset to PostgreSQL timestamptz and only accepts
+        // UTC offsets. Normalize values supplied by browsers or Windows hosts
+        // before they are sent to the database.
+        foreach (var entry in ChangeTracker.Entries()
+                     .Where(x => x.State is EntityState.Added or EntityState.Modified))
+        {
+            foreach (var property in entry.Properties)
+            {
+                if (property.CurrentValue is DateTimeOffset value && value.Offset != TimeSpan.Zero)
+                {
+                    property.CurrentValue = value.ToUniversalTime();
+                }
+            }
+        }
     }
 }
