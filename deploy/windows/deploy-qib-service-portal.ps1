@@ -12,11 +12,11 @@ param(
     [string]$DatabaseName = "qib_service_portal_dotnet",
     [string]$DatabaseUser = "qib_dotnet",
     [Parameter(Mandatory = $true)]
-    [string]$DatabasePassword,
+    [object]$DatabasePassword,
     [Parameter(Mandatory = $true)]
-    [string]$JwtSecret,
+    [object]$JwtSecret,
     [string]$SeedAdminEmail = "admin@qib.internal-bank.qa",
-    [string]$SeedAdminPassword = "ChangeMe@12345",
+    [object]$SeedAdminPassword = "ChangeMe@12345",
     [switch]$SkipBuild,
     [switch]$ConfigureIis
 )
@@ -61,7 +61,39 @@ function Invoke-FileOperationWithRetry {
     }
 }
 
-if ($JwtSecret.Length -lt 32) {
+function ConvertTo-PlainTextSecret {
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Value,
+        [Parameter(Mandatory = $true)]
+        [string]$Name
+    )
+
+    if ($Value -is [System.Security.SecureString]) {
+        $secretPointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($Value)
+        try {
+            $plainText = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($secretPointer)
+        } finally {
+            [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($secretPointer)
+        }
+    } elseif ($Value -is [string]) {
+        $plainText = $Value
+    } else {
+        throw "$Name must be provided as a string or SecureString."
+    }
+
+    if ([string]::IsNullOrEmpty($plainText)) {
+        throw "$Name cannot be empty."
+    }
+
+    return $plainText
+}
+
+$databasePasswordText = ConvertTo-PlainTextSecret -Value $DatabasePassword -Name "DatabasePassword"
+$jwtSecretText = ConvertTo-PlainTextSecret -Value $JwtSecret -Name "JwtSecret"
+$seedAdminPasswordText = ConvertTo-PlainTextSecret -Value $SeedAdminPassword -Name "SeedAdminPassword"
+
+if ($jwtSecretText.Length -lt 32) {
     throw "JwtSecret must be at least 32 characters."
 }
 
@@ -150,7 +182,13 @@ Ensure-Directory (Join-Path $apiTarget "logs")
 Copy-Item (Join-Path $windowsDeploy "api.web.config") (Join-Path $apiTarget "web.config") -Force
 
 Write-Step "Writing appsettings.Production.json"
-$connectionString = "Host=$DatabaseHost;Port=$DatabasePort;Database=$DatabaseName;Username=$DatabaseUser;Password=$DatabasePassword"
+$connectionStringBuilder = [System.Data.Common.DbConnectionStringBuilder]::new()
+$connectionStringBuilder["Host"] = $DatabaseHost
+$connectionStringBuilder["Port"] = $DatabasePort
+$connectionStringBuilder["Database"] = $DatabaseName
+$connectionStringBuilder["Username"] = $DatabaseUser
+$connectionStringBuilder["Password"] = $databasePasswordText
+$connectionString = $connectionStringBuilder.ConnectionString
 $productionSettings = [ordered]@{
     ConnectionStrings = @{
         DefaultConnection = $connectionString
@@ -158,14 +196,14 @@ $productionSettings = [ordered]@{
     Jwt = @{
         Issuer = "Qib.ServicePortal.DotNet"
         Audience = "Qib.ServicePortal"
-        Secret = $JwtSecret
+        Secret = $jwtSecretText
         AccessTokenMinutes = 30
         RefreshTokenDays = 14
     }
     SeedAdmin = @{
         Email = $SeedAdminEmail
         Username = "admin"
-        Password = $SeedAdminPassword
+        Password = $seedAdminPasswordText
     }
     Cors = @{
         Origins = @(
@@ -185,6 +223,9 @@ $productionSettings = [ordered]@{
 }
 
 $productionSettings | ConvertTo-Json -Depth 10 | Set-Content -Path (Join-Path $apiTarget "appsettings.Production.json") -Encoding UTF8
+$databasePasswordText = $null
+$jwtSecretText = $null
+$seedAdminPasswordText = $null
 
 Write-Step "Copying frontend build"
 if (-not (Test-Path $frontendBuildDir)) {

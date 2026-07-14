@@ -429,13 +429,21 @@ deploy/windows/deploy-qib-service-portal.ps1
 مثال تشغيل من PowerShell كمسؤول:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File deploy\windows\deploy-qib-service-portal.ps1 `
-  -DatabasePassword "CHANGE_THIS_STRONG_PASSWORD" `
-  -JwtSecret "CHANGE_THIS_TO_A_LONG_RANDOM_SECRET_AT_LEAST_32_CHARS" `
-  -SeedAdminPassword "CHANGE_THIS_INITIAL_PASSWORD" `
+$dbPassword = Read-Host "PostgreSQL password for qib_dotnet" -AsSecureString
+$jwtSecret = Read-Host "JWT secret (at least 32 characters)" -AsSecureString
+$adminPassword = Read-Host "Initial system administrator password" -AsSecureString
+
+.\deploy\windows\deploy-qib-service-portal.ps1 `
+  -DatabasePassword $dbPassword `
+  -JwtSecret $jwtSecret `
+  -SeedAdminPassword $adminPassword `
   -FrontendHostName "portal.example.com" `
   -ConfigureIis
 ```
+
+يقبل السكربت قيم `SecureString` مباشرة، ولا يحولها إلى النص
+`System.Security.SecureString`. كما يبني سلسلة اتصال PostgreSQL بطريقة آمنة عند
+احتواء كلمة المرور على فواصل منقوطة أو رموز خاصة.
 
 ماذا يفعل السكربت؟
 
@@ -449,9 +457,9 @@ powershell -ExecutionPolicy Bypass -File deploy\windows\deploy-qib-service-porta
 تشغيل بدون تعديل IIS:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File deploy\windows\deploy-qib-service-portal.ps1 `
-  -DatabasePassword "CHANGE_THIS_STRONG_PASSWORD" `
-  -JwtSecret "CHANGE_THIS_TO_A_LONG_RANDOM_SECRET_AT_LEAST_32_CHARS" `
+.\deploy\windows\deploy-qib-service-portal.ps1 `
+  -DatabasePassword $dbPassword `
+  -JwtSecret $jwtSecret `
   -SkipBuild
 ```
 
