@@ -189,6 +189,8 @@ public record WorkflowStepDto(
     long? EscalationUserId,
     long? EscalationRoleId,
     int? ReturnToStepOrder,
+    string ExecutionMode,
+    string? ConditionJson,
     int SortOrder,
     bool IsActive);
 
@@ -210,6 +212,8 @@ public record UpsertWorkflowStepRequest(
     long? EscalationUserId,
     long? EscalationRoleId,
     int? ReturnToStepOrder,
+    string? ExecutionMode,
+    string? ConditionJson,
     int SortOrder,
     bool IsActive);
 

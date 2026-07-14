@@ -4,7 +4,29 @@ import { api, getErrorMessage } from "../../lib/axios";
 import WorkflowPreview from "./WorkflowPreview";
 import WorkflowStepForm from "./WorkflowStepForm";
 
-const empty = { step_name_ar: "المدير المباشر", step_name_en: "Direct Manager", step_type: "direct_manager", approver_role_id: "", approver_user_id: "", approver_employee_number: "", target_department_id: "", is_mandatory: true, can_reject: true, can_return_for_edit: false, return_to_step_order: "", sla_hours: 8, escalation_user_id: "", sort_order: 1, is_active: true };
+const empty = {
+  step_name_ar: "المدير المباشر",
+  step_name_en: "Direct Manager",
+  step_type: "direct_manager",
+  approver_role_id: "",
+  approver_user_id: "",
+  approver_employee_number: "",
+  target_department_id: "",
+  is_mandatory: true,
+  execution_mode: "always",
+  condition_json: null,
+  condition_field_name: "",
+  condition_operator: "equals",
+  condition_value: "",
+  can_reject: true,
+  can_return_for_edit: false,
+  return_to_step_order: "",
+  sla_hours: 8,
+  escalation_user_id: "",
+  escalation_role_id: "",
+  sort_order: 1,
+  is_active: true
+};
 
 const workflowPresets = [
   {
@@ -30,6 +52,7 @@ export default function WorkflowBuilder({ requestTypeId, notify, onWorkflowChang
   const [workflow, setWorkflow] = useState(null);
   const [roles, setRoles] = useState([]);
   const [departments, setDepartments] = useState([]);
+  const [fields, setFields] = useState([]);
   const [form, setForm] = useState(empty);
   const [editingId, setEditingId] = useState(null);
   const [dragId, setDragId] = useState(null);
@@ -39,14 +62,16 @@ export default function WorkflowBuilder({ requestTypeId, notify, onWorkflowChang
   async function load() {
     if (!requestTypeId) return;
     try {
-      const [{ data }, rolesResponse, departmentsResponse] = await Promise.all([
+      const [{ data }, rolesResponse, departmentsResponse, fieldsResponse] = await Promise.all([
         api.get(`/request-types/${requestTypeId}/workflow`),
         api.get("/request-types/workflow-roles").catch(() => ({ data: [] })),
-        api.get("/request-types/workflow-departments").catch(() => ({ data: [] }))
+        api.get("/request-types/workflow-departments").catch(() => ({ data: [] })),
+        api.get(`/request-types/${requestTypeId}/fields`).catch(() => ({ data: [] }))
       ]);
       setWorkflow(data);
       setRoles(Array.isArray(rolesResponse.data) ? rolesResponse.data : []);
       setDepartments(Array.isArray(departmentsResponse.data) ? departmentsResponse.data : []);
+      setFields(Array.isArray(fieldsResponse.data) ? fieldsResponse.data : []);
       onWorkflowChange?.();
     } catch (error) {
       const message = getErrorMessage(error);
@@ -61,13 +86,33 @@ export default function WorkflowBuilder({ requestTypeId, notify, onWorkflowChang
 
   function payload(source = form) {
     const approverEmployeeNumber = String(source.approver_employee_number || source.approverEmployeeNumber || "").trim();
+    const isMandatory = Boolean(source.is_mandatory);
+    const conditionOperator = String(source.condition_operator || "equals");
+    const conditionValue = String(source.condition_value ?? "").trim();
+    if (!isMandatory && !source.condition_field_name) {
+      throw new Error("اختر حقل الطلب الذي يحدد تنفيذ المرحلة.");
+    }
+    if (!isMandatory && !["empty", "not_empty"].includes(conditionOperator) && !conditionValue) {
+      throw new Error("أدخل القيمة التي يجب أن تحقق شرط المرحلة.");
+    }
+    const condition = isMandatory
+      ? null
+      : JSON.stringify({
+          field_name: source.condition_field_name,
+          operator: conditionOperator,
+          ...(["empty", "not_empty"].includes(conditionOperator) ? {} : { value: conditionValue })
+        });
     return {
       ...source,
+      is_mandatory: isMandatory,
+      execution_mode: isMandatory ? "always" : "conditional",
+      condition_json: condition,
       approver_role_id: source.step_type === "specific_role" && source.approver_role_id ? Number(source.approver_role_id) : null,
       approver_user_id: source.step_type === "specific_user" && !approverEmployeeNumber && source.approver_user_id ? Number(source.approver_user_id) : null,
       approver_employee_number: source.step_type === "specific_user" ? approverEmployeeNumber : null,
       target_department_id: source.step_type === "specific_department_manager" && source.target_department_id ? Number(source.target_department_id) : null,
       escalation_user_id: source.escalation_user_id ? Number(source.escalation_user_id) : null,
+      escalation_role_id: source.escalation_role_id ? Number(source.escalation_role_id) : null,
       return_to_step_order: source.can_return_for_edit && source.return_to_step_order ? Number(source.return_to_step_order) : null,
       sla_hours: Number(source.sla_hours || 8),
       sort_order: Number(source.sort_order || 1)
@@ -93,6 +138,30 @@ export default function WorkflowBuilder({ requestTypeId, notify, onWorkflowChang
   function resetForm() {
     setForm(empty);
     setEditingId(null);
+  }
+
+  function editStep(step) {
+    let condition = {};
+    try {
+      condition = step.condition_json ? JSON.parse(step.condition_json) : {};
+    } catch {
+      condition = {};
+    }
+    setEditingId(step.id);
+    setForm({
+      ...empty,
+      ...step,
+      approver_role_id: step.approver_role_id || "",
+      approver_user_id: step.approver_user_id || "",
+      approver_employee_number: step.approver_employee_number || step.approverEmployeeNumber || "",
+      target_department_id: step.target_department_id || "",
+      escalation_user_id: step.escalation_user_id || "",
+      escalation_role_id: step.escalation_role_id || "",
+      return_to_step_order: step.return_to_step_order || "",
+      condition_field_name: condition.field_name || condition.fieldName || "",
+      condition_operator: condition.operator || "equals",
+      condition_value: condition.value ?? ""
+    });
   }
 
   async function applyPreset(preset) {
@@ -217,7 +286,7 @@ export default function WorkflowBuilder({ requestTypeId, notify, onWorkflowChang
           </div>
         </div>
       )}
-      <WorkflowStepForm form={form} setForm={setForm} roles={roles} departments={departments} steps={workflow?.steps || []} editingId={editingId} onSubmit={save} editing={Boolean(editingId)} onCancel={resetForm} />
+      <WorkflowStepForm form={form} setForm={setForm} roles={roles} departments={departments} fields={fields} steps={workflow?.steps || []} editingId={editingId} onSubmit={save} editing={Boolean(editingId)} onCancel={resetForm} />
       {error && <p className="rounded-md bg-red-50 p-3 text-sm text-red-700">{error}</p>}
       <div className="space-y-2">
         {(workflow?.steps || []).map((step) => (
@@ -229,7 +298,7 @@ export default function WorkflowBuilder({ requestTypeId, notify, onWorkflowChang
             </div>
             <span>{stepTypeLabel(step.step_type, step, roles, departments)}</span>
             <div className="flex gap-2">
-              <button type="button" onClick={() => { setEditingId(step.id); setForm({ ...step, approver_role_id: step.approver_role_id || "", approver_user_id: step.approver_user_id || "", approver_employee_number: step.approver_employee_number || step.approverEmployeeNumber || "", target_department_id: step.target_department_id || "", escalation_user_id: step.escalation_user_id || "", return_to_step_order: step.return_to_step_order || "" }); }} className="inline-flex h-8 items-center gap-1 rounded-md border px-3 text-xs font-bold"><Edit3 className="h-3.5 w-3.5" /> تعديل</button>
+              <button type="button" onClick={() => editStep(step)} className="inline-flex h-8 items-center gap-1 rounded-md border px-3 text-xs font-bold"><Edit3 className="h-3.5 w-3.5" /> تعديل</button>
               <button type="button" onClick={() => remove(step.id)} className="inline-flex h-8 items-center gap-1 rounded-md border border-red-200 px-3 text-xs font-bold text-red-700"><Trash2 className="h-3.5 w-3.5" /> حذف</button>
             </div>
           </div>

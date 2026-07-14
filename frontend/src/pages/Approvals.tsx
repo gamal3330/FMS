@@ -83,7 +83,7 @@ const actionLabels: Record<ApprovalAction, string> = {
   approved: "تمت الموافقة",
   rejected: "تم الرفض",
   returned_for_edit: "أعيد للتعديل",
-  skipped: "بانتظار الدور"
+  skipped: "لم تنطبق شروط المرحلة"
 };
 
 const approvalsPageSize = 12;

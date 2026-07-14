@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Qib.ServicePortal.Api.Application.DTOs;
 using Qib.ServicePortal.Api.Application.Interfaces;
+using Qib.ServicePortal.Api.Application.Services;
 using Qib.ServicePortal.Api.Common.Exceptions;
 using Qib.ServicePortal.Api.Domain.Entities;
 using Qib.ServicePortal.Api.Infrastructure.Data;
@@ -165,7 +166,10 @@ public class RequestsController(
         db.Requests.Add(entity);
         await db.SaveChangesAsync(cancellationToken);
 
-        var workflowSnapshots = CreateWorkflowSnapshots(entity.Id, workflowSteps, now).ToList();
+        var workflowSnapshots = CreateWorkflowSnapshots(entity.Id, workflowSteps, request.FormData, now).ToList();
+        var currentStep = workflowSnapshots.FirstOrDefault(x => x.Status == "pending");
+        entity.Status = currentStep is null ? "completed" : IsExecutionStepType(currentStep.StepType) ? "in_progress" : "pending_approval";
+        entity.ClosedAt = currentStep is null ? now : null;
         db.RequestFieldSnapshots.AddRange(CreateFieldSnapshots(entity.Id, fields, request.FormData));
         db.RequestWorkflowSnapshots.AddRange(workflowSnapshots);
         db.RequestStatusHistory.Add(new RequestStatusHistory
@@ -185,6 +189,16 @@ public class RequestsController(
         });
 
         await db.SaveChangesAsync(cancellationToken);
+        var skippedActions = workflowSnapshots
+            .Where(x => x.Status == "skipped")
+            .Select(x => CreateApprovalAction(entity, x, "skipped", null, now, "waiting", "skipped", x.SkipReason))
+            .ToList();
+        if (skippedActions.Count > 0)
+        {
+            db.RequestApprovalActions.AddRange(skippedActions);
+            await db.SaveChangesAsync(cancellationToken);
+        }
+
         var effectiveSendNotification = await ShouldSendRequestCreatedNotificationAsync(request.SendNotification, cancellationToken);
         if (effectiveSendNotification)
         {
@@ -277,7 +291,10 @@ public class RequestsController(
     public async Task<IActionResult> CancelRequest(long id, RequestActionRequest request, CancellationToken cancellationToken)
     {
         var actorId = RequireCurrentUserId();
-        var entity = await db.Requests.FirstOrDefaultAsync(x => x.Id == id, cancellationToken)
+        var entity = await db.Requests
+                         .Include(x => x.WorkflowSnapshots)
+                         .Include(x => x.ApprovalActions)
+                         .FirstOrDefaultAsync(x => x.Id == id, cancellationToken)
                      ?? throw new ApiException("الطلب غير موجود", StatusCodes.Status404NotFound);
         var canManage = await permissionService.HasPermissionAsync(actorId, "requests.manage", cancellationToken);
         if (!canManage && entity.RequesterId != actorId)
@@ -314,19 +331,42 @@ public class RequestsController(
             throw new ApiException("يمكن إعادة إرسال الطلبات المعادة للتعديل فقط");
         }
 
-        var steps = await db.RequestWorkflowSnapshots.Where(x => x.RequestId == id).OrderBy(x => x.SortOrder).ToListAsync(cancellationToken);
         var now = DateTimeOffset.UtcNow;
-        for (var i = 0; i < steps.Count; i++)
+        BackfillApprovalActions(entity);
+        var steps = entity.WorkflowSnapshots.OrderBy(x => x.SortOrder).ToList();
+        var targetOrder = entity.ResumeFromStepOrder ?? steps.FirstOrDefault()?.SortOrder
+            ?? throw new ApiException("الطلب لا يحتوي على مسار موافقات محفوظ");
+        if (!steps.Any(x => x.SortOrder == targetOrder))
         {
-            steps[i].Status = i == 0 ? "pending" : "waiting";
-            steps[i].PendingAt = i == 0 ? now : null;
-            steps[i].ActionByUserId = null;
-            steps[i].ActionAt = null;
-            steps[i].Comments = null;
+            targetOrder = steps.First().SortOrder;
+        }
+
+        var formData = DeserializeFormData(entity.FormDataJson);
+        entity.WorkflowRevision += 1;
+        foreach (var step in steps.Where(x => x.SortOrder >= targetOrder))
+        {
+            ResetSnapshotForRevision(step);
+            var result = WorkflowConditionEvaluator.Evaluate(step.ExecutionMode, step.ConditionJson, formData);
+            step.IsApplicable = result.IsApplicable;
+            step.SkipReason = result.IsApplicable ? null : result.Reason;
+            step.Status = result.IsApplicable ? "waiting" : "skipped";
+            if (!result.IsApplicable)
+            {
+                db.RequestApprovalActions.Add(CreateApprovalAction(entity, step, "skipped", null, now, "waiting", "skipped", result.Reason));
+            }
+        }
+
+        var firstPending = steps.FirstOrDefault(x => x.SortOrder >= targetOrder && x.IsApplicable && x.Status == "waiting");
+        if (firstPending is not null)
+        {
+            ActivateSnapshot(firstPending, now);
         }
 
         entity.SubmittedAt = now;
-        await ChangeRequestStatusAsync(entity, "pending_approval", actorId, request.Comment ?? "تمت إعادة إرسال الطلب", cancellationToken, saveNow: false);
+        entity.ClosedAt = null;
+        entity.ResumeFromStepOrder = null;
+        var nextStatus = firstPending is null ? "completed" : IsExecutionStepType(firstPending.StepType) ? "in_progress" : "pending_approval";
+        await ChangeRequestStatusAsync(entity, nextStatus, actorId, request.Comment ?? "تمت إعادة إرسال الطلب", cancellationToken, saveNow: false);
         await db.SaveChangesAsync(cancellationToken);
         await auditService.LogAsync("request_resubmitted", "request", id.ToString(), metadata: new { request.Comment }, cancellationToken: cancellationToken);
 
@@ -1182,12 +1222,19 @@ public class RequestsController(
         }
     }
 
-    private static IEnumerable<RequestWorkflowSnapshot> CreateWorkflowSnapshots(long requestId, IReadOnlyCollection<WorkflowTemplateStep> steps, DateTimeOffset now)
+    private static IEnumerable<RequestWorkflowSnapshot> CreateWorkflowSnapshots(
+        long requestId,
+        IReadOnlyCollection<WorkflowTemplateStep> steps,
+        IReadOnlyDictionary<string, JsonElement> formData,
+        DateTimeOffset now)
     {
         var ordered = steps.OrderBy(x => x.SortOrder).ToList();
-        for (var i = 0; i < ordered.Count; i++)
+        var hasPending = false;
+        foreach (var step in ordered)
         {
-            var step = ordered[i];
+            var condition = WorkflowConditionEvaluator.Evaluate(step.ExecutionMode, step.ConditionJson, formData);
+            var isPending = condition.IsApplicable && !hasPending;
+            hasPending |= isPending;
             yield return new RequestWorkflowSnapshot
             {
                 RequestId = requestId,
@@ -1197,17 +1244,114 @@ public class RequestsController(
                 ApproverRoleId = step.ApproverRoleId,
                 ApproverUserId = step.ApproverUserId,
                 TargetDepartmentId = step.TargetDepartmentId,
-                Status = i == 0 ? "pending" : "waiting",
-                PendingAt = i == 0 ? now : null,
-                SlaDueAt = step.SlaHours.HasValue ? now.AddHours(step.SlaHours.Value) : null,
+                Status = !condition.IsApplicable ? "skipped" : isPending ? "pending" : "waiting",
+                PendingAt = isPending ? now : null,
+                SlaDueAt = isPending && step.SlaHours.HasValue ? now.AddHours(step.SlaHours.Value) : null,
+                SlaHours = step.SlaHours,
                 SortOrder = step.SortOrder,
                 IsMandatory = step.IsMandatory,
                 CanApprove = step.CanApprove,
                 CanReject = step.CanReject,
                 CanReturnForEdit = step.CanReturnForEdit,
-                CanDelegate = step.CanDelegate
+                CanDelegate = step.CanDelegate,
+                EscalationUserId = step.EscalationUserId,
+                EscalationRoleId = step.EscalationRoleId,
+                ReturnToStepOrder = step.ReturnToStepOrder,
+                ExecutionMode = step.ExecutionMode,
+                ConditionJson = step.ConditionJson,
+                IsApplicable = condition.IsApplicable,
+                SkipReason = condition.IsApplicable ? null : condition.Reason
             };
         }
+    }
+
+    private static Dictionary<string, JsonElement> DeserializeFormData(string? formDataJson)
+    {
+        if (string.IsNullOrWhiteSpace(formDataJson))
+        {
+            return new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        try
+        {
+            return JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(formDataJson, JsonOptions)
+                   ?? new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase);
+        }
+        catch (JsonException)
+        {
+            return new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase);
+        }
+    }
+
+    private static void ActivateSnapshot(RequestWorkflowSnapshot step, DateTimeOffset now)
+    {
+        step.Status = "pending";
+        step.PendingAt = now;
+        step.SlaDueAt = step.SlaHours.HasValue ? now.AddHours(step.SlaHours.Value) : null;
+    }
+
+    private static void ResetSnapshotForRevision(RequestWorkflowSnapshot step)
+    {
+        step.Status = "waiting";
+        step.PendingAt = null;
+        step.SlaDueAt = null;
+        step.ActionByUserId = null;
+        step.ActionAt = null;
+        step.Comments = null;
+        step.EscalatedAt = null;
+        step.EscalationCount = 0;
+    }
+
+    private static void BackfillApprovalActions(RequestEntity request)
+    {
+        var existingStepIds = request.ApprovalActions
+            .Where(x => x.WorkflowStepSnapshotId.HasValue)
+            .Select(x => x.WorkflowStepSnapshotId!.Value)
+            .ToHashSet();
+        foreach (var step in request.WorkflowSnapshots.Where(x => x.ActionAt.HasValue && !existingStepIds.Contains(x.Id)))
+        {
+            request.ApprovalActions.Add(CreateApprovalAction(
+                request,
+                step,
+                step.Status,
+                step.ActionByUserId,
+                step.ActionAt!.Value,
+                "pending",
+                step.Status,
+                step.Comments));
+        }
+    }
+
+    private static RequestApprovalAction CreateApprovalAction(
+        RequestEntity request,
+        RequestWorkflowSnapshot step,
+        string action,
+        long? actorUserId,
+        DateTimeOffset actionAt,
+        string? previousStatus,
+        string? newStatus,
+        string? comments)
+    {
+        return new RequestApprovalAction
+        {
+            RequestId = request.Id,
+            WorkflowStepSnapshotId = step.Id,
+            WorkflowRevision = request.WorkflowRevision,
+            StepOrder = step.SortOrder,
+            StepNameAr = step.StepNameAr,
+            StepType = step.StepType,
+            Action = action,
+            ActorUserId = actorUserId,
+            ActionAt = actionAt,
+            Comments = comments,
+            PreviousStatus = previousStatus,
+            NewStatus = newStatus
+        };
+    }
+
+    private static bool IsExecutionStepType(string stepType)
+    {
+        return stepType is "implementation_engineer" or "department_specialist" or "specialized_section" or "execution" or "execute_request";
     }
 
     private static void ValidateUpload(IFormFile file, RequestTypeSettings settings)
@@ -1310,7 +1454,7 @@ public class RequestsController(
     private static RequestDto MapRequest(RequestEntity entity)
     {
         var totalSteps = entity.WorkflowSnapshots.Count;
-        var doneSteps = entity.WorkflowSnapshots.Count(x => x.Status is "approved" or "executed" or "closed");
+        var doneSteps = entity.WorkflowSnapshots.Count(x => x.Status is "approved" or "executed" or "closed" or "skipped");
         var progress = totalSteps == 0 ? 0 : (int)Math.Round(doneSteps * 100m / totalSteps);
         return new RequestDto(
             entity.Id,
@@ -1348,7 +1492,7 @@ public class RequestsController(
 
     private static RequestWorkflowSnapshotDto MapWorkflowSnapshot(RequestWorkflowSnapshot item)
     {
-        return new RequestWorkflowSnapshotDto(item.Id, item.StepNameAr, item.StepNameEn, item.StepType, item.ApproverRoleId, item.ApproverRole?.NameAr, item.ApproverUserId, item.ApproverUser?.NameAr, item.TargetDepartmentId, item.TargetDepartment?.NameAr, item.Status, item.ActionByUserId, item.ActionByUser?.NameAr, item.ActionAt, item.PendingAt, item.Comments, item.SlaDueAt, item.SortOrder, item.CanApprove, item.CanReject, item.CanReturnForEdit, item.CanDelegate);
+        return new RequestWorkflowSnapshotDto(item.Id, item.StepNameAr, item.StepNameEn, item.StepType, item.ApproverRoleId, item.ApproverRole?.NameAr, item.ApproverUserId, item.ApproverUser?.NameAr, item.TargetDepartmentId, item.TargetDepartment?.NameAr, item.Status, item.ActionByUserId, item.ActionByUser?.NameAr, item.ActionAt, item.PendingAt, item.Comments, item.SlaDueAt, item.SortOrder, item.CanApprove, item.CanReject, item.CanReturnForEdit, item.CanDelegate, item.SlaHours, item.EscalatedAt, item.IsApplicable, item.SkipReason, item.ReturnToStepOrder, item.ExecutionMode);
     }
 
     private static RequestAttachmentDto MapAttachment(RequestAttachment item)

@@ -193,6 +193,7 @@ public class ApprovalsController(
         var oldStatus = request.Status;
         var previousStepStatus = step.Status;
         var now = DateTimeOffset.UtcNow;
+        BackfillApprovalActions(request);
 
         var comments = actionRequest.Comments ?? actionRequest.Note;
         switch (action)
@@ -220,6 +221,16 @@ public class ApprovalsController(
             default:
                 throw new ApiException("الإجراء غير معروف");
         }
+
+        request.ApprovalActions.Add(CreateApprovalAction(
+            request,
+            step,
+            CanonicalAction(action),
+            actor.Id,
+            now,
+            previousStepStatus,
+            step.Status,
+            comments ?? actionRequest.ExecutionNotes));
 
         db.RequestStatusHistory.Add(new RequestStatusHistory
         {
@@ -250,6 +261,18 @@ public class ApprovalsController(
     public async Task<ActionResult<IReadOnlyCollection<ApprovalHistoryDto>>> GetApprovalHistory(long requestId, CancellationToken cancellationToken)
     {
         await EnsureCanViewApprovalRequestAsync(requestId, cancellationToken);
+        var actions = await db.RequestApprovalActions
+            .Include(x => x.ActorUser)
+            .AsNoTracking()
+            .Where(x => x.RequestId == requestId)
+            .OrderBy(x => x.ActionAt)
+            .ThenBy(x => x.Id)
+            .ToListAsync(cancellationToken);
+        if (actions.Count > 0)
+        {
+            return Ok(actions.Select(MapApprovalAction).ToList());
+        }
+
         var steps = await db.RequestWorkflowSnapshots
             .Include(x => x.ActionByUser)
             .AsNoTracking()
@@ -322,6 +345,17 @@ public class ApprovalsController(
 
         CompleteStep(step, "returned_for_edit", actorId, comments, now);
         request.Status = "returned_for_edit";
+        var firstApplicableOrder = request.WorkflowSnapshots
+            .Where(x => x.IsApplicable)
+            .OrderBy(x => x.SortOrder)
+            .Select(x => (int?)x.SortOrder)
+            .FirstOrDefault();
+        request.ResumeFromStepOrder = step.ReturnToStepOrder.HasValue && request.WorkflowSnapshots.Any(x =>
+            x.IsApplicable &&
+            x.SortOrder == step.ReturnToStepOrder.Value &&
+            x.SortOrder < step.SortOrder)
+                ? step.ReturnToStepOrder
+                : firstApplicableOrder;
     }
 
     private void ExecuteStep(RequestEntity request, RequestWorkflowSnapshot step, long actorId, string? executionNotes, DateTimeOffset now)
@@ -376,7 +410,7 @@ public class ApprovalsController(
     private static void MoveToNextStepOrFinish(RequestEntity request, RequestWorkflowSnapshot completedStep, DateTimeOffset now, string finalStatus)
     {
         var next = request.WorkflowSnapshots
-            .Where(x => x.Status == "waiting" && x.SortOrder > completedStep.SortOrder)
+            .Where(x => x.Status == "waiting" && x.IsApplicable && x.SortOrder > completedStep.SortOrder)
             .OrderBy(x => x.SortOrder)
             .FirstOrDefault();
 
@@ -392,6 +426,9 @@ public class ApprovalsController(
 
         next.Status = "pending";
         next.PendingAt = now;
+        next.SlaDueAt = next.SlaHours.HasValue ? now.AddHours(next.SlaHours.Value) : null;
+        next.EscalatedAt = null;
+        next.EscalationCount = 0;
         request.Status = IsExecutionStep(next) ? "in_progress" : "pending_approval";
     }
 
@@ -440,7 +477,8 @@ public class ApprovalsController(
             .Include(x => x.WorkflowSnapshots).ThenInclude(x => x.ApproverRole)
             .Include(x => x.WorkflowSnapshots).ThenInclude(x => x.ApproverUser)
             .Include(x => x.WorkflowSnapshots).ThenInclude(x => x.TargetDepartment).ThenInclude(x => x!.ManagerUser)
-            .Include(x => x.WorkflowSnapshots).ThenInclude(x => x.ActionByUser);
+            .Include(x => x.WorkflowSnapshots).ThenInclude(x => x.ActionByUser)
+            .Include(x => x.ApprovalActions).ThenInclude(x => x.ActorUser);
     }
 
     private async Task<RequestEntity> LoadDetailsAsync(long requestId, CancellationToken cancellationToken)
@@ -466,6 +504,7 @@ public class ApprovalsController(
             .Include(x => x.WorkflowSnapshots).ThenInclude(x => x.ApproverRole)
             .Include(x => x.WorkflowSnapshots).ThenInclude(x => x.ApproverUser)
             .Include(x => x.WorkflowSnapshots).ThenInclude(x => x.TargetDepartment).ThenInclude(x => x!.ManagerUser)
+            .Include(x => x.ApprovalActions)
             .Include(x => x.SlaTracking)
             .FirstOrDefaultAsync(x => x.Id == requestId, cancellationToken)
             ?? throw new ApiException("الطلب غير موجود", StatusCodes.Status404NotFound);
@@ -494,6 +533,7 @@ public class ApprovalsController(
         return request.RequesterId == actor.Id ||
                request.AssignedToId == actor.Id ||
                request.WorkflowSnapshots.Any(x => x.ApproverUserId == actor.Id || x.ApproverRoleId == actor.RoleId || x.ActionByUserId == actor.Id) ||
+               request.WorkflowSnapshots.Any(x => x.EscalatedAt.HasValue && (x.EscalationUserId == actor.Id || x.EscalationRoleId == actor.RoleId)) ||
                request.WorkflowSnapshots.Any(x => x.TargetDepartment != null && x.TargetDepartment.ManagerUserId == actor.Id) ||
                request.Requester?.DirectManagerId == actor.Id ||
                request.Department?.ManagerUserId == actor.Id ||
@@ -511,6 +551,11 @@ public class ApprovalsController(
         }
 
         if (step.ApproverUserId == actor.Id || step.ApproverRoleId == actor.RoleId)
+        {
+            return true;
+        }
+
+        if (step.EscalatedAt.HasValue && (step.EscalationUserId == actor.Id || step.EscalationRoleId == actor.RoleId))
         {
             return true;
         }
@@ -608,6 +653,7 @@ public class ApprovalsController(
             x.RequesterId == actor.Id ||
             x.AssignedToId == actor.Id ||
             x.WorkflowSnapshots.Any(s => s.ApproverUserId == actor.Id || s.ApproverRoleId == actor.RoleId || s.ActionByUserId == actor.Id) ||
+            x.WorkflowSnapshots.Any(s => s.EscalatedAt.HasValue && (s.EscalationUserId == actor.Id || s.EscalationRoleId == actor.RoleId)) ||
             x.WorkflowSnapshots.Any(s => s.TargetDepartment != null && s.TargetDepartment.ManagerUserId == actor.Id) ||
             x.Requester!.DirectManagerId == actor.Id ||
             x.Department!.ManagerUserId == actor.Id ||
@@ -636,14 +682,16 @@ public class ApprovalsController(
             workflow,
             request.Attachments.Where(x => !x.IsDeleted).OrderByDescending(x => x.UploadedAt).Select(MapAttachment).ToList(),
             request.StatusHistory.OrderBy(x => x.ChangedAt).Select(MapStatusHistory).ToList(),
-            request.WorkflowSnapshots.OrderBy(x => x.SortOrder).Select(MapApprovalHistory).ToList(),
+            request.ApprovalActions.Count > 0
+                ? request.ApprovalActions.OrderBy(x => x.ActionAt).ThenBy(x => x.Id).Select(MapApprovalAction).ToList()
+                : request.WorkflowSnapshots.OrderBy(x => x.SortOrder).Select(MapApprovalHistory).ToList(),
             request.SlaTracking is null ? null : new RequestSlaTrackingDto(request.SlaTracking.ResponseDueAt, request.SlaTracking.ResolutionDueAt, request.SlaTracking.FirstResponseAt, request.SlaTracking.ResolvedAt, request.SlaTracking.IsBreached, request.SlaTracking.BreachReason));
     }
 
     private static RequestDto MapRequest(RequestEntity entity)
     {
         var totalSteps = entity.WorkflowSnapshots.Count;
-        var doneSteps = entity.WorkflowSnapshots.Count(x => x.Status is "approved" or "executed" or "closed");
+        var doneSteps = entity.WorkflowSnapshots.Count(x => x.Status is "approved" or "executed" or "closed" or "skipped");
         var progress = totalSteps == 0 ? 0 : (int)Math.Round(doneSteps * 100m / totalSteps);
         return new RequestDto(
             entity.Id,
@@ -681,7 +729,7 @@ public class ApprovalsController(
 
     private static RequestWorkflowSnapshotDto MapWorkflowSnapshot(RequestWorkflowSnapshot item)
     {
-        return new RequestWorkflowSnapshotDto(item.Id, item.StepNameAr, item.StepNameEn, item.StepType, item.ApproverRoleId, item.ApproverRole?.NameAr, item.ApproverUserId, item.ApproverUser?.NameAr, item.TargetDepartmentId, item.TargetDepartment?.NameAr, item.Status, item.ActionByUserId, item.ActionByUser?.NameAr, item.ActionAt, item.PendingAt, item.Comments, item.SlaDueAt, item.SortOrder, item.CanApprove, item.CanReject, item.CanReturnForEdit, item.CanDelegate);
+        return new RequestWorkflowSnapshotDto(item.Id, item.StepNameAr, item.StepNameEn, item.StepType, item.ApproverRoleId, item.ApproverRole?.NameAr, item.ApproverUserId, item.ApproverUser?.NameAr, item.TargetDepartmentId, item.TargetDepartment?.NameAr, item.Status, item.ActionByUserId, item.ActionByUser?.NameAr, item.ActionAt, item.PendingAt, item.Comments, item.SlaDueAt, item.SortOrder, item.CanApprove, item.CanReject, item.CanReturnForEdit, item.CanDelegate, item.SlaHours, item.EscalatedAt, item.IsApplicable, item.SkipReason, item.ReturnToStepOrder, item.ExecutionMode);
     }
 
     private static RequestAttachmentDto MapAttachment(RequestAttachment item)
@@ -707,6 +755,81 @@ public class ApprovalsController(
             item.Comments,
             item.Status == "waiting" || item.Status == "pending" ? null : "pending",
             item.Status);
+    }
+
+    private static ApprovalHistoryDto MapApprovalAction(RequestApprovalAction item)
+    {
+        return new ApprovalHistoryDto(
+            item.WorkflowStepSnapshotId ?? item.Id,
+            item.StepNameAr,
+            item.StepType,
+            item.Action,
+            item.ActorUserId,
+            item.ActorUser?.NameAr,
+            item.ActionAt,
+            item.Comments,
+            item.PreviousStatus,
+            item.NewStatus);
+    }
+
+    private static void BackfillApprovalActions(RequestEntity request)
+    {
+        var existingStepIds = request.ApprovalActions
+            .Where(x => x.WorkflowStepSnapshotId.HasValue)
+            .Select(x => x.WorkflowStepSnapshotId!.Value)
+            .ToHashSet();
+        foreach (var step in request.WorkflowSnapshots.Where(x => x.ActionAt.HasValue && !existingStepIds.Contains(x.Id)))
+        {
+            request.ApprovalActions.Add(CreateApprovalAction(
+                request,
+                step,
+                step.Status,
+                step.ActionByUserId,
+                step.ActionAt!.Value,
+                "pending",
+                step.Status,
+                step.Comments));
+        }
+    }
+
+    private static RequestApprovalAction CreateApprovalAction(
+        RequestEntity request,
+        RequestWorkflowSnapshot step,
+        string action,
+        long? actorUserId,
+        DateTimeOffset actionAt,
+        string? previousStatus,
+        string? newStatus,
+        string? comments)
+    {
+        return new RequestApprovalAction
+        {
+            RequestId = request.Id,
+            WorkflowStepSnapshotId = step.Id,
+            WorkflowRevision = request.WorkflowRevision,
+            StepOrder = step.SortOrder,
+            StepNameAr = step.StepNameAr,
+            StepType = step.StepType,
+            Action = action,
+            ActorUserId = actorUserId,
+            ActionAt = actionAt,
+            Comments = comments,
+            PreviousStatus = previousStatus,
+            NewStatus = newStatus
+        };
+    }
+
+    private static string CanonicalAction(string action)
+    {
+        return action switch
+        {
+            "approve" or "approved" => "approved",
+            "reject" or "rejected" => "rejected",
+            "return_for_edit" or "returned_for_edit" => "returned_for_edit",
+            "execute" or "executed" => "executed",
+            "close" or "closed" => "closed",
+            _ => action
+        };
     }
 
     private static string AuditActionFor(string action)

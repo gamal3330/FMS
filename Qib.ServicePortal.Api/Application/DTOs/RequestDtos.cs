@@ -87,7 +87,13 @@ public record RequestWorkflowSnapshotDto(
     bool CanApprove,
     bool CanReject,
     bool CanReturnForEdit,
-    bool CanDelegate);
+    bool CanDelegate,
+    int? SlaHours,
+    DateTimeOffset? EscalatedAt,
+    bool IsApplicable,
+    string? SkipReason,
+    int? ReturnToStepOrder,
+    string ExecutionMode);
 
 public record RequestAttachmentDto(
     long Id,

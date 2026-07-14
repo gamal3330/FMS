@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using System.Text.Json;
 using Qib.ServicePortal.Api.Application.DTOs;
 using Qib.ServicePortal.Api.Application.Interfaces;
+using Qib.ServicePortal.Api.Application.Services;
 using Qib.ServicePortal.Api.Common.Exceptions;
 using Qib.ServicePortal.Api.Domain.Entities;
 using Qib.ServicePortal.Api.Infrastructure.Data;
@@ -635,6 +636,8 @@ public class RequestTypesController(ServicePortalDbContext db, ICurrentUserServi
             EscalationUserId = x.EscalationUserId,
             EscalationRoleId = x.EscalationRoleId,
             ReturnToStepOrder = x.ReturnToStepOrder,
+            ExecutionMode = x.ExecutionMode,
+            ConditionJson = x.ConditionJson,
             SortOrder = x.SortOrder,
             IsActive = x.IsActive
         }));
@@ -730,6 +733,8 @@ public class RequestTypesController(ServicePortalDbContext db, ICurrentUserServi
                 can_approve = step.CanApprove,
                 can_reject = step.CanReject,
                 can_return_for_edit = step.CanReturnForEdit,
+                execution_mode = step.ExecutionMode,
+                condition_json = step.ConditionJson,
                 sort_order = step.SortOrder,
                 is_active = step.IsActive
             }).ToList()
@@ -800,6 +805,8 @@ public class RequestTypesController(ServicePortalDbContext db, ICurrentUserServi
         {
             throw new ApiException("لا يمكن نشر نوع طلب بدون مسار موافقات");
         }
+
+        ValidateWorkflowConfiguration(draft.WorkflowSteps, draft.Fields);
 
         if (requestType.SpecializedSectionId is null)
         {
@@ -957,6 +964,8 @@ public class RequestTypesController(ServicePortalDbContext db, ICurrentUserServi
             EscalationUserId = x.EscalationUserId,
             EscalationRoleId = x.EscalationRoleId,
             ReturnToStepOrder = x.ReturnToStepOrder,
+            ExecutionMode = x.ExecutionMode,
+            ConditionJson = x.ConditionJson,
             SortOrder = x.SortOrder,
             IsActive = x.IsActive
         }));
@@ -1292,7 +1301,7 @@ public class RequestTypesController(ServicePortalDbContext db, ICurrentUserServi
 
     public static WorkflowStepDto MapStep(WorkflowTemplateStep item)
     {
-        return new WorkflowStepDto(item.Id, item.VersionId, item.StepNameAr, item.StepNameEn, item.StepType, item.ApproverRoleId, item.ApproverRole?.NameAr, item.ApproverUserId, item.ApproverUser?.NameAr, item.ApproverUser?.EmployeeNumber, item.TargetDepartmentId, item.TargetDepartment?.NameAr, item.IsMandatory, item.CanApprove, item.CanReject, item.CanReturnForEdit, item.CanDelegate, item.SlaHours, item.EscalationUserId, item.EscalationRoleId, item.ReturnToStepOrder, item.SortOrder, item.IsActive);
+        return new WorkflowStepDto(item.Id, item.VersionId, item.StepNameAr, item.StepNameEn, item.StepType, item.ApproverRoleId, item.ApproverRole?.NameAr, item.ApproverUserId, item.ApproverUser?.NameAr, item.ApproverUser?.EmployeeNumber, item.TargetDepartmentId, item.TargetDepartment?.NameAr, item.IsMandatory, item.CanApprove, item.CanReject, item.CanReturnForEdit, item.CanDelegate, item.SlaHours, item.EscalationUserId, item.EscalationRoleId, item.ReturnToStepOrder, item.ExecutionMode, item.ConditionJson, item.SortOrder, item.IsActive);
     }
 
     public static RequestTypeSettingsDto MapSettings(RequestTypeSettings item)
@@ -1407,6 +1416,9 @@ public class RequestTypesController(ServicePortalDbContext db, ICurrentUserServi
         step.EscalationUserId = LongProp(request, null, "escalation_user_id", "escalationUserId");
         step.EscalationRoleId = LongProp(request, null, "escalation_role_id", "escalationRoleId");
         step.ReturnToStepOrder = step.CanReturnForEdit ? IntProp(request, null, "return_to_step_order", "returnToStepOrder") : null;
+        step.ExecutionMode = NormalizeExecutionMode(step.IsMandatory);
+        step.ConditionJson = step.ExecutionMode == "conditional" ? StringProp(request, null, "condition_json", "conditionJson") : null;
+        ValidateConditionalStep(step.ExecutionMode, step.ConditionJson);
         step.SortOrder = IntProp(request, step.SortOrder > 0 ? step.SortOrder : 1, "sort_order", "sortOrder") ?? 1;
         step.IsActive = BoolProp(request, true, "is_active", "isActive");
     }
@@ -1468,9 +1480,52 @@ public class RequestTypesController(ServicePortalDbContext db, ICurrentUserServi
             escalation_user_id = item.EscalationUserId,
             escalation_role_id = item.EscalationRoleId,
             return_to_step_order = item.ReturnToStepOrder,
+            execution_mode = item.ExecutionMode,
+            condition_json = item.ConditionJson,
             sort_order = item.SortOrder,
             is_active = item.IsActive
         };
+    }
+
+    private static string NormalizeExecutionMode(bool isMandatory)
+    {
+        return isMandatory ? "always" : "conditional";
+    }
+
+    private static void ValidateConditionalStep(string executionMode, string? conditionJson)
+    {
+        if (executionMode == "conditional" && !WorkflowConditionEvaluator.TryValidate(conditionJson, out var error))
+        {
+            throw new ApiException(error ?? "شرط المرحلة غير صالح");
+        }
+    }
+
+    private static void ValidateWorkflowConfiguration(
+        IEnumerable<WorkflowTemplateStep> workflowSteps,
+        IEnumerable<RequestTypeField> fields)
+    {
+        var activeSteps = workflowSteps.Where(x => x.IsActive).OrderBy(x => x.SortOrder).ToList();
+        var activeFieldNames = fields.Where(x => x.IsActive).Select(x => x.FieldName).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var step in activeSteps)
+        {
+            if (string.Equals(step.ExecutionMode, "conditional", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!WorkflowConditionEvaluator.TryGetReferencedField(step.ConditionJson, out var fieldName, out var error))
+                {
+                    throw new ApiException($"مرحلة «{step.StepNameAr}»: {error}");
+                }
+
+                if (!activeFieldNames.Contains(fieldName!))
+                {
+                    throw new ApiException($"مرحلة «{step.StepNameAr}» مرتبطة بحقل غير فعال أو غير موجود");
+                }
+            }
+
+            if (step.ReturnToStepOrder.HasValue && !activeSteps.Any(x => x.SortOrder == step.ReturnToStepOrder.Value && x.SortOrder < step.SortOrder))
+            {
+                throw new ApiException($"مرحلة العودة المحددة في «{step.StepNameAr}» يجب أن تكون مرحلة سابقة وفعالة");
+            }
+        }
     }
 
     private static object ToLegacyVersion(RequestTypeVersion item, int requestsCount)
