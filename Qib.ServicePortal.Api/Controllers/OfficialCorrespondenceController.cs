@@ -825,7 +825,7 @@ public class OfficialCorrespondenceController(
         if (!Path.IsPathRooted(relativePath))
         {
             var relativeCandidate = Path.GetFullPath(Path.Combine(uploadsRoot, relativePath));
-            if (IsWithinDirectory(relativeCandidate, uploadsRoot) && File.Exists(relativeCandidate))
+            if (IsWithinDirectory(relativeCandidate, uploadsRoot) && System.IO.File.Exists(relativeCandidate))
             {
                 return relativeCandidate;
             }
@@ -840,13 +840,13 @@ public class OfficialCorrespondenceController(
         {
             var legacyRelative = normalized[markerIndex..].Replace('/', Path.DirectorySeparatorChar);
             var migratedCandidate = Path.GetFullPath(Path.Combine(uploadsRoot, legacyRelative));
-            if (IsWithinDirectory(migratedCandidate, uploadsRoot) && File.Exists(migratedCandidate))
+            if (IsWithinDirectory(migratedCandidate, uploadsRoot) && System.IO.File.Exists(migratedCandidate))
             {
                 return migratedCandidate;
             }
         }
 
-        return Path.IsPathRooted(candidate) && File.Exists(candidate) ? candidate : null;
+        return Path.IsPathRooted(candidate) && System.IO.File.Exists(candidate) ? candidate : null;
     }
 
     private static bool IsWithinDirectory(string path, string directory)
