@@ -1,5 +1,6 @@
 import { ChangeEvent, FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
-import { Eye, FilePlus2, MessageSquare, RefreshCw, RotateCcw, Save, Search, Send, X } from "lucide-react";
+import { createPortal } from "react-dom";
+import { CheckCircle2, Eye, FilePlus2, MessageSquare, RefreshCw, RotateCcw, Save, Search, Send, Sparkles, X } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { API_BASE, apiFetch, CurrentUser, ServiceRequest } from "../lib/api";
 import { formatSystemDate, formatSystemDateTime, parseApiDate } from "../lib/datetime";
@@ -129,6 +130,7 @@ export function Requests() {
   const [sectionLabels, setSectionLabels] = useState<Record<string, string>>(administrativeSections);
   const [requestType, setRequestType] = useState<RequestType>("");
   const [title, setTitle] = useState("");
+  const [titleEdited, setTitleEdited] = useState(false);
   const [priority, setPriority] = useState<Priority>("medium");
   const [businessJustification, setBusinessJustification] = useState("");
   const [sendNotification, setSendNotification] = useState(true);
@@ -153,6 +155,7 @@ export function Requests() {
   const [requestSearch, setRequestSearch] = useState("");
   const [requestsPage, setRequestsPage] = useState(1);
   const [requestsHasMore, setRequestsHasMore] = useState(false);
+  const [isReviewOpen, setIsReviewOpen] = useState(false);
 
   const availableRequestTypes = useMemo(() => managedRequestTypes, [managedRequestTypes]);
   const selectedType = useMemo(
@@ -162,6 +165,7 @@ export function Requests() {
   const requestListTotal = requestsHasMore ? requestsPage * requestPageSize + 1 : (requestsPage - 1) * requestPageSize + items.length;
   const selectedRequiredFieldsCount = selectedType?.fields.filter((field) => field.required).length ?? 0;
   const selectedAttachmentLabel = !selectedType ? "-" : selectedType.requiresAttachment ? "إلزامية" : typeAllowsAttachments(selectedType) ? "اختيارية" : "غير مفعلة";
+  const suggestedTitle = useMemo(() => buildSuggestedRequestTitle(selectedType, currentUser), [selectedType, currentUser]);
 
   function updateField(name: string, value: FieldValue) {
     setFormData((current) => ({ ...current, [name]: value }));
@@ -170,10 +174,12 @@ export function Requests() {
   function resetForm(nextType = requestType, sourceTypes = availableRequestTypes) {
     const nextConfig = sourceTypes.find((item) => item.value === nextType) ?? sourceTypes[0];
     setTitle("");
+    setTitleEdited(false);
     setPriority(nextConfig?.defaultPriority ?? "medium");
     setBusinessJustification("");
     setSendNotification(requestNotificationControl.default_checked);
     setAttachments([]);
+    setIsReviewOpen(false);
     if (!nextConfig) {
       setFormData({});
       return;
@@ -320,6 +326,12 @@ export function Requests() {
     loadRequests(requestsPage);
   }, [requestsPage, requestSearch]);
 
+  useEffect(() => {
+    if (!editingRequestId && !titleEdited && suggestedTitle) {
+      setTitle(suggestedTitle);
+    }
+  }, [editingRequestId, suggestedTitle, titleEdited]);
+
   function handleTypeChange(event: ChangeEvent<HTMLSelectElement>) {
     const nextType = event.target.value;
     setRequestType(nextType);
@@ -328,27 +340,31 @@ export function Requests() {
     setError("");
   }
 
-  async function create(event: FormEvent) {
+  function reviewRequest(event: FormEvent) {
     event.preventDefault();
     setMessage("");
     setError("");
+
+    const validationError = validateRequestBeforeSubmit(selectedType, attachments, editingRequestId);
+    if (validationError) {
+      setError(validationError);
+      return;
+    }
+
+    setIsReviewOpen(true);
+  }
+
+  async function submitRequest() {
+    setMessage("");
+    setError("");
+    setIsReviewOpen(false);
     setIsSubmitting(true);
 
     try {
-      if (selectedType && !typeAllowsAttachments(selectedType) && attachments.length > 0) {
-        setError("المرفقات غير مفعلة لهذا النوع من الطلبات.");
+      const validationError = validateRequestBeforeSubmit(selectedType, attachments, editingRequestId);
+      if (validationError) {
+        setError(validationError);
         return;
-      }
-      if (selectedType?.requiresAttachment && attachments.length === 0 && !editingRequestId) {
-        setError("هذا النوع من الطلبات يتطلب إرفاق ملف قبل الإرسال.");
-        return;
-      }
-      if (selectedType) {
-        const attachmentError = validateAttachmentsForType(attachments, selectedType);
-        if (attachmentError) {
-          setError(attachmentError);
-          return;
-        }
       }
       const payload = buildRequestPayload();
       if (editingRequestId) {
@@ -389,6 +405,7 @@ export function Requests() {
     setEditingRequestId(item.id);
     setRequestType(nextType.value);
     setTitle(item.title);
+    setTitleEdited(true);
     setPriority(item.priority as Priority);
     setBusinessJustification(item.business_justification || "");
     setSendNotification(requestNotificationControl.default_checked);
@@ -487,6 +504,22 @@ export function Requests() {
     <div className="space-y-6">
       <FeedbackDialog open={Boolean(message)} type="success" message={message} onClose={() => setMessage("")} />
       <FeedbackDialog open={Boolean(error)} type="error" message={error} onClose={() => setError("")} />
+      <RequestReviewDialog
+        open={isReviewOpen}
+        title={title}
+        requestTypeLabel={selectedType?.label || "-"}
+        requesterName={currentUser?.full_name_ar || "-"}
+        sectionLabel={sectionLabelForType(selectedType)}
+        priorityLabel={priorities.find((item) => item.value === priority)?.label || priority}
+        fieldsCount={selectedType?.fields.length || 0}
+        attachmentsCount={attachments.length}
+        businessJustification={businessJustification}
+        sendNotification={requestNotificationControl.allow_toggle ? sendNotification : requestNotificationControl.default_checked}
+        editing={Boolean(editingRequestId)}
+        submitting={isSubmitting}
+        onClose={() => setIsReviewOpen(false)}
+        onConfirm={submitRequest}
+      />
 
       <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
@@ -549,7 +582,7 @@ export function Requests() {
                 </div>
               </div>
 
-              <form onSubmit={create} className="space-y-5">
+              <form onSubmit={reviewRequest} className="space-y-5">
             <FormSection title="معلومات الطلب الأساسية" description="يتم جلب نوع الطلب والقسم المختص والأولوية الافتراضية من إدارة الطلبات.">
               <div className="grid gap-4 md:grid-cols-2">
                 <label className="block space-y-2 text-sm font-medium text-slate-700">
@@ -571,7 +604,35 @@ export function Requests() {
 
                 <label className="block space-y-2 text-sm font-medium text-slate-700 md:col-span-2">
                   عنوان الطلب
-                  <Input value={title} onChange={(event) => setTitle(event.target.value)} required placeholder="مثال: تفعيل VPN لموظف إدارة العمليات" />
+                  <Input
+                    value={title}
+                    onChange={(event) => {
+                      const nextTitle = event.target.value;
+                      setTitle(nextTitle);
+                      setTitleEdited(nextTitle.trim() !== suggestedTitle.trim());
+                    }}
+                    required
+                    maxLength={250}
+                    placeholder="سيُقترح العنوان تلقائياً ويمكنك تعديله"
+                  />
+                  <span className="flex flex-wrap items-center justify-between gap-2 text-xs font-normal text-slate-500">
+                    <span className="inline-flex items-center gap-1.5">
+                      <Sparkles className="h-3.5 w-3.5 text-bank-700" />
+                      تم اقتراح العنوان من نوع الطلب واسم مقدم الطلب، ويمكن تعديله عند الحاجة.
+                    </span>
+                    {titleEdited && suggestedTitle && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setTitle(suggestedTitle);
+                          setTitleEdited(false);
+                        }}
+                        className="font-bold text-bank-700 hover:text-bank-800"
+                      >
+                        استعادة العنوان المقترح
+                      </button>
+                    )}
+                  </span>
                 </label>
 
                 <label className="block space-y-2 text-sm font-medium text-slate-700">
@@ -692,7 +753,7 @@ export function Requests() {
             </FormSection>
             )}
 
-            <FormSection title="المراجعة والإرسال" description="أضف مبرر الطلب ثم أرسله إلى مسار الموافقات.">
+            <FormSection title="سبب الطلب" description="وضّح الحاجة التشغيلية للطلب باختصار قبل مراجعته وإرساله.">
               <label className="block space-y-2 text-sm font-medium text-slate-700">
                 مبرر العمل
                 <textarea value={businessJustification} onChange={(event) => setBusinessJustification(event.target.value)} required rows={4} placeholder="اشرح سبب الطلب والأثر التشغيلي المتوقع" className="w-full resize-y rounded-md border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-bank-600 focus:ring-2 focus:ring-bank-100" />
@@ -718,15 +779,19 @@ export function Requests() {
               )}
             </FormSection>
 
-            <div className="flex flex-col gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 sm:flex-row sm:items-center sm:justify-between">
-              <div className="text-xs leading-5 text-slate-500">
-                <p className="font-bold text-slate-700">ملخص سريع</p>
-                <p>{selectedType.label} - {sectionLabelForType(selectedType)} - {priorities.find((type) => type.value === priority)?.label ?? priority}</p>
+            <div className="flex flex-col gap-4 rounded-md border border-slate-200 bg-slate-50 p-4 sm:flex-row sm:items-center sm:justify-between">
+              <div className="min-w-0 text-sm leading-6 text-slate-500">
+                <p className="flex items-center gap-2 font-bold text-slate-800">
+                  <CheckCircle2 className="h-4 w-4 text-bank-700" />
+                  جاهز للمراجعة
+                </p>
+                <p className="mt-1 truncate">{title || selectedType.label}</p>
+                <p className="text-xs">لن يُرسل الطلب قبل عرض الملخص وتأكيده.</p>
               </div>
               <div className="flex flex-col gap-3 sm:flex-row">
               <Button type="submit" disabled={isSubmitting} className="gap-2">
                 <Send className="h-4 w-4" />
-                {isSubmitting ? "جاري الإرسال..." : editingRequestId ? "حفظ وإعادة إرسال" : "إرسال الطلب"}
+                {editingRequestId ? "مراجعة إعادة الإرسال" : "مراجعة وإرسال"}
               </Button>
               <button type="button" onClick={() => { setEditingRequestId(null); resetForm(); }} className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50">
                 <Save className="h-4 w-4" />
@@ -1058,6 +1123,103 @@ function RequestSummaryChip({ label, value }: { label: string; value: string }) 
   );
 }
 
+function RequestReviewDialog({
+  open,
+  title,
+  requestTypeLabel,
+  requesterName,
+  sectionLabel,
+  priorityLabel,
+  fieldsCount,
+  attachmentsCount,
+  businessJustification,
+  sendNotification,
+  editing,
+  submitting,
+  onClose,
+  onConfirm
+}: {
+  open: boolean;
+  title: string;
+  requestTypeLabel: string;
+  requesterName: string;
+  sectionLabel: string;
+  priorityLabel: string;
+  fieldsCount: number;
+  attachmentsCount: number;
+  businessJustification: string;
+  sendNotification: boolean;
+  editing: boolean;
+  submitting: boolean;
+  onClose: () => void;
+  onConfirm: () => void;
+}) {
+  if (!open) return null;
+
+  return createPortal(
+    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm" dir="rtl" role="dialog" aria-modal="true" aria-labelledby="request-review-title">
+      <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-2xl">
+        <div className="flex items-start justify-between gap-4 border-b border-slate-200 p-5">
+          <div>
+            <p className="text-sm font-bold text-bank-700">الخطوة الأخيرة</p>
+            <h3 id="request-review-title" className="mt-1 text-xl font-black text-slate-950">مراجعة الطلب قبل الإرسال</h3>
+            <p className="mt-1 text-sm leading-6 text-slate-500">تحقق من البيانات الأساسية، ثم أكّد الإرسال إلى مسار الموافقات.</p>
+          </div>
+          <button type="button" onClick={onClose} disabled={submitting} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-slate-200 text-slate-500 hover:bg-slate-50 disabled:opacity-50" aria-label="إغلاق المراجعة">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="space-y-5 p-5">
+          <div className="rounded-md border border-bank-100 bg-bank-50 p-4">
+            <p className="text-xs font-bold text-bank-700">عنوان الطلب</p>
+            <p className="mt-1 break-words text-lg font-black text-slate-950">{title}</p>
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            <ReviewItem label="نوع الطلب" value={requestTypeLabel} />
+            <ReviewItem label="مقدم الطلب" value={requesterName} />
+            <ReviewItem label="القسم المختص" value={sectionLabel} />
+            <ReviewItem label="الأولوية" value={priorityLabel} />
+            <ReviewItem label="بيانات النموذج" value={fieldsCount ? `${fieldsCount} حقل` : "لا توجد حقول إضافية"} />
+            <ReviewItem label="المرفقات" value={attachmentsCount ? `${attachmentsCount} مرفق` : "بدون مرفقات"} />
+          </div>
+
+          <div className="rounded-md border border-slate-200 bg-slate-50 p-4">
+            <p className="text-xs font-bold text-slate-500">سبب الطلب</p>
+            <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-7 text-slate-800">{businessJustification}</p>
+          </div>
+
+          <div className="flex items-center gap-2 text-xs text-slate-500">
+            <CheckCircle2 className="h-4 w-4 text-bank-700" />
+            {sendNotification ? "سيتم إرسال إشعار للجهة الأولى في مسار الموافقات." : "لن يتم إرسال إشعار مراسلات لهذا الطلب."}
+          </div>
+        </div>
+
+        <div className="flex flex-col-reverse gap-3 border-t border-slate-200 p-5 sm:flex-row sm:justify-end">
+          <button type="button" onClick={onClose} disabled={submitting} className="inline-flex h-10 items-center justify-center rounded-md border border-slate-300 bg-white px-5 text-sm font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-50">
+            العودة للتعديل
+          </button>
+          <Button type="button" onClick={onConfirm} disabled={submitting} className="gap-2 px-6">
+            <Send className="h-4 w-4" />
+            {submitting ? "جاري الإرسال..." : editing ? "حفظ وإعادة إرسال" : "تأكيد وإرسال الطلب"}
+          </Button>
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
+}
+
+function ReviewItem({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-md border border-slate-200 bg-white px-4 py-3">
+      <p className="text-xs font-bold text-slate-500">{label}</p>
+      <p className="mt-1 break-words font-bold text-slate-900">{value}</p>
+    </div>
+  );
+}
+
 function FormSection({ title, description, children }: { title: string; description: string; children: ReactNode }) {
   return (
     <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
@@ -1168,6 +1330,23 @@ function fileAcceptAttribute(type: TypeConfig) {
 
 function typeAllowsAttachments(type: TypeConfig | null | undefined) {
   return Boolean(type?.requiresAttachment || type?.allowMultipleAttachments);
+}
+
+function buildSuggestedRequestTitle(type: TypeConfig | null, user: CurrentUser | null) {
+  if (!type) return "";
+  const requesterName = user?.full_name_ar?.trim();
+  return requesterName ? `${type.label} - ${requesterName}` : type.label;
+}
+
+function validateRequestBeforeSubmit(type: TypeConfig | null, files: File[], editingRequestId: number | null) {
+  if (!type) return "تعذر تحديد نوع الطلب. حدّث القائمة ثم حاول مرة أخرى.";
+  if (!typeAllowsAttachments(type) && files.length > 0) {
+    return "المرفقات غير مفعلة لهذا النوع من الطلبات.";
+  }
+  if (type.requiresAttachment && files.length === 0 && !editingRequestId) {
+    return "هذا النوع من الطلبات يتطلب إرفاق ملف قبل الإرسال.";
+  }
+  return validateAttachmentsForType(files, type);
 }
 
 function validateAttachmentForType(file: File, type: TypeConfig) {
