@@ -36,6 +36,31 @@ function Ensure-Directory {
     }
 }
 
+function Invoke-FileOperationWithRetry {
+    param(
+        [Parameter(Mandatory = $true)]
+        [scriptblock]$Operation,
+        [Parameter(Mandatory = $true)]
+        [string]$Description,
+        [int]$MaxAttempts = 12,
+        [int]$DelaySeconds = 1
+    )
+
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        try {
+            & $Operation
+            return
+        } catch {
+            if ($attempt -eq $MaxAttempts) {
+                throw "$Description failed after $MaxAttempts attempts. $($_.Exception.Message)"
+            }
+
+            Write-Warning "$Description is waiting for IIS to release files (attempt $attempt of $MaxAttempts)."
+            Start-Sleep -Seconds $DelaySeconds
+        }
+    }
+}
+
 if ($JwtSecret.Length -lt 32) {
     throw "JwtSecret must be at least 32 characters."
 }
@@ -81,9 +106,46 @@ if (-not $SkipBuild) {
     Pop-Location
 }
 
+$apiSiteWasStarted = $false
+$apiAppPoolWasStarted = $false
+$iisAdministrationAvailable = $null -ne (Get-Module -ListAvailable -Name WebAdministration)
+$appOfflinePath = Join-Path $apiTarget "app_offline.htm"
+
+Write-Step "Stopping the API before replacing published files"
+Set-Content -Path $appOfflinePath -Value "QIB Service Portal API deployment is in progress." -Encoding UTF8
+
+if ($iisAdministrationAvailable) {
+    Import-Module WebAdministration
+
+    $existingApiSite = Get-Website -Name $ApiSiteName -ErrorAction SilentlyContinue
+    if ($null -ne $existingApiSite) {
+        $apiSiteWasStarted = $existingApiSite.State -eq "Started"
+        if ($apiSiteWasStarted) {
+            Stop-Website -Name $ApiSiteName
+        }
+    }
+
+    if (Test-Path "IIS:\AppPools\$ApiSiteName") {
+        $apiAppPoolWasStarted = (Get-WebAppPoolState -Name $ApiSiteName).Value -eq "Started"
+        if ($apiAppPoolWasStarted) {
+            Stop-WebAppPool -Name $ApiSiteName
+        }
+    }
+}
+
+# app_offline.htm also shuts down an in-process ASP.NET application when the
+# script is used without -ConfigureIis. Give ANCM time to release assemblies.
+Start-Sleep -Seconds 2
+
 Write-Step "Copying API publish output"
-Remove-Item "$apiTarget\*" -Recurse -Force -ErrorAction SilentlyContinue
-Copy-Item "$apiPublishTemp\*" $apiTarget -Recurse -Force
+Invoke-FileOperationWithRetry -Description "Cleaning the previous API deployment" -Operation {
+    Get-ChildItem -LiteralPath $apiTarget -Force |
+        Where-Object { $_.FullName -ne $appOfflinePath } |
+        Remove-Item -Recurse -Force
+}
+Invoke-FileOperationWithRetry -Description "Copying the API publish output" -Operation {
+    Copy-Item "$apiPublishTemp\*" $apiTarget -Recurse -Force
+}
 Ensure-Directory (Join-Path $apiTarget "logs")
 Copy-Item (Join-Path $windowsDeploy "api.web.config") (Join-Path $apiTarget "web.config") -Force
 
@@ -163,10 +225,34 @@ if ($ConfigureIis) {
         }
     }
 
-    Start-WebAppPool $ApiSiteName
-    Start-WebAppPool $FrontendSiteName
-    Start-Website $ApiSiteName
-    Start-Website $FrontendSiteName
+}
+
+Remove-Item $appOfflinePath -Force -ErrorAction SilentlyContinue
+
+if ($iisAdministrationAvailable) {
+    if ($ConfigureIis -or $apiAppPoolWasStarted) {
+        if ((Get-WebAppPoolState -Name $ApiSiteName).Value -ne "Started") {
+            Start-WebAppPool -Name $ApiSiteName
+        }
+    }
+
+    if ($ConfigureIis) {
+        if ((Get-WebAppPoolState -Name $FrontendSiteName).Value -ne "Started") {
+            Start-WebAppPool -Name $FrontendSiteName
+        }
+    }
+
+    if ($ConfigureIis -or $apiSiteWasStarted) {
+        if ((Get-Website -Name $ApiSiteName).State -ne "Started") {
+            Start-Website -Name $ApiSiteName
+        }
+    }
+
+    if ($ConfigureIis) {
+        if ((Get-Website -Name $FrontendSiteName).State -ne "Started") {
+            Start-Website -Name $FrontendSiteName
+        }
+    }
 }
 
 Write-Step "Deployment completed"
