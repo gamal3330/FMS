@@ -177,7 +177,7 @@ export default function WorkflowBuilder({ requestTypeId, notify, onWorkflowChang
               <div>
                 <p className="font-black">هذا المسار محفوظ كمسودة</p>
                 <p className="mt-1 text-sm leading-6 text-amber-800 dark:text-amber-100/80">
-                  الطلبات الجديدة تستخدم النسخة المنشورة فقط. انشر هذه المسودة حتى يظهر مسار VPN الكامل بدلاً من المرحلة المنشورة القديمة.
+                  الطلبات الجديدة تستخدم النسخة المنشورة فقط. انشر هذه المسودة حتى تستخدم الطلبات الجديدة مسار الموافقات الكامل بدلاً من المسار المنشور السابق.
                 </p>
               </div>
             </div>
