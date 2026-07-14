@@ -65,7 +65,13 @@ builder.Services.AddSwaggerGen(options =>
 builder.Services.AddHttpContextAccessor();
 
 var connectionString = DatabaseUrlParser.ResolveConnectionString(builder.Configuration);
-builder.Services.AddDbContext<ServicePortalDbContext>(options => options.UseNpgsql(connectionString));
+builder.Services.AddSingleton<UtcDateTimeOffsetCommandInterceptor>();
+builder.Services.AddDbContext<ServicePortalDbContext>((serviceProvider, options) =>
+{
+    options
+        .UseNpgsql(connectionString)
+        .AddInterceptors(serviceProvider.GetRequiredService<UtcDateTimeOffsetCommandInterceptor>());
+});
 
 builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection("Jwt"));
 var jwtOptions = builder.Configuration.GetSection("Jwt").Get<JwtOptions>() ?? new JwtOptions();
