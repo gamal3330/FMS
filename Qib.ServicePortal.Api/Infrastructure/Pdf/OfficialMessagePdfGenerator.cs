@@ -138,30 +138,33 @@ public static class OfficialMessagePdfGenerator
                 }
             });
 
-            column.Item().PaddingTop(28).Row(row =>
+            column.Item().PaddingTop(28).Column(signature =>
             {
-                row.RelativeItem();
-                row.ConstantItem(230).AlignRight().Column(signature =>
+                signature.Item().AlignCenter().Text("وتفضلوا بقبول فائق الاحترام،").AlignCenter().FontSize(12);
+                if (!string.IsNullOrWhiteSpace(model.SignatureImagePath) && File.Exists(model.SignatureImagePath))
                 {
-                    signature.Item().Text("وتفضلوا بقبول فائق الاحترام،").FontSize(12);
-                    if (!string.IsNullOrWhiteSpace(model.SignatureImagePath) && File.Exists(model.SignatureImagePath))
-                    {
-                        var signatureBytes = File.ReadAllBytes(model.SignatureImagePath);
-                        signature.Item().PaddingTop(8).Height(62).AlignRight().Image(signatureBytes).FitArea();
-                    }
+                    var signatureBytes = File.ReadAllBytes(model.SignatureImagePath);
+                    signature.Item().PaddingTop(8).AlignCenter().Width(170).Height(62).Image(signatureBytes).FitArea();
+                }
 
-                    signature.Item().PaddingTop(12).Text(model.SenderName).Bold();
+                signature.Item().PaddingTop(12).AlignCenter().Text(model.SenderName).AlignCenter().Bold();
+            });
+
+            if (!string.IsNullOrWhiteSpace(model.SignatureLabel) || model.ShowGeneratedBy)
+            {
+                column.Item().PaddingTop(6).AlignLeft().Width(260).Column(metadata =>
+                {
                     if (!string.IsNullOrWhiteSpace(model.SignatureLabel))
                     {
-                        signature.Item().Text(model.SignatureLabel).FontSize(9).FontColor(Colors.Grey.Darken1);
+                        metadata.Item().AlignLeft().Text(model.SignatureLabel).FontSize(9).FontColor(Colors.Grey.Darken1);
                     }
 
                     if (model.ShowGeneratedBy)
                     {
-                        signature.Item().Text($"أنشئ بواسطة: {model.GeneratedBy}").FontSize(9).FontColor(Colors.Grey.Darken1);
+                        metadata.Item().AlignLeft().Text($"أنشئ بواسطة: {model.GeneratedBy}").FontSize(9).FontColor(Colors.Grey.Darken1);
                     }
                 });
-            });
+            }
         });
     }
 
