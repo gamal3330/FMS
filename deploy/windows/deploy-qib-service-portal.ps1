@@ -11,10 +11,8 @@ param(
     [int]$DatabasePort = 5432,
     [string]$DatabaseName = "qib_service_portal_dotnet",
     [string]$DatabaseUser = "qib_dotnet",
-    [Parameter(Mandatory = $true)]
-    [object]$DatabasePassword,
-    [Parameter(Mandatory = $true)]
-    [object]$JwtSecret,
+    [object]$DatabasePassword = $null,
+    [object]$JwtSecret = $null,
     [string]$SeedAdminEmail = "admin@qib.internal-bank.qa",
     [object]$SeedAdminPassword = "ChangeMe@12345",
     [switch]$SkipBuild,
@@ -63,11 +61,23 @@ function Invoke-FileOperationWithRetry {
 
 function ConvertTo-PlainTextSecret {
     param(
+        [object]$Value = $null,
         [Parameter(Mandatory = $true)]
-        [object]$Value,
-        [Parameter(Mandatory = $true)]
-        [string]$Name
+        [string]$Name,
+        [string]$FallbackValue = $null
     )
+
+    if ($null -eq $Value) {
+        if (-not [string]::IsNullOrEmpty($FallbackValue)) {
+            return [string]$FallbackValue
+        }
+
+        throw "$Name is required. Provide it as a parameter or keep an existing appsettings.Production.json with this value."
+    }
+
+    if ($Value -is [System.Management.Automation.PSObject] -and $null -ne $Value.BaseObject) {
+        $Value = $Value.BaseObject
+    }
 
     if ($Value -is [System.Security.SecureString]) {
         $secretPointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($Value)
@@ -79,22 +89,40 @@ function ConvertTo-PlainTextSecret {
     } elseif ($Value -is [string]) {
         $plainText = $Value
     } else {
-        throw "$Name must be provided as a string or SecureString."
+        $plainText = [string]$Value
     }
 
     if ([string]::IsNullOrEmpty($plainText)) {
+        if (-not [string]::IsNullOrEmpty($FallbackValue)) {
+            return [string]$FallbackValue
+        }
+
         throw "$Name cannot be empty."
     }
 
     return $plainText
 }
 
-$databasePasswordText = ConvertTo-PlainTextSecret -Value $DatabasePassword -Name "DatabasePassword"
-$jwtSecretText = ConvertTo-PlainTextSecret -Value $JwtSecret -Name "JwtSecret"
-$seedAdminPasswordText = ConvertTo-PlainTextSecret -Value $SeedAdminPassword -Name "SeedAdminPassword"
+function Get-ConnectionStringPassword {
+    param([string]$ConnectionString)
 
-if ($jwtSecretText.Length -lt 32) {
-    throw "JwtSecret must be at least 32 characters."
+    if ([string]::IsNullOrWhiteSpace($ConnectionString)) {
+        return $null
+    }
+
+    try {
+        $builder = [System.Data.Common.DbConnectionStringBuilder]::new()
+        $builder.ConnectionString = $ConnectionString
+        foreach ($key in @("Password", "Pwd")) {
+            if ($builder.ContainsKey($key)) {
+                return [string]$builder[$key]
+            }
+        }
+    } catch {
+        return $null
+    }
+
+    return $null
 }
 
 $apiSource = Join-Path $ProjectRoot "Qib.ServicePortal.Api"
@@ -109,6 +137,28 @@ $frontendTarget = Join-Path $InstallRoot "frontend"
 $uploadsPath = Join-Path $InstallRoot "uploads"
 $backupsPath = Join-Path $InstallRoot "backups"
 $logsPath = Join-Path $InstallRoot "logs"
+$productionSettingsPath = Join-Path $apiTarget "appsettings.Production.json"
+$existingProductionSettings = $null
+if (Test-Path $productionSettingsPath) {
+    try {
+        $existingProductionSettings = Get-Content -Raw -Path $productionSettingsPath | ConvertFrom-Json
+    } catch {
+        Write-Warning "Existing appsettings.Production.json could not be read. Deployment will require explicit secrets."
+    }
+}
+
+$existingConnectionString = $existingProductionSettings.ConnectionStrings.DefaultConnection
+$existingDatabasePassword = Get-ConnectionStringPassword -ConnectionString $existingConnectionString
+$existingJwtSecret = $existingProductionSettings.Jwt.Secret
+$existingSeedAdminPassword = $existingProductionSettings.SeedAdmin.Password
+
+$databasePasswordText = ConvertTo-PlainTextSecret -Value $DatabasePassword -Name "DatabasePassword" -FallbackValue $existingDatabasePassword
+$jwtSecretText = ConvertTo-PlainTextSecret -Value $JwtSecret -Name "JwtSecret" -FallbackValue $existingJwtSecret
+$seedAdminPasswordText = ConvertTo-PlainTextSecret -Value $SeedAdminPassword -Name "SeedAdminPassword" -FallbackValue $existingSeedAdminPassword
+
+if ($jwtSecretText.Length -lt 32) {
+    throw "JwtSecret must be at least 32 characters."
+}
 
 Write-Step "Preparing folders"
 Ensure-Directory $InstallRoot
