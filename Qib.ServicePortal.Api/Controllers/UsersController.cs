@@ -1,3 +1,4 @@
+using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -454,9 +455,11 @@ public class UsersController(
     [Authorize(Policy = "Permission:users.manage")]
     public IActionResult DownloadImportTemplate()
     {
-        const string header = "full_name_ar,full_name_en,username,email,employee_id,mobile,job_title,department_code,manager_employee_id,role\n";
-        var bytes = Encoding.UTF8.GetPreamble().Concat(Encoding.UTF8.GetBytes(header)).ToArray();
-        return File(bytes, "text/csv; charset=utf-8", "users-import-template.csv");
+        var bytes = CreateUsersImportTemplateXlsx();
+        return File(
+            bytes,
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "users-import-template.xlsx");
     }
 
     [HttpGet("import/batches")]
@@ -473,7 +476,7 @@ public class UsersController(
         return Ok(logs.Select(x => new
         {
             id = x.Id,
-            file_name = "users-import-template.csv",
+            file_name = "users-import-template.xlsx",
             total_rows = 0,
             valid_rows = 0,
             invalid_rows = 0,
@@ -1238,6 +1241,142 @@ public class UsersController(
     {
         var value = StringProp(json, names);
         return DateTimeOffset.TryParse(value, out var parsed) ? parsed : null;
+    }
+
+    private static byte[] CreateUsersImportTemplateXlsx()
+    {
+        var headers = new[]
+        {
+            "full_name_ar",
+            "full_name_en",
+            "username",
+            "email",
+            "employee_id",
+            "mobile",
+            "job_title",
+            "department_code",
+            "manager_employee_id",
+            "role"
+        };
+
+        using var output = new MemoryStream();
+        using (var archive = new ZipArchive(output, ZipArchiveMode.Create, leaveOpen: true))
+        {
+            AddZipEntry(archive, "[Content_Types].xml",
+                """
+                <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+                <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+                  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+                  <Default Extension="xml" ContentType="application/xml"/>
+                  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+                  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+                  <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
+                </Types>
+                """);
+
+            AddZipEntry(archive, "_rels/.rels",
+                """
+                <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+                <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+                  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+                </Relationships>
+                """);
+
+            AddZipEntry(archive, "xl/workbook.xml",
+                """
+                <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+                <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+                  <sheets>
+                    <sheet name="users" sheetId="1" r:id="rId1"/>
+                  </sheets>
+                </workbook>
+                """);
+
+            AddZipEntry(archive, "xl/_rels/workbook.xml.rels",
+                """
+                <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+                <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+                  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+                  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+                </Relationships>
+                """);
+
+            AddZipEntry(archive, "xl/styles.xml",
+                """
+                <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+                <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+                  <fonts count="2">
+                    <font><sz val="11"/><name val="Arial"/></font>
+                    <font><b/><sz val="11"/><name val="Arial"/></font>
+                  </fonts>
+                  <fills count="2">
+                    <fill><patternFill patternType="none"/></fill>
+                    <fill><patternFill patternType="gray125"/></fill>
+                  </fills>
+                  <borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>
+                  <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+                  <cellXfs count="2">
+                    <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+                    <xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/>
+                  </cellXfs>
+                  <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
+                </styleSheet>
+                """);
+
+            AddZipEntry(archive, "xl/worksheets/sheet1.xml", BuildUsersImportWorksheet(headers));
+        }
+
+        return output.ToArray();
+    }
+
+    private static string BuildUsersImportWorksheet(IReadOnlyList<string> headers)
+    {
+        var columns = string.Join("", Enumerable.Range(1, headers.Count).Select(index => $"<col min=\"{index}\" max=\"{index}\" width=\"22\" customWidth=\"1\"/>"));
+        var cells = string.Join("", headers.Select((header, index) =>
+        {
+            var reference = $"{ExcelColumnName(index + 1)}1";
+            return $"<c r=\"{reference}\" t=\"inlineStr\" s=\"1\"><is><t>{XmlEscape(header)}</t></is></c>";
+        }));
+
+        return
+            $$"""
+            <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+            <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+              <sheetViews>
+                <sheetView workbookViewId="0" rightToLeft="1"/>
+              </sheetViews>
+              <cols>{{columns}}</cols>
+              <sheetData>
+                <row r="1">{{cells}}</row>
+              </sheetData>
+            </worksheet>
+            """;
+    }
+
+    private static string ExcelColumnName(int index)
+    {
+        var name = string.Empty;
+        while (index > 0)
+        {
+            index--;
+            name = (char)('A' + index % 26) + name;
+            index /= 26;
+        }
+
+        return name;
+    }
+
+    private static string XmlEscape(string value)
+    {
+        return System.Security.SecurityElement.Escape(value) ?? string.Empty;
+    }
+
+    private static void AddZipEntry(ZipArchive archive, string path, string content)
+    {
+        var entry = archive.CreateEntry(path, CompressionLevel.Fastest);
+        using var stream = entry.Open();
+        var bytes = Encoding.UTF8.GetBytes(content.Trim());
+        stream.Write(bytes, 0, bytes.Length);
     }
 
     private static bool TryGetProperty(JsonElement json, string name, out JsonElement value)
