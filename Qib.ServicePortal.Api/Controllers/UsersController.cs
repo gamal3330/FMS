@@ -1306,16 +1306,7 @@ public class UsersController(
                 </Relationships>
                 """);
 
-            AddZipEntry(archive, "xl/workbook.xml",
-                """
-                <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-                <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
-                  <sheets>
-                    <sheet name="users" sheetId="1" r:id="rId1"/>
-                    <sheet name="lookups" sheetId="2" r:id="rId2"/>
-                  </sheets>
-                </workbook>
-                """);
+            AddZipEntry(archive, "xl/workbook.xml", BuildUsersImportWorkbook(roles.Count, departments.Count, managers.Count));
 
             AddZipEntry(archive, "xl/_rels/workbook.xml.rels",
                 """
@@ -1386,22 +1377,62 @@ public class UsersController(
             """;
     }
 
+    private static string BuildUsersImportWorkbook(int roleCount, int departmentCount, int managerCount)
+    {
+        var definedNames = new List<string>();
+        if (departmentCount > 0)
+        {
+            definedNames.Add(ExcelDefinedName("DepartmentCodes", "A", departmentCount));
+        }
+
+        if (managerCount > 0)
+        {
+            definedNames.Add(ExcelDefinedName("ManagerEmployeeIds", "C", managerCount));
+        }
+
+        if (roleCount > 0)
+        {
+            definedNames.Add(ExcelDefinedName("RoleCodes", "E", roleCount));
+        }
+
+        var definedNamesXml = definedNames.Count == 0
+            ? string.Empty
+            : $"<definedNames>{string.Join("", definedNames)}</definedNames>";
+
+        return
+            $$"""
+            <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+            <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+              <sheets>
+                <sheet name="users" sheetId="1" r:id="rId1"/>
+                <sheet name="lookups" sheetId="2" r:id="rId2"/>
+              </sheets>
+              {{definedNamesXml}}
+            </workbook>
+            """;
+    }
+
+    private static string ExcelDefinedName(string name, string column, int count)
+    {
+        return "<definedName name=\"" + name + "\">lookups!$" + column + "$2:$" + column + "$" + (count + 1) + "</definedName>";
+    }
+
     private static string BuildImportTemplateValidations(int roleCount, int departmentCount, int managerCount)
     {
         var items = new List<string>();
         if (departmentCount > 0)
         {
-            items.Add(DataValidation("H2:H1000", $"lookups!$A$2:$A${departmentCount + 1}", allowBlank: false));
+            items.Add(DataValidation("H2:H1000", "DepartmentCodes", allowBlank: false));
         }
 
         if (managerCount > 0)
         {
-            items.Add(DataValidation("I2:I1000", $"lookups!$C$2:$C${managerCount + 1}", allowBlank: true));
+            items.Add(DataValidation("I2:I1000", "ManagerEmployeeIds", allowBlank: true));
         }
 
         if (roleCount > 0)
         {
-            items.Add(DataValidation("J2:J1000", $"lookups!$E$2:$E${roleCount + 1}", allowBlank: false));
+            items.Add(DataValidation("J2:J1000", "RoleCodes", allowBlank: false));
         }
 
         return items.Count == 0
