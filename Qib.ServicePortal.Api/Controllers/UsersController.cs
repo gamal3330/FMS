@@ -453,9 +453,29 @@ public class UsersController(
 
     [HttpGet("import-template")]
     [Authorize(Policy = "Permission:users.manage")]
-    public IActionResult DownloadImportTemplate()
+    public async Task<IActionResult> DownloadImportTemplate(CancellationToken cancellationToken)
     {
-        var bytes = CreateUsersImportTemplateXlsx();
+        var roles = await db.Roles
+            .AsNoTracking()
+            .Where(x => x.IsActive)
+            .OrderBy(x => x.NameAr)
+            .ThenBy(x => x.Code)
+            .Select(x => new LookupValue(x.Code, x.NameAr))
+            .ToListAsync(cancellationToken);
+        var departments = await db.Departments
+            .AsNoTracking()
+            .Where(x => x.IsActive)
+            .OrderBy(x => x.NameAr)
+            .Select(x => new LookupValue(x.Code, x.NameAr))
+            .ToListAsync(cancellationToken);
+        var managers = await db.Users
+            .AsNoTracking()
+            .Where(x => x.IsActive && x.EmployeeNumber != null && x.EmployeeNumber != "")
+            .OrderBy(x => x.NameAr)
+            .Select(x => new LookupValue(x.EmployeeNumber!, x.NameAr))
+            .ToListAsync(cancellationToken);
+
+        var bytes = CreateUsersImportTemplateXlsx(roles, departments, managers);
         return File(
             bytes,
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -1243,20 +1263,23 @@ public class UsersController(
         return DateTimeOffset.TryParse(value, out var parsed) ? parsed : null;
     }
 
-    private static byte[] CreateUsersImportTemplateXlsx()
+    private static byte[] CreateUsersImportTemplateXlsx(
+        IReadOnlyList<LookupValue> roles,
+        IReadOnlyList<LookupValue> departments,
+        IReadOnlyList<LookupValue> managers)
     {
-        var headers = new[]
+        var columns = new[]
         {
-            "full_name_ar",
-            "full_name_en",
-            "username",
-            "email",
-            "employee_id",
-            "mobile",
-            "job_title",
-            "department_code",
-            "manager_employee_id",
-            "role"
+            new ImportTemplateColumn("full_name_ar", true),
+            new ImportTemplateColumn("full_name_en", false),
+            new ImportTemplateColumn("username", true),
+            new ImportTemplateColumn("email", true),
+            new ImportTemplateColumn("employee_id", true),
+            new ImportTemplateColumn("mobile", false),
+            new ImportTemplateColumn("job_title", false),
+            new ImportTemplateColumn("department_code", true, "department"),
+            new ImportTemplateColumn("manager_employee_id", false, "manager"),
+            new ImportTemplateColumn("role", true, "role")
         };
 
         using var output = new MemoryStream();
@@ -1270,6 +1293,7 @@ public class UsersController(
                   <Default Extension="xml" ContentType="application/xml"/>
                   <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
                   <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+                  <Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
                   <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
                 </Types>
                 """);
@@ -1288,6 +1312,7 @@ public class UsersController(
                 <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
                   <sheets>
                     <sheet name="users" sheetId="1" r:id="rId1"/>
+                    <sheet name="lookups" sheetId="2" r:id="rId2"/>
                   </sheets>
                 </workbook>
                 """);
@@ -1297,7 +1322,8 @@ public class UsersController(
                 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
                 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
                   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
-                  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+                  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/>
+                  <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
                 </Relationships>
                 """);
 
@@ -1323,34 +1349,131 @@ public class UsersController(
                 </styleSheet>
                 """);
 
-            AddZipEntry(archive, "xl/worksheets/sheet1.xml", BuildUsersImportWorksheet(headers));
+            AddZipEntry(archive, "xl/worksheets/sheet1.xml", BuildUsersImportWorksheet(columns, roles.Count, departments.Count, managers.Count));
+            AddZipEntry(archive, "xl/worksheets/sheet2.xml", BuildLookupWorksheet(roles, departments, managers));
         }
 
         return output.ToArray();
     }
 
-    private static string BuildUsersImportWorksheet(IReadOnlyList<string> headers)
+    private static string BuildUsersImportWorksheet(IReadOnlyList<ImportTemplateColumn> columns, int roleCount, int departmentCount, int managerCount)
     {
-        var columns = string.Join("", Enumerable.Range(1, headers.Count).Select(index => $"<col min=\"{index}\" max=\"{index}\" width=\"22\" customWidth=\"1\"/>"));
-        var cells = string.Join("", headers.Select((header, index) =>
+        var columnDefinitions = string.Join("", Enumerable.Range(1, columns.Count).Select(index => $"<col min=\"{index}\" max=\"{index}\" width=\"24\" customWidth=\"1\"/>"));
+        var cells = string.Join("", columns.Select((column, index) =>
         {
             var reference = $"{ExcelColumnName(index + 1)}1";
-            return $"<c r=\"{reference}\" t=\"inlineStr\" s=\"1\"><is><t>{XmlEscape(header)}</t></is></c>";
+            var header = column.Required ? $"{column.Key} *" : column.Key;
+            return InlineStringCell(reference, header, style: 1);
         }));
+        var validations = BuildImportTemplateValidations(roleCount, departmentCount, managerCount);
 
         return
             $$"""
             <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
             <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
               <sheetViews>
-                <sheetView workbookViewId="0" rightToLeft="1"/>
+                <sheetView workbookViewId="0" rightToLeft="1">
+                  <pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/>
+                </sheetView>
               </sheetViews>
-              <cols>{{columns}}</cols>
+              <cols>{{columnDefinitions}}</cols>
               <sheetData>
                 <row r="1">{{cells}}</row>
               </sheetData>
+              <autoFilter ref="A1:J1"/>
+              {{validations}}
             </worksheet>
             """;
+    }
+
+    private static string BuildImportTemplateValidations(int roleCount, int departmentCount, int managerCount)
+    {
+        var items = new List<string>();
+        if (departmentCount > 0)
+        {
+            items.Add(DataValidation("H2:H1000", $"lookups!$A$2:$A${departmentCount + 1}", allowBlank: false));
+        }
+
+        if (managerCount > 0)
+        {
+            items.Add(DataValidation("I2:I1000", $"lookups!$C$2:$C${managerCount + 1}", allowBlank: true));
+        }
+
+        if (roleCount > 0)
+        {
+            items.Add(DataValidation("J2:J1000", $"lookups!$E$2:$E${roleCount + 1}", allowBlank: false));
+        }
+
+        return items.Count == 0
+            ? string.Empty
+            : $"<dataValidations count=\"{items.Count}\">{string.Join("", items)}</dataValidations>";
+    }
+
+    private static string BuildLookupWorksheet(
+        IReadOnlyList<LookupValue> roles,
+        IReadOnlyList<LookupValue> departments,
+        IReadOnlyList<LookupValue> managers)
+    {
+        var rows = new List<string>
+        {
+            $"<row r=\"1\">{InlineStringCell("A1", "department_code", 1)}{InlineStringCell("B1", "department_name", 1)}{InlineStringCell("C1", "manager_employee_id", 1)}{InlineStringCell("D1", "manager_name", 1)}{InlineStringCell("E1", "role", 1)}{InlineStringCell("F1", "role_name", 1)}</row>"
+        };
+
+        var maxRows = Math.Max(Math.Max(roles.Count, departments.Count), managers.Count);
+        for (var index = 0; index < maxRows; index++)
+        {
+            var rowNumber = index + 2;
+            var cells = new StringBuilder();
+            if (index < departments.Count)
+            {
+                cells.Append(InlineStringCell($"A{rowNumber}", departments[index].Value));
+                cells.Append(InlineStringCell($"B{rowNumber}", departments[index].Label));
+            }
+
+            if (index < managers.Count)
+            {
+                cells.Append(InlineStringCell($"C{rowNumber}", managers[index].Value));
+                cells.Append(InlineStringCell($"D{rowNumber}", managers[index].Label));
+            }
+
+            if (index < roles.Count)
+            {
+                cells.Append(InlineStringCell($"E{rowNumber}", roles[index].Value));
+                cells.Append(InlineStringCell($"F{rowNumber}", roles[index].Label));
+            }
+
+            rows.Add($"<row r=\"{rowNumber}\">{cells}</row>");
+        }
+
+        return
+            $$"""
+            <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+            <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+              <sheetViews>
+                <sheetView workbookViewId="0" rightToLeft="1">
+                  <pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/>
+                </sheetView>
+              </sheetViews>
+              <cols>
+                <col min="1" max="6" width="28" customWidth="1"/>
+              </cols>
+              <sheetData>
+                {{string.Join("", rows)}}
+              </sheetData>
+              <autoFilter ref="A1:F1"/>
+            </worksheet>
+            """;
+    }
+
+    private static string DataValidation(string targetRange, string sourceRange, bool allowBlank)
+    {
+        return $"<dataValidation type=\"list\" allowBlank=\"{(allowBlank ? 1 : 0)}\" showErrorMessage=\"1\" errorTitle=\"قيمة غير صحيحة\" error=\"اختر قيمة من القائمة.\" sqref=\"{targetRange}\"><formula1>{sourceRange}</formula1></dataValidation>";
+    }
+
+    private static string InlineStringCell(string reference, string value, int style = 0)
+    {
+        var styleAttribute = style > 0 ? $" s=\"{style}\"" : string.Empty;
+        return $"<c r=\"{reference}\" t=\"inlineStr\"{styleAttribute}><is><t>{XmlEscape(value)}</t></is></c>";
     }
 
     private static string ExcelColumnName(int index)
@@ -1378,6 +1501,10 @@ public class UsersController(
         var bytes = Encoding.UTF8.GetBytes(content.Trim());
         stream.Write(bytes, 0, bytes.Length);
     }
+
+    private sealed record ImportTemplateColumn(string Key, bool Required, string? LookupType = null);
+
+    private sealed record LookupValue(string Value, string Label);
 
     private static bool TryGetProperty(JsonElement json, string name, out JsonElement value)
     {
