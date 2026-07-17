@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Qib.ServicePortal.Api.Application.DTOs;
 using Qib.ServicePortal.Api.Application.Interfaces;
+using Qib.ServicePortal.Api.Application.Services;
 using Qib.ServicePortal.Api.Common.Exceptions;
 using Qib.ServicePortal.Api.Domain.Entities;
 using Qib.ServicePortal.Api.Infrastructure.Data;
@@ -309,6 +310,22 @@ public class RequestTypeVersionsController(ServicePortalDbContext db, IAuditServ
             {
                 errors.Add($"مرحلة {step.StepNameAr} تتطلب إدارة محددة");
             }
+            if (string.Equals(step.ExecutionMode, "conditional", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!WorkflowConditionEvaluator.TryGetReferencedField(step.ConditionJson, out var fieldName, out var conditionError))
+                {
+                    errors.Add($"مرحلة {step.StepNameAr}: {conditionError}");
+                }
+                else if (!version.Fields.Any(x => x.IsActive && string.Equals(x.FieldName, fieldName, StringComparison.OrdinalIgnoreCase)))
+                {
+                    errors.Add($"مرحلة {step.StepNameAr} مرتبطة بحقل غير فعال أو غير موجود");
+                }
+            }
+
+            if (step.ReturnToStepOrder.HasValue && !version.WorkflowSteps.Any(x => x.IsActive && x.SortOrder == step.ReturnToStepOrder.Value && x.SortOrder < step.SortOrder))
+            {
+                errors.Add($"مرحلة العودة المحددة في {step.StepNameAr} يجب أن تكون مرحلة سابقة وفعالة");
+            }
         }
 
         if (version.Fields.Count(x => x.IsActive) == 0)
@@ -366,6 +383,12 @@ public class RequestTypeVersionsController(ServicePortalDbContext db, IAuditServ
         step.EscalationUserId = request.EscalationUserId;
         step.EscalationRoleId = request.EscalationRoleId;
         step.ReturnToStepOrder = request.ReturnToStepOrder;
+        step.ExecutionMode = request.IsMandatory ? "always" : "conditional";
+        step.ConditionJson = step.ExecutionMode == "conditional" ? request.ConditionJson : null;
+        if (step.ExecutionMode == "conditional" && !WorkflowConditionEvaluator.TryValidate(step.ConditionJson, out var error))
+        {
+            throw new ApiException(error ?? "شرط المرحلة غير صالح");
+        }
         step.SortOrder = request.SortOrder;
         step.IsActive = request.IsActive;
     }

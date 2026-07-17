@@ -21,10 +21,24 @@ const advancedStepTypes = [
 const legacyStepTypes = [["information_security", "أمن المعلومات (مرحلة قديمة)"]];
 
 const toggles = [
-  ["is_mandatory", "مرحلة إلزامية"],
+  ["is_mandatory", "تنفذ هذه المرحلة دائماً"],
   ["can_reject", "يسمح بالرفض"],
   ["can_return_for_edit", "يسمح بالإرجاع للتعديل"],
   ["is_active", "مرحلة نشطة"]
+];
+
+const conditionOperators = [
+  ["equals", "يساوي"],
+  ["not_equals", "لا يساوي"],
+  ["contains", "يحتوي على"],
+  ["not_contains", "لا يحتوي على"],
+  ["greater_than", "أكبر من"],
+  ["greater_than_or_equal", "أكبر من أو يساوي"],
+  ["less_than", "أقل من"],
+  ["less_than_or_equal", "أقل من أو يساوي"],
+  ["in", "واحد من القيم"],
+  ["empty", "فارغ"],
+  ["not_empty", "غير فارغ"]
 ];
 
 const stepTypeNames = Object.fromEntries([...primaryStepTypes, ...advancedStepTypes, ...legacyStepTypes].map(([value, label]) => [value, label]));
@@ -42,7 +56,7 @@ const englishStepNames = {
   close_request: "Close Request"
 };
 
-export default function WorkflowStepForm({ form, setForm, roles = [], departments = [], steps = [], editingId, onSubmit, editing, onCancel }) {
+export default function WorkflowStepForm({ form, setForm, roles = [], departments = [], fields = [], steps = [], editingId, onSubmit, editing, onCancel }) {
   const [showAdvanced, setShowAdvanced] = useState(Boolean(editing));
   const stepTypeOptions = form.step_type === "information_security" ? [...primaryStepTypes, ...advancedStepTypes, ...legacyStepTypes] : [...primaryStepTypes, ...advancedStepTypes];
   const selectableRoles = roles.filter((role) => role.code !== "information_security" || Number(role.id) === Number(form.approver_role_id));
@@ -59,6 +73,18 @@ export default function WorkflowStepForm({ form, setForm, roles = [], department
       if (value === "specific_role") setShowAdvanced(true);
     }
     if (field === "can_return_for_edit" && !value) next.return_to_step_order = "";
+    if (field === "is_mandatory") {
+      next.execution_mode = value ? "always" : "conditional";
+      if (value) {
+        next.condition_json = null;
+        next.condition_field_name = "";
+        next.condition_operator = "equals";
+        next.condition_value = "";
+      } else {
+        setShowAdvanced(true);
+      }
+    }
+    if (field === "condition_operator" && ["empty", "not_empty"].includes(value)) next.condition_value = "";
     if (field === "step_type" && value !== "specific_role") next.approver_role_id = "";
     if (field === "step_type" && value !== "specific_user") {
       next.approver_user_id = "";
@@ -148,6 +174,10 @@ export default function WorkflowStepForm({ form, setForm, roles = [], department
             {stepTypeOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
           </select>
           <Input placeholder="رقم مستخدم التصعيد - اختياري" value={form.escalation_user_id || ""} onChange={(event) => update("escalation_user_id", event.target.value)} />
+          <select value={form.escalation_role_id || ""} onChange={(event) => update("escalation_role_id", event.target.value)} className="h-10 rounded-md border border-slate-300 bg-white px-3 text-sm">
+            <option value="">دور التصعيد - اختياري</option>
+            {selectableRoles.map((role) => <option key={role.id} value={role.id}>{role.name_ar || role.code}</option>)}
+          </select>
           <Input type="number" placeholder="SLA المرحلة بالساعات" value={form.sla_hours} onChange={(event) => update("sla_hours", event.target.value)} />
           {toggles.map(([key, label]) => (
             <label key={key} className="flex h-10 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700">
@@ -155,17 +185,44 @@ export default function WorkflowStepForm({ form, setForm, roles = [], department
               {label}
             </label>
           ))}
+          {!form.is_mandatory && (
+            <div className="grid gap-3 rounded-md border border-amber-200 bg-amber-50 p-3 dark:border-amber-500/40 dark:bg-amber-500/10 md:col-span-3 md:grid-cols-3">
+              <div className="md:col-span-3">
+                <p className="text-sm font-black text-amber-900 dark:text-amber-100">شرط تنفيذ المرحلة</p>
+                <p className="mt-1 text-xs leading-5 text-amber-800 dark:text-amber-100/80">لن تدخل المرحلة في مسار الطلب إلا عندما تتحقق القاعدة التالية من بيانات النموذج.</p>
+              </div>
+              <select value={form.condition_field_name || ""} onChange={(event) => update("condition_field_name", event.target.value)} className="h-10 rounded-md border border-amber-300 bg-white px-3 text-sm" required>
+                <option value="">اختر حقل الطلب</option>
+                {fields.filter((field) => field.is_active !== false).map((field) => (
+                  <option key={field.id || field.field_name} value={field.field_name}>
+                    {field.label_ar || field.label_en || field.field_name}
+                  </option>
+                ))}
+              </select>
+              <select value={form.condition_operator || "equals"} onChange={(event) => update("condition_operator", event.target.value)} className="h-10 rounded-md border border-amber-300 bg-white px-3 text-sm">
+                {conditionOperators.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+              </select>
+              <Input
+                placeholder={form.condition_operator === "in" ? "القيم مفصولة بفاصلة" : "القيمة المطلوبة"}
+                value={form.condition_value || ""}
+                onChange={(event) => update("condition_value", event.target.value)}
+                disabled={["empty", "not_empty"].includes(form.condition_operator)}
+                required={!['empty', 'not_empty'].includes(form.condition_operator)}
+              />
+            </div>
+          )}
           {form.can_return_for_edit && (
             <label className="grid gap-1 md:col-span-2">
               <span className="text-xs font-bold text-slate-600">عند الإرجاع، أعد الطلب إلى</span>
               <select value={form.return_to_step_order || ""} onChange={(event) => update("return_to_step_order", event.target.value)} className="h-10 rounded-md border border-slate-300 bg-white px-3 text-sm">
-                <option value="">صاحب الطلب للتعديل</option>
+                <option value="">إعادة المسار من المرحلة الأولى</option>
                 {returnTargetOptions.map((step) => (
                   <option key={step.id} value={step.sort_order}>
                     {step.sort_order}. {step.step_name_ar || step.step_name_en}
                   </option>
                 ))}
               </select>
+              <span className="text-xs text-slate-500">بعد تعديل صاحب الطلب وإعادة الإرسال، يبدأ المسار من المرحلة المختارة مع الاحتفاظ بسجل الإجراءات السابق.</span>
             </label>
           )}
         </div>

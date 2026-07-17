@@ -21,6 +21,8 @@ public class Request : BaseEntity
     public DateTimeOffset? SlaResponseDueAt { get; set; }
     public DateTimeOffset? SlaResolutionDueAt { get; set; }
     public string FormDataJson { get; set; } = "{}";
+    public int WorkflowRevision { get; set; } = 1;
+    public int? ResumeFromStepOrder { get; set; }
     public DateTimeOffset? SubmittedAt { get; set; }
     public DateTimeOffset? ClosedAt { get; set; }
     public ICollection<RequestFieldSnapshot> FieldSnapshots { get; set; } = new List<RequestFieldSnapshot>();
@@ -29,5 +31,6 @@ public class Request : BaseEntity
     public ICollection<RequestStatusHistory> StatusHistory { get; set; } = new List<RequestStatusHistory>();
     public ICollection<RequestComment> Comments { get; set; } = new List<RequestComment>();
     public ICollection<RequestExecutionLog> ExecutionLogs { get; set; } = new List<RequestExecutionLog>();
+    public ICollection<RequestApprovalAction> ApprovalActions { get; set; } = new List<RequestApprovalAction>();
     public RequestSlaTracking? SlaTracking { get; set; }
 }

@@ -14,6 +14,7 @@ using Qib.ServicePortal.Api.Common.Authorization;
 using Qib.ServicePortal.Api.Common.Middleware;
 using Qib.ServicePortal.Api.Common.OpenApi;
 using Qib.ServicePortal.Api.Infrastructure.Data;
+using Qib.ServicePortal.Api.Infrastructure.Jobs;
 using Qib.ServicePortal.Api.Infrastructure.Security;
 using Quartz;
 using Serilog;
@@ -65,7 +66,13 @@ builder.Services.AddSwaggerGen(options =>
 builder.Services.AddHttpContextAccessor();
 
 var connectionString = DatabaseUrlParser.ResolveConnectionString(builder.Configuration);
-builder.Services.AddDbContext<ServicePortalDbContext>(options => options.UseNpgsql(connectionString));
+builder.Services.AddSingleton<UtcDateTimeOffsetCommandInterceptor>();
+builder.Services.AddDbContext<ServicePortalDbContext>((serviceProvider, options) =>
+{
+    options
+        .UseNpgsql(connectionString)
+        .AddInterceptors(serviceProvider.GetRequiredService<UtcDateTimeOffsetCommandInterceptor>());
+});
 
 builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection("Jwt"));
 var jwtOptions = builder.Configuration.GetSection("Jwt").Get<JwtOptions>() ?? new JwtOptions();
@@ -172,7 +179,19 @@ builder.Services.AddCors(options =>
     });
 });
 
-builder.Services.AddQuartz();
+builder.Services.AddQuartz(options =>
+{
+    var jobKey = new JobKey("workflow-sla-escalation");
+    var intervalMinutes = Math.Max(1, builder.Configuration.GetValue<int?>("Workflow:SlaEscalationIntervalMinutes") ?? 1);
+    options.AddJob<WorkflowSlaEscalationJob>(job => job.WithIdentity(jobKey));
+    options.AddTrigger(trigger => trigger
+        .ForJob(jobKey)
+        .WithIdentity("workflow-sla-escalation-trigger")
+        .StartNow()
+        .WithSimpleSchedule(schedule => schedule
+            .WithIntervalInMinutes(intervalMinutes)
+            .RepeatForever()));
+});
 builder.Services.AddQuartzHostedService(options => options.WaitForJobsToComplete = true);
 
 var app = builder.Build();

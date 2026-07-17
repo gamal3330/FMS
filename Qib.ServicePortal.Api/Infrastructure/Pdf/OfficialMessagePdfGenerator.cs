@@ -11,6 +11,7 @@ public record OfficialPdfRenderModel(
     string BankNameAr,
     string BankNameEn,
     string TemplateName,
+    string? LogoImagePath,
     string HeaderText,
     string FooterText,
     string PrimaryColor,
@@ -68,17 +69,41 @@ public static class OfficialMessagePdfGenerator
                     bank.Item().Text(model.BankNameEn).FontSize(10).FontColor(Colors.Grey.Darken1);
                 });
 
-                row.ConstantItem(82).AlignCenter().AlignMiddle().Border(1).BorderColor(model.PrimaryColor).Padding(8).Column(logo =>
-                {
-                    logo.Item().AlignCenter().Text("QIB").FontSize(18).Bold().FontColor(model.PrimaryColor);
-                    logo.Item().AlignCenter().Text("Portal").FontSize(8).FontColor(Colors.Grey.Darken1);
-                });
+                row.ConstantItem(110).Height(70).AlignCenter().AlignMiddle().Element(logo => ComposeLogo(logo, model));
             });
 
             if (!string.IsNullOrWhiteSpace(model.HeaderText))
             {
                 column.Item().PaddingTop(8).AlignRight().Text(model.HeaderText.Replace("<br/>", " | ")).FontSize(10).FontColor(Colors.Grey.Darken1);
             }
+        });
+    }
+
+    private static void ComposeLogo(IContainer container, OfficialPdfRenderModel model)
+    {
+        if (!string.IsNullOrWhiteSpace(model.LogoImagePath) && File.Exists(model.LogoImagePath))
+        {
+            try
+            {
+                container.Image(File.ReadAllBytes(model.LogoImagePath)).FitArea();
+                return;
+            }
+            catch (InvalidDataException)
+            {
+                // A stale or invalid asset must not prevent the rest of the PDF
+                // from being generated; render the visible fallback instead.
+            }
+
+            catch (ArgumentException)
+            {
+                // QuestPDF reports malformed image data as ArgumentException.
+            }
+        }
+
+        container.Border(1).BorderColor(model.PrimaryColor).Padding(8).Column(logo =>
+        {
+            logo.Item().AlignCenter().Text("QIB").FontSize(18).Bold().FontColor(model.PrimaryColor);
+            logo.Item().AlignCenter().Text("Portal").FontSize(8).FontColor(Colors.Grey.Darken1);
         });
     }
 
@@ -138,30 +163,33 @@ public static class OfficialMessagePdfGenerator
                 }
             });
 
-            column.Item().PaddingTop(28).Row(row =>
+            column.Item().PaddingTop(28).Column(signature =>
             {
-                row.RelativeItem();
-                row.ConstantItem(230).AlignRight().Column(signature =>
+                signature.Item().AlignCenter().Text("وتفضلوا بقبول فائق الاحترام،").AlignCenter().FontSize(12);
+                if (!string.IsNullOrWhiteSpace(model.SignatureImagePath) && File.Exists(model.SignatureImagePath))
                 {
-                    signature.Item().Text("وتفضلوا بقبول فائق الاحترام،").FontSize(12);
-                    if (!string.IsNullOrWhiteSpace(model.SignatureImagePath) && File.Exists(model.SignatureImagePath))
-                    {
-                        var signatureBytes = File.ReadAllBytes(model.SignatureImagePath);
-                        signature.Item().PaddingTop(8).Height(62).AlignRight().Image(signatureBytes).FitArea();
-                    }
+                    var signatureBytes = File.ReadAllBytes(model.SignatureImagePath);
+                    signature.Item().PaddingTop(8).AlignCenter().Width(170).Height(62).Image(signatureBytes).FitArea();
+                }
 
-                    signature.Item().PaddingTop(12).Text(model.SenderName).Bold();
+                signature.Item().PaddingTop(12).AlignCenter().Text(model.SenderName).AlignCenter().Bold();
+            });
+
+            if (!string.IsNullOrWhiteSpace(model.SignatureLabel) || model.ShowGeneratedBy)
+            {
+                column.Item().PaddingTop(6).AlignLeft().Width(260).Column(metadata =>
+                {
                     if (!string.IsNullOrWhiteSpace(model.SignatureLabel))
                     {
-                        signature.Item().Text(model.SignatureLabel).FontSize(9).FontColor(Colors.Grey.Darken1);
+                        metadata.Item().AlignLeft().Text(model.SignatureLabel).FontSize(9).FontColor(Colors.Grey.Darken1);
                     }
 
                     if (model.ShowGeneratedBy)
                     {
-                        signature.Item().Text($"أنشئ بواسطة: {model.GeneratedBy}").FontSize(9).FontColor(Colors.Grey.Darken1);
+                        metadata.Item().AlignLeft().Text($"أنشئ بواسطة: {model.GeneratedBy}").FontSize(9).FontColor(Colors.Grey.Darken1);
                     }
                 });
-            });
+            }
         });
     }
 

@@ -31,6 +31,7 @@ public class ServicePortalDbContext(DbContextOptions<ServicePortalDbContext> opt
     public DbSet<RequestStatusHistory> RequestStatusHistory => Set<RequestStatusHistory>();
     public DbSet<RequestComment> RequestComments => Set<RequestComment>();
     public DbSet<RequestExecutionLog> RequestExecutionLogs => Set<RequestExecutionLog>();
+    public DbSet<RequestApprovalAction> RequestApprovalActions => Set<RequestApprovalAction>();
     public DbSet<RequestSlaTracking> RequestSlaTracking => Set<RequestSlaTracking>();
     public DbSet<Message> Messages => Set<Message>();
     public DbSet<MessageRecipient> MessageRecipients => Set<MessageRecipient>();
@@ -246,6 +247,7 @@ public class ServicePortalDbContext(DbContextOptions<ServicePortalDbContext> opt
             entity.HasIndex(x => new { x.VersionId, x.SortOrder });
             entity.Property(x => x.StepNameAr).HasMaxLength(255);
             entity.Property(x => x.StepType).HasMaxLength(80);
+            entity.Property(x => x.ExecutionMode).HasMaxLength(30).HasDefaultValue("always");
             entity.HasOne(x => x.Version).WithMany(x => x.WorkflowSteps).HasForeignKey(x => x.VersionId).OnDelete(DeleteBehavior.Cascade);
             entity.HasOne(x => x.ApproverRole).WithMany().HasForeignKey(x => x.ApproverRoleId).OnDelete(DeleteBehavior.SetNull);
             entity.HasOne(x => x.ApproverUser).WithMany().HasForeignKey(x => x.ApproverUserId).OnDelete(DeleteBehavior.SetNull);
@@ -276,6 +278,7 @@ public class ServicePortalDbContext(DbContextOptions<ServicePortalDbContext> opt
             entity.Property(x => x.Title).HasMaxLength(300);
             entity.Property(x => x.Status).HasMaxLength(60);
             entity.Property(x => x.Priority).HasMaxLength(50);
+            entity.Property(x => x.WorkflowRevision).HasDefaultValue(1);
             entity.HasOne(x => x.RequestType).WithMany().HasForeignKey(x => x.RequestTypeId).OnDelete(DeleteBehavior.Restrict);
             entity.HasOne(x => x.RequestTypeVersion).WithMany().HasForeignKey(x => x.RequestTypeVersionId).OnDelete(DeleteBehavior.Restrict);
             entity.HasOne(x => x.Requester).WithMany().HasForeignKey(x => x.RequesterId).OnDelete(DeleteBehavior.Restrict);
@@ -302,11 +305,29 @@ public class ServicePortalDbContext(DbContextOptions<ServicePortalDbContext> opt
             entity.Property(x => x.StepNameAr).HasMaxLength(255);
             entity.Property(x => x.StepType).HasMaxLength(80);
             entity.Property(x => x.Status).HasMaxLength(60);
+            entity.Property(x => x.ExecutionMode).HasMaxLength(30).HasDefaultValue("always");
             entity.HasOne(x => x.Request).WithMany(x => x.WorkflowSnapshots).HasForeignKey(x => x.RequestId).OnDelete(DeleteBehavior.Cascade);
             entity.HasOne(x => x.ApproverRole).WithMany().HasForeignKey(x => x.ApproverRoleId).OnDelete(DeleteBehavior.SetNull);
             entity.HasOne(x => x.ApproverUser).WithMany().HasForeignKey(x => x.ApproverUserId).OnDelete(DeleteBehavior.SetNull);
             entity.HasOne(x => x.TargetDepartment).WithMany().HasForeignKey(x => x.TargetDepartmentId).OnDelete(DeleteBehavior.SetNull);
             entity.HasOne(x => x.ActionByUser).WithMany().HasForeignKey(x => x.ActionByUserId).OnDelete(DeleteBehavior.SetNull);
+            entity.HasOne(x => x.EscalationUser).WithMany().HasForeignKey(x => x.EscalationUserId).OnDelete(DeleteBehavior.SetNull);
+            entity.HasOne(x => x.EscalationRole).WithMany().HasForeignKey(x => x.EscalationRoleId).OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<RequestApprovalAction>(entity =>
+        {
+            entity.ToTable("request_approval_actions");
+            entity.HasIndex(x => new { x.RequestId, x.ActionAt });
+            entity.HasIndex(x => new { x.RequestId, x.WorkflowRevision, x.StepOrder });
+            entity.Property(x => x.StepNameAr).HasMaxLength(255);
+            entity.Property(x => x.StepType).HasMaxLength(80);
+            entity.Property(x => x.Action).HasMaxLength(60);
+            entity.Property(x => x.PreviousStatus).HasMaxLength(60);
+            entity.Property(x => x.NewStatus).HasMaxLength(60);
+            entity.HasOne(x => x.Request).WithMany(x => x.ApprovalActions).HasForeignKey(x => x.RequestId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(x => x.WorkflowStepSnapshot).WithMany().HasForeignKey(x => x.WorkflowStepSnapshotId).OnDelete(DeleteBehavior.SetNull);
+            entity.HasOne(x => x.ActorUser).WithMany().HasForeignKey(x => x.ActorUserId).OnDelete(DeleteBehavior.SetNull);
         });
 
         modelBuilder.Entity<RequestAttachment>(entity =>
@@ -833,7 +854,24 @@ public class ServicePortalDbContext(DbContextOptions<ServicePortalDbContext> opt
         });
     }
 
-    public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
+    public override int SaveChanges() => SaveChanges(acceptAllChangesOnSuccess: true);
+
+    public override int SaveChanges(bool acceptAllChangesOnSuccess)
+    {
+        PrepareEntitiesForSave();
+        return base.SaveChanges(acceptAllChangesOnSuccess);
+    }
+
+    public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default) =>
+        SaveChangesAsync(acceptAllChangesOnSuccess: true, cancellationToken);
+
+    public override Task<int> SaveChangesAsync(bool acceptAllChangesOnSuccess, CancellationToken cancellationToken = default)
+    {
+        PrepareEntitiesForSave();
+        return base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
+    }
+
+    private void PrepareEntitiesForSave()
     {
         var now = DateTimeOffset.UtcNow;
         foreach (var entry in ChangeTracker.Entries<BaseEntity>())
@@ -850,6 +888,19 @@ public class ServicePortalDbContext(DbContextOptions<ServicePortalDbContext> opt
             }
         }
 
-        return base.SaveChangesAsync(cancellationToken);
+        // Npgsql maps DateTimeOffset to PostgreSQL timestamptz and only accepts
+        // UTC offsets. Normalize values supplied by browsers or Windows hosts
+        // before they are sent to the database.
+        foreach (var entry in ChangeTracker.Entries()
+                     .Where(x => x.State is EntityState.Added or EntityState.Modified))
+        {
+            foreach (var property in entry.Properties)
+            {
+                if (property.CurrentValue is DateTimeOffset value && value.Offset != TimeSpan.Zero)
+                {
+                    property.CurrentValue = value.ToUniversalTime();
+                }
+            }
+        }
     }
 }

@@ -2,7 +2,7 @@ import { Activity, BarChart3, Bell, BellRing, BookOpen, Building2, Database, Fil
 import { ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { NavLink } from "react-router-dom";
 import { API_BASE, IS_DOTNET_API, apiFetch, CurrentUser, ServiceRequest } from "../lib/api";
-import { applyBrandColor, applyBranding, applyStoredFavicon } from "../lib/branding";
+import { applyBrandColor, applyBranding, applyStoredFavicon, getStoredSystemName } from "../lib/branding";
 import FeedbackDialog from "./ui/FeedbackDialog";
 import FeedbackToast from "./ui/FeedbackToast";
 
@@ -39,7 +39,7 @@ export function Layout({
   onLogout: () => void;
   onPasswordChanged?: () => void;
 }) {
-  const [systemName, setSystemName] = useState(() => localStorage.getItem("qib_system_name") || "");
+  const [systemName, setSystemName] = useState(getStoredSystemName);
   const [logoUrl, setLogoUrl] = useState(() => localStorage.getItem("qib_logo_url") || "");
   const [passwordDialogOpen, setPasswordDialogOpen] = useState(false);
   const [passwordForm, setPasswordForm] = useState({ current_password: "", new_password: "", confirm_password: "" });
@@ -125,7 +125,7 @@ export function Layout({
 
   useEffect(() => {
     function syncSystemName() {
-      setSystemName(localStorage.getItem("qib_system_name") || "");
+      setSystemName(getStoredSystemName());
       setLogoUrl(localStorage.getItem("qib_logo_url") || "");
     }
     window.addEventListener("qib-settings-updated", syncSystemName);

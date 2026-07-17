@@ -50,7 +50,7 @@ bash scripts/start-frontend-dotnet.sh
 - الواجهة: `http://localhost:5174`
 - .NET API: `http://localhost:8088`
 - .NET API Base: `http://localhost:8088/api/dotnet/v1`
-- Swagger: `http://localhost:8088/swagger/index.html`
+- Swagger: `http://localhost:8088/api/dotnet/v1/docs`
 - PostgreSQL المستقل: `localhost:55432`
 
 لتشغيل .NET API فقط:
@@ -271,6 +271,7 @@ powershell -ExecutionPolicy Bypass -File scripts/install-local.ps1
 - [مخطط قاعدة البيانات](docs/database-schema.md)
 - [دليل مجلدات النظام والتثبيت على Windows](docs/WINDOWS_INSTALLATION_AND_STRUCTURE_AR.md)
 - [توثيق ASP.NET Core Backend](docs/ASP_NET_BACKEND_AR.md)
+- [دليل نشر Windows Server لنسخة .NET](docs/WINDOWS_SERVER_DEPLOYMENT_DOTNET_AR.md)
 
 ## هيكل المشروع
 
@@ -450,7 +451,7 @@ DOTNET_ADMIN_IDENTIFIER=admin@qib.internal-bank.qa DOTNET_ADMIN_PASSWORD='NewPas
 ### ASP.NET Core
 
 - Base URL: `http://localhost:8088/api/dotnet/v1`
-- Swagger: `http://localhost:8088/swagger/index.html`
+- Swagger: `http://localhost:8088/api/dotnet/v1/docs`
 - Health: `http://localhost:8088/api/dotnet/v1/health/live`
 
 أمثلة:

@@ -751,6 +751,36 @@ export default function MessagesPage() {
     };
   }
 
+  function buildDotnetCreateMessageFormData(messageForm: typeof form) {
+    const payload = buildDotnetCreateMessagePayload(messageForm);
+    const data = new FormData();
+    data.append("recipientIds", payload.recipientIds.join(","));
+    data.append("messageTypeId", String(payload.messageTypeId));
+    if (payload.classificationId) data.append("classificationId", String(payload.classificationId));
+    if (payload.relatedRequestId) data.append("relatedRequestId", String(payload.relatedRequestId));
+    data.append("priority", payload.priority);
+    data.append("subject", payload.subject);
+    data.append("body", payload.body);
+    data.append("includeInRequestPdf", String(payload.includeInRequestPdf));
+    attachments.forEach((file) => data.append("attachments", file));
+    return data;
+  }
+
+  function buildDotnetReplyMessageFormData(messageForm: typeof form) {
+    const replyMessageType = findMessageTypeOption(usableMessageTypeOptions, messageForm.message_type);
+    const data = new FormData();
+    data.append("body", messageForm.body);
+    if (messageForm.subject) data.append("subject", messageForm.subject);
+    if (replyMessageType?.id) data.append("messageTypeId", String(replyMessageType.id));
+    data.append("messageType", messageForm.message_type);
+    data.append("priority", messageForm.priority);
+    if (selectedFormClassification?.id) data.append("classificationId", String(selectedFormClassification.id));
+    data.append("classificationCode", messageForm.classification_code);
+    data.append("includeInRequestPdf", String(Boolean(canUseOfficialLetterhead && officialOptions.include_in_request_pdf && messageForm.related_request_id.trim())));
+    attachments.forEach((file) => data.append("attachments", file));
+    return data;
+  }
+
   async function uploadMessageAttachments(messageId: number) {
     if (!IS_DOTNET_API || attachments.length === 0) return;
     for (const file of attachments) {
@@ -822,20 +852,26 @@ export default function MessagesPage() {
         }
         if (IS_DOTNET_API) {
           const replyMessageType = findMessageTypeOption(usableMessageTypeOptions, messageForm.message_type);
-          sentMessage = normalizeInternalMessage(await apiFetch<unknown>(`/messages/${replySource.id}/reply`, {
-            method: "POST",
-            body: JSON.stringify({
-              body: messageForm.body,
-              subject: messageForm.subject || undefined,
-              messageTypeId: replyMessageType?.id,
-              messageType: messageForm.message_type,
-              priority: messageForm.priority,
-              classificationId: selectedFormClassification?.id ?? null,
-              classificationCode: messageForm.classification_code,
-              includeInRequestPdf: Boolean(canUseOfficialLetterhead && officialOptions.include_in_request_pdf && messageForm.related_request_id.trim())
-            })
-          }));
-          await uploadMessageAttachments(sentMessage.id);
+          if (attachments.length > 0) {
+            sentMessage = normalizeInternalMessage(await apiFetch<unknown>(`/messages/${replySource.id}/reply-with-attachments`, {
+              method: "POST",
+              body: buildDotnetReplyMessageFormData(messageForm)
+            }));
+          } else {
+            sentMessage = normalizeInternalMessage(await apiFetch<unknown>(`/messages/${replySource.id}/reply`, {
+              method: "POST",
+              body: JSON.stringify({
+                body: messageForm.body,
+                subject: messageForm.subject || undefined,
+                messageTypeId: replyMessageType?.id,
+                messageType: messageForm.message_type,
+                priority: messageForm.priority,
+                classificationId: selectedFormClassification?.id ?? null,
+                classificationCode: messageForm.classification_code,
+                includeInRequestPdf: Boolean(canUseOfficialLetterhead && officialOptions.include_in_request_pdf && messageForm.related_request_id.trim())
+              })
+            }));
+          }
         } else if (attachments.length > 0) {
           const data = new FormData();
           data.append("message_type", messageForm.message_type);
@@ -865,11 +901,17 @@ export default function MessagesPage() {
           body: JSON.stringify(messageForm)
         });
       } else if (IS_DOTNET_API) {
-        sentMessage = normalizeInternalMessage(await apiFetch<unknown>("/messages", {
-          method: "POST",
-          body: JSON.stringify(buildDotnetCreateMessagePayload(messageForm))
-        }));
-        await uploadMessageAttachments(sentMessage.id);
+        if (attachments.length > 0) {
+          sentMessage = normalizeInternalMessage(await apiFetch<unknown>("/messages/with-attachments", {
+            method: "POST",
+            body: buildDotnetCreateMessageFormData(messageForm)
+          }));
+        } else {
+          sentMessage = normalizeInternalMessage(await apiFetch<unknown>("/messages", {
+            method: "POST",
+            body: JSON.stringify(buildDotnetCreateMessagePayload(messageForm))
+          }));
+        }
       } else if (attachments.length > 0) {
         const relatedRequestId = messageForm.related_request_id.trim() || undefined;
         const data = new FormData();

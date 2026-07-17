@@ -389,6 +389,7 @@ public class MessagesController(
 
         await EnsureMessagingCanSendAsync(relatedRequestId, cancellationToken);
         await EnsureMessageTypeAllowedAsync(type, actorId, relatedRequestId, cancellationToken);
+        EnsureMessageTypeAttachmentRequirement(type, 0);
         ValidatePriority(priority);
         await ValidateClassificationAsync(classificationId, cancellationToken);
         await ValidateRecipientsAsync(recipientIds, cancellationToken);
@@ -428,6 +429,76 @@ public class MessagesController(
         return CreatedAtAction(nameof(GetMessage), new { id = message.Id }, MapDetails(created, actorId));
     }
 
+    [HttpPost("messages/with-attachments")]
+    [Authorize(Policy = "Permission:messages.send")]
+    public async Task<ActionResult<MessageDetailsDto>> CreateMessageWithAttachments(CancellationToken cancellationToken)
+    {
+        var actorId = RequireCurrentUserId();
+        var sender = await db.Users.AsNoTracking().FirstOrDefaultAsync(x => x.Id == actorId && x.IsActive && !x.IsLocked, cancellationToken)
+            ?? throw new ApiException("المستخدم غير صالح", StatusCodes.Status403Forbidden);
+        var form = await Request.ReadFormAsync(cancellationToken);
+        var type = await ResolveMessageTypeAsync(FormLong(form, "message_type_id", "messageTypeId"), FormValue(form, "message_type", "messageType"), 0, cancellationToken);
+        var classificationId = await ResolveClassificationIdAsync(FormLong(form, "classification_id", "classificationId"), FormValue(form, "classification_code", "classificationCode"), null, cancellationToken);
+        var relatedRequestId = FormLong(form, "related_request_id", "relatedRequestId");
+        var recipientIds = FormLongArray(form, "recipient_ids", "recipientIds");
+        var priority = FormValue(form, "priority")?.Trim() ?? "normal";
+        var subject = RequiredFormValue(form, "subject").Trim();
+        var body = RequiredFormValue(form, "body").Trim();
+        var includeInRequestPdf = FormBool(form, false, "include_in_request_pdf", "includeInRequestPdf");
+        var files = form.Files.Where(file => file.Length > 0).ToList();
+
+        await EnsureMessagingCanSendAsync(relatedRequestId, cancellationToken);
+        await EnsureMessageTypeAllowedAsync(type, actorId, relatedRequestId, cancellationToken);
+        EnsureMessageTypeAttachmentRequirement(type, files.Count);
+        ValidatePriority(priority);
+        await ValidateClassificationAsync(classificationId, cancellationToken);
+        await ValidateRecipientsAsync(recipientIds, cancellationToken);
+
+        if (relatedRequestId.HasValue)
+        {
+            await EnsureCanViewRequestAsync(relatedRequestId.Value, actorId, cancellationToken);
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        var message = new Message
+        {
+            SenderId = sender.Id,
+            MessageTypeId = type.Id,
+            ClassificationId = classificationId,
+            RelatedRequestId = relatedRequestId,
+            Subject = subject,
+            Body = body,
+            Priority = priority,
+            IsOfficial = type.IsOfficial,
+            IncludeInRequestPdf = type.IsOfficial && includeInRequestPdf && relatedRequestId.HasValue,
+            SentAt = now,
+            Recipients = recipientIds.Distinct().Select(id => new MessageRecipient
+            {
+                RecipientId = id,
+                IsRead = id == actorId,
+                ReadAt = id == actorId ? now : null
+            }).ToList()
+        };
+
+        await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+        db.Messages.Add(message);
+        await db.SaveChangesAsync(cancellationToken);
+
+        var settings = await GetAttachmentSettingsAsync(cancellationToken);
+        foreach (var file in files)
+        {
+            await SaveMessageAttachmentAsync(message, file, actorId, settings, cancellationToken);
+        }
+
+        await db.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        await CreateMessageNotificationsAsync(message, sender.NameAr, "new", cancellationToken);
+        await auditService.LogAsync("message_sent", "message", message.Id.ToString(), newValue: new { message.Subject, message.MessageTypeId, message.RelatedRequestId, attachments_count = files.Count }, cancellationToken: cancellationToken);
+
+        var created = await LoadMessageQuery().FirstAsync(x => x.Id == message.Id, cancellationToken);
+        return CreatedAtAction(nameof(GetMessage), new { id = message.Id }, MapDetails(created, actorId));
+    }
+
     [HttpPost("messages/{id:long}/reply")]
     [Authorize(Policy = "Permission:messages.send")]
     public async Task<ActionResult<MessageDetailsDto>> Reply(long id, ReplyMessageRequest request, CancellationToken cancellationToken)
@@ -459,6 +530,7 @@ public class MessagesController(
         await ValidateRecipientsAsync(recipients, cancellationToken);
         var type = await ResolveMessageTypeAsync(request.MessageTypeId, request.MessageType, original.MessageTypeId, cancellationToken);
         await EnsureMessageTypeAllowedAsync(type, actorId, original.RelatedRequestId, cancellationToken);
+        EnsureMessageTypeAttachmentRequirement(type, 0);
         var classificationId = await ResolveClassificationIdAsync(request.ClassificationId, request.ClassificationCode, original.ClassificationId, cancellationToken);
         var priority = string.IsNullOrWhiteSpace(request.Priority) ? original.Priority : request.Priority.Trim();
         ValidatePriority(priority);
@@ -488,6 +560,87 @@ public class MessagesController(
         await db.SaveChangesAsync(cancellationToken);
         await CreateMessageNotificationsAsync(reply, actorName, "reply", cancellationToken);
         await auditService.LogAsync("message_replied", "message", reply.Id.ToString(), metadata: new { parentMessageId = id }, cancellationToken: cancellationToken);
+
+        var created = await LoadMessageQuery().FirstAsync(x => x.Id == reply.Id, cancellationToken);
+        return CreatedAtAction(nameof(GetMessage), new { id = created.Id }, MapDetails(created, actorId));
+    }
+
+    [HttpPost("messages/{id:long}/reply-with-attachments")]
+    [Authorize(Policy = "Permission:messages.send")]
+    public async Task<ActionResult<MessageDetailsDto>> ReplyWithAttachments(long id, CancellationToken cancellationToken)
+    {
+        var actorId = RequireCurrentUserId();
+        var actorName = await db.Users
+            .AsNoTracking()
+            .Where(x => x.Id == actorId)
+            .Select(x => x.NameAr)
+            .FirstOrDefaultAsync(cancellationToken) ?? "مستخدم النظام";
+        var original = await LoadMessageQuery()
+            .FirstOrDefaultAsync(x => x.Id == id, cancellationToken)
+            ?? throw new ApiException("المراسلة غير موجودة", StatusCodes.Status404NotFound);
+        await EnsureMessagingCanReplyAsync(cancellationToken);
+        await EnsureCanReadMessageAsync(original, actorId, cancellationToken);
+        if (original.MessageType?.AllowReply == false)
+        {
+            throw new ApiException("هذا النوع من المراسلات لا يسمح بالرد");
+        }
+
+        var form = await Request.ReadFormAsync(cancellationToken);
+        var recipients = FormLongArray(form, "recipient_ids", "recipientIds").Where(x => x > 0).Distinct().ToList();
+        if (recipients.Count == 0)
+        {
+            recipients = original.SenderId == actorId
+                ? original.Recipients.Select(x => x.RecipientId).Where(x => x != actorId).Distinct().ToList()
+                : [original.SenderId];
+        }
+
+        await ValidateRecipientsAsync(recipients, cancellationToken);
+        var type = await ResolveMessageTypeAsync(FormLong(form, "message_type_id", "messageTypeId"), FormValue(form, "message_type", "messageType"), original.MessageTypeId, cancellationToken);
+        await EnsureMessageTypeAllowedAsync(type, actorId, original.RelatedRequestId, cancellationToken);
+        var files = form.Files.Where(file => file.Length > 0).ToList();
+        EnsureMessageTypeAttachmentRequirement(type, files.Count);
+        var classificationId = await ResolveClassificationIdAsync(FormLong(form, "classification_id", "classificationId"), FormValue(form, "classification_code", "classificationCode"), original.ClassificationId, cancellationToken);
+        var priority = FormValue(form, "priority")?.Trim() ?? original.Priority;
+        ValidatePriority(priority);
+        var body = RequiredFormValue(form, "body").Trim();
+        var subject = FormValue(form, "subject")?.Trim();
+        var includeInRequestPdf = FormBool(form, original.IncludeInRequestPdf, "include_in_request_pdf", "includeInRequestPdf");
+        var now = DateTimeOffset.UtcNow;
+        var reply = new Message
+        {
+            SenderId = actorId,
+            MessageTypeId = type.Id,
+            ClassificationId = classificationId,
+            ParentMessageId = original.Id,
+            RelatedRequestId = original.RelatedRequestId,
+            Subject = string.IsNullOrWhiteSpace(subject) ? $"رد: {original.Subject}" : subject,
+            Body = body,
+            Priority = priority,
+            IsOfficial = type.IsOfficial,
+            IncludeInRequestPdf = type.IsOfficial && includeInRequestPdf && original.RelatedRequestId.HasValue,
+            SentAt = now,
+            Recipients = recipients.Select(recipientId => new MessageRecipient
+            {
+                RecipientId = recipientId,
+                IsRead = recipientId == actorId,
+                ReadAt = recipientId == actorId ? now : null
+            }).ToList()
+        };
+
+        await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+        db.Messages.Add(reply);
+        await db.SaveChangesAsync(cancellationToken);
+
+        var settings = await GetAttachmentSettingsAsync(cancellationToken);
+        foreach (var file in files)
+        {
+            await SaveMessageAttachmentAsync(reply, file, actorId, settings, cancellationToken);
+        }
+
+        await db.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        await CreateMessageNotificationsAsync(reply, actorName, "reply", cancellationToken);
+        await auditService.LogAsync("message_replied", "message", reply.Id.ToString(), metadata: new { parentMessageId = id, attachments_count = files.Count }, cancellationToken: cancellationToken);
 
         var created = await LoadMessageQuery().FirstAsync(x => x.Id == reply.Id, cancellationToken);
         return CreatedAtAction(nameof(GetMessage), new { id = created.Id }, MapDetails(created, actorId));
@@ -697,6 +850,7 @@ public class MessagesController(
 
         var type = await ResolveMessageTypeAsync(request, original.MessageTypeId, cancellationToken);
         await EnsureMessageTypeAllowedAsync(type, actorId, original.RelatedRequestId, cancellationToken);
+        EnsureMessageTypeAttachmentRequirement(type, 0);
         var classificationId = await ResolveClassificationIdAsync(request, original.ClassificationId, cancellationToken);
         var priority = StringProp(request, "priority")?.Trim() ?? original.Priority;
         ValidatePriority(priority);
@@ -759,64 +913,8 @@ public class MessagesController(
             throw new ApiException("لا تملك صلاحية إرفاق ملف بهذه المراسلة", StatusCodes.Status403Forbidden);
         }
 
-        if (file.Length == 0)
-        {
-            throw new ApiException("الملف فارغ");
-        }
-
         var settings = await GetAttachmentSettingsAsync(cancellationToken);
-        if (!settings.AllowMessageAttachments)
-        {
-            throw new ApiException("إرفاق الملفات في المراسلات غير مفعل من إعدادات المراسلات");
-        }
-
-        if (settings.EnableVirusScan)
-        {
-            throw new ApiException("فحص الفيروسات مفعل لكن خدمة الفحص غير مهيأة في Backend .NET المستقل");
-        }
-
-        if (file.Length > settings.MaxFileSizeMb * 1024L * 1024L)
-        {
-            throw new ApiException($"حجم الملف يتجاوز الحد الأقصى للمراسلات وهو {settings.MaxFileSizeMb} MB");
-        }
-
-        var extension = Path.GetExtension(file.FileName).TrimStart('.').ToLowerInvariant();
-        var allowedExtensions = ExpandConfiguredExtensions(settings.AllowedExtensions);
-        if (string.IsNullOrWhiteSpace(extension) || settings.BlockedExtensions.Contains(extension) || !allowedExtensions.Contains(extension))
-        {
-            throw new ApiException($"نوع الملف غير مسموح. الامتدادات المسموحة: {string.Join(", ", allowedExtensions)}");
-        }
-
-        if (message.Attachments.Count(x => !x.IsDeleted) >= settings.MaxAttachments)
-        {
-            throw new ApiException($"لا يمكن تجاوز عدد المرفقات المسموح وهو {settings.MaxAttachments}");
-        }
-
-        var uploadsRoot = configuration["Storage:UploadsPath"] ?? "/data/uploads";
-        var directory = Path.Combine(uploadsRoot, settings.MessageUploadPath, id.ToString());
-        Directory.CreateDirectory(directory);
-        var storedName = $"{Guid.NewGuid():N}.{extension}";
-        var path = Path.Combine(directory, storedName);
-
-        await using (var stream = System.IO.File.Create(path))
-        {
-            await file.CopyToAsync(stream, cancellationToken);
-        }
-
-        var checksum = await ComputeChecksumAsync(path, cancellationToken);
-        var attachment = new MessageAttachment
-        {
-            MessageId = id,
-            FileName = Path.GetFileName(file.FileName),
-            StoredFileName = storedName,
-            StoragePath = path,
-            ContentType = string.IsNullOrWhiteSpace(file.ContentType) ? "application/octet-stream" : file.ContentType,
-            FileSize = file.Length,
-            Checksum = checksum,
-            UploadedByUserId = actorId,
-            UploadedAt = DateTimeOffset.UtcNow
-        };
-        db.MessageAttachments.Add(attachment);
+        var attachment = await SaveMessageAttachmentAsync(message, file, actorId, settings, cancellationToken);
         await db.SaveChangesAsync(cancellationToken);
         await auditService.LogAsync("message_attachment_uploaded", "message", id.ToString(), metadata: new { attachment.FileName, attachment.FileSize }, cancellationToken: cancellationToken);
 
@@ -1810,6 +1908,83 @@ public class MessagesController(
         }
     }
 
+    private static void EnsureMessageTypeAttachmentRequirement(MessageType type, int attachmentCount)
+    {
+        if (type.RequiresAttachment && attachmentCount <= 0)
+        {
+            throw new ApiException("هذا النوع من الرسائل يتطلب إضافة مرفق.");
+        }
+    }
+
+    private async Task<MessageAttachment> SaveMessageAttachmentAsync(
+        Message message,
+        IFormFile file,
+        long actorId,
+        MessagingAttachmentSettingsDto settings,
+        CancellationToken cancellationToken)
+    {
+        if (file.Length == 0)
+        {
+            throw new ApiException("الملف فارغ");
+        }
+
+        if (!settings.AllowMessageAttachments)
+        {
+            throw new ApiException("إرفاق الملفات في المراسلات غير مفعل من إعدادات المراسلات");
+        }
+
+        if (settings.EnableVirusScan)
+        {
+            throw new ApiException("فحص الفيروسات مفعل لكن خدمة الفحص غير مهيأة في Backend .NET المستقل");
+        }
+
+        if (file.Length > settings.MaxFileSizeMb * 1024L * 1024L)
+        {
+            throw new ApiException($"حجم الملف يتجاوز الحد الأقصى للمراسلات وهو {settings.MaxFileSizeMb} MB");
+        }
+
+        var extension = Path.GetExtension(file.FileName).TrimStart('.').ToLowerInvariant();
+        var allowedExtensions = ExpandConfiguredExtensions(settings.AllowedExtensions);
+        if (string.IsNullOrWhiteSpace(extension) || settings.BlockedExtensions.Contains(extension) || !allowedExtensions.Contains(extension))
+        {
+            throw new ApiException($"نوع الملف غير مسموح. الامتدادات المسموحة: {string.Join(", ", allowedExtensions)}");
+        }
+
+        if (message.Attachments.Count(x => !x.IsDeleted) >= settings.MaxAttachments)
+        {
+            throw new ApiException($"لا يمكن تجاوز عدد المرفقات المسموح وهو {settings.MaxAttachments}");
+        }
+
+        var uploadsRoot = configuration["Storage:UploadsPath"] ?? "/data/uploads";
+        var directory = Path.Combine(uploadsRoot, settings.MessageUploadPath, message.Id.ToString());
+        Directory.CreateDirectory(directory);
+        var storedName = $"{Guid.NewGuid():N}.{extension}";
+        var path = Path.Combine(directory, storedName);
+
+        await using (var stream = System.IO.File.Create(path))
+        {
+            await file.CopyToAsync(stream, cancellationToken);
+        }
+
+        var checksum = await ComputeChecksumAsync(path, cancellationToken);
+        var attachment = new MessageAttachment
+        {
+            MessageId = message.Id,
+            FileName = Path.GetFileName(file.FileName),
+            StoredFileName = storedName,
+            StoragePath = path,
+            ContentType = string.IsNullOrWhiteSpace(file.ContentType) ? "application/octet-stream" : file.ContentType,
+            FileSize = file.Length,
+            Checksum = checksum,
+            UploadedByUserId = actorId,
+            UploadedAt = DateTimeOffset.UtcNow
+        };
+
+        db.MessageAttachments.Add(attachment);
+        message.Attachments.Add(attachment);
+        return attachment;
+    }
+
     private async Task<MessagingAttachmentSettingsDto> GetAttachmentSettingsAsync(CancellationToken cancellationToken)
     {
         var values = ReadAttachmentSettingsValues(await FirstOrCreateAsync(db.MessageAttachmentSettings, () => new MessageAttachmentSettings(), cancellationToken));
@@ -2092,6 +2267,67 @@ public class MessagesController(
         }
 
         return output;
+    }
+
+    private static string RequiredFormValue(IFormCollection form, params string[] names)
+    {
+        var value = FormValue(form, names);
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            throw new ApiException("يرجى تعبئة الحقول المطلوبة");
+        }
+
+        return value;
+    }
+
+    private static string? FormValue(IFormCollection form, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            if (!form.TryGetValue(name, out var values))
+            {
+                continue;
+            }
+
+            var value = values.FirstOrDefault(x => !string.IsNullOrWhiteSpace(x)) ?? values.ToString();
+            return string.IsNullOrWhiteSpace(value) ? null : value;
+        }
+
+        return null;
+    }
+
+    private static long? FormLong(IFormCollection form, params string[] names)
+    {
+        var raw = FormValue(form, names);
+        return long.TryParse(raw, out var value) ? value : null;
+    }
+
+    private static IReadOnlyCollection<long> FormLongArray(IFormCollection form, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            if (!form.TryGetValue(name, out var values))
+            {
+                continue;
+            }
+
+            var ids = values
+                .SelectMany(value => ParseLongList(value))
+                .Distinct()
+                .ToList();
+            if (ids.Count > 0)
+            {
+                return ids;
+            }
+        }
+
+        return [];
+    }
+
+    private static bool FormBool(IFormCollection form, bool fallback, params string[] names)
+    {
+        var raw = FormValue(form, names);
+        return bool.TryParse(raw, out var parsed) ? parsed : fallback;
     }
 
     private static string RequiredString(JsonElement request, params string[] names)

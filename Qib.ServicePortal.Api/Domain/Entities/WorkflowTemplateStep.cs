@@ -24,6 +24,8 @@ public class WorkflowTemplateStep : BaseEntity
     public long? EscalationRoleId { get; set; }
     public Role? EscalationRole { get; set; }
     public int? ReturnToStepOrder { get; set; }
+    public string ExecutionMode { get; set; } = "always";
+    public string? ConditionJson { get; set; }
     public int SortOrder { get; set; }
     public bool IsActive { get; set; } = true;
 }

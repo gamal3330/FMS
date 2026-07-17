@@ -176,7 +176,7 @@ public static class RequestPdfGenerator
             "completed" => "مكتمل",
             "rejected" => "تم الرفض",
             "returned_for_edit" => "أعيد للتعديل",
-            "skipped" => "بانتظار الدور",
+            "skipped" => "لم تنطبق شروط المرحلة",
             _ => string.IsNullOrWhiteSpace(status) ? "-" : status
         };
     }

@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, CheckCircle2, Circle, Clock3, Download, ExternalLink, FileCheck2, FileText, Filter, HelpCircle, Image as ImageIcon, Paperclip, RefreshCw, RotateCcw, Search, Send, UserCheck, XCircle } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { API_BASE, apiFetch, ApprovalAction, ApprovalStep, Attachment, CurrentUser, ServiceRequest } from "../lib/api";
@@ -83,7 +83,7 @@ const actionLabels: Record<ApprovalAction, string> = {
   approved: "تمت الموافقة",
   rejected: "تم الرفض",
   returned_for_edit: "أعيد للتعديل",
-  skipped: "بانتظار الدور"
+  skipped: "لم تنطبق شروط المرحلة"
 };
 
 const approvalsPageSize = 12;
@@ -332,6 +332,7 @@ export function Approvals() {
   const [approvalsPage, setApprovalsPage] = useState(1);
   const [requestDetails, setRequestDetails] = useState<Record<number, ServiceRequest>>({});
   const [isLoadingDetails, setIsLoadingDetails] = useState(false);
+  const approvalsLoadSeq = useRef(0);
 
   const selectedRequest = useMemo(
     () => (selectedId ? requestDetails[selectedId] ?? requests.find((request) => request.id === selectedId) : undefined),
@@ -377,8 +378,8 @@ export function Approvals() {
     }
   }
 
-  function approvalsQuery() {
-    const params = new URLSearchParams({ tab: activeTab });
+  function approvalsQuery(tab: ApprovalsTab = activeTab) {
+    const params = new URLSearchParams({ tab });
     if (search.trim()) params.set("search", search.trim());
     if (priorityFilter) params.set("priority", priorityFilter);
     if (statusFilter) params.set("status", statusFilter);
@@ -389,10 +390,14 @@ export function Approvals() {
   }
 
   async function loadApprovals(query = approvalsQuery()) {
+    const loadSeq = ++approvalsLoadSeq.current;
     setIsLoading(true);
     setError("");
     try {
       const data = await apiFetch<ServiceRequest[]>(`/approvals?${query}`);
+      if (loadSeq !== approvalsLoadSeq.current) {
+        return;
+      }
       const sorted = data.sort((a, b) => Number(isActionableForUser(getCurrentStep(b), currentUser, activeDelegations)) - Number(isActionableForUser(getCurrentStep(a), currentUser, activeDelegations)));
       setRequests(sorted);
       setRequestDetails((current) => {
@@ -401,15 +406,29 @@ export function Approvals() {
       });
       setSelectedId((current) => current ?? sorted[0]?.id ?? null);
     } catch {
+      if (loadSeq !== approvalsLoadSeq.current) {
+        return;
+      }
       setRequests([]);
       setError("تعذر تحميل طلبات الموافقات من الخادم.");
     } finally {
-      setIsLoading(false);
+      if (loadSeq === approvalsLoadSeq.current) {
+        setIsLoading(false);
+      }
     }
   }
 
+  function selectTab(tab: ApprovalsTab) {
+    setApprovalsPage(1);
+    setSelectedId(null);
+    if (tab === activeTab) {
+      loadApprovals(approvalsQuery(tab));
+      return;
+    }
+    setActiveTab(tab);
+  }
+
   useEffect(() => {
-    loadApprovals();
     loadSummary();
     apiFetch<CurrentUser>("/auth/me").then(setCurrentUser).catch(() => setCurrentUser(null));
     apiFetch<ActiveDelegation[]>("/users/delegations/me").then(setActiveDelegations).catch(() => setActiveDelegations([]));
@@ -459,7 +478,7 @@ export function Approvals() {
   useEffect(() => {
     setApprovalsPage(1);
     setSelectedId(null);
-    loadApprovals();
+    loadApprovals(approvalsQuery(activeTab));
   }, [activeTab]);
 
   useEffect(() => {
@@ -535,12 +554,12 @@ export function Approvals() {
       </section>
 
       <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
-        <SummaryCard label="بانتظار موافقتي" description={approvalCardDescriptions.mine} value={summary.waiting_my_approval} active={activeTab === "mine"} onClick={() => setActiveTab("mine")} />
-        <SummaryCard label="متابعة طلباتي" description={approvalCardDescriptions.tracking} value={summary.tracking} active={activeTab === "tracking"} onClick={() => setActiveTab("tracking")} />
-        <SummaryCard label="بانتظار التنفيذ" description={approvalCardDescriptions.execution} value={summary.waiting_execution} active={activeTab === "execution"} onClick={() => setActiveTab("execution")} />
-        <SummaryCard label="متأخرة" description={approvalCardDescriptions.overdue} value={summary.overdue} active={activeTab === "overdue"} tone="danger" onClick={() => setActiveTab("overdue")} />
-        <SummaryCard label="معادة للتعديل" description={approvalCardDescriptions.returned} value={summary.returned_for_edit} active={activeTab === "returned"} tone="warning" onClick={() => setActiveTab("returned")} />
-        <SummaryCard label="تمت معالجتها اليوم" description={approvalCardDescriptions.completed} value={summary.processed_today} active={activeTab === "completed"} onClick={() => setActiveTab("completed")} />
+        <SummaryCard label="بانتظار موافقتي" description={approvalCardDescriptions.mine} value={summary.waiting_my_approval} active={activeTab === "mine"} onClick={() => selectTab("mine")} />
+        <SummaryCard label="متابعة طلباتي" description={approvalCardDescriptions.tracking} value={summary.tracking} active={activeTab === "tracking"} onClick={() => selectTab("tracking")} />
+        <SummaryCard label="بانتظار التنفيذ" description={approvalCardDescriptions.execution} value={summary.waiting_execution} active={activeTab === "execution"} onClick={() => selectTab("execution")} />
+        <SummaryCard label="متأخرة" description={approvalCardDescriptions.overdue} value={summary.overdue} active={activeTab === "overdue"} tone="danger" onClick={() => selectTab("overdue")} />
+        <SummaryCard label="معادة للتعديل" description={approvalCardDescriptions.returned} value={summary.returned_for_edit} active={activeTab === "returned"} tone="warning" onClick={() => selectTab("returned")} />
+        <SummaryCard label="تمت معالجتها اليوم" description={approvalCardDescriptions.completed} value={summary.processed_today} active={activeTab === "completed"} onClick={() => selectTab("completed")} />
       </section>
 
       <div className="flex justify-end">
