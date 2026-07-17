@@ -65,6 +65,8 @@ const defaultClassification = {
   name_ar: "",
   name_en: "",
   description: "",
+  color: "#64748b",
+  sort_order: 100,
   is_active: true,
   restricted_access: false,
   show_in_pdf: true,
@@ -501,7 +503,7 @@ export default function MessagingSettingsPage() {
           )}
 
           {active === "classifications" && (
-            <Section title="تصنيف السرية" description="إدارة مستويات السرية وتأثيرها على PDF والتقارير وتحميل المرفقات.">
+            <Section title="تصنيف السرية" description="إدارة مستويات السرية التي تظهر عند إنشاء المراسلات. الخيارات غير المرتبطة بسياسات فعلية تم إخفاؤها لتجنب الالتباس.">
               <div className="flex justify-end"><Button type="button" disabled={!canEdit} onClick={() => setClassificationModal(defaultClassification)}><Plus className="h-4 w-4" />إضافة تصنيف</Button></div>
               <div className="grid gap-3 md:grid-cols-2">
                 {data.classifications.map((item) => (
@@ -515,10 +517,10 @@ export default function MessagingSettingsPage() {
                       <Badge ok={item.is_active} yes="مفعل" no="معطل" />
                     </div>
                     <div className="mt-4 grid grid-cols-2 gap-2 text-xs">
-                      <Badge ok={item.restricted_access} yes="وصول مقيد" no="وصول عادي" />
-                      <Badge ok={item.show_in_pdf} yes="PDF" no="لا PDF" />
-                      <Badge ok={item.show_in_reports} yes="تقارير" no="مخفي من التقارير" />
-                      <Badge ok={item.log_downloads} yes="يسجل التحميل" no="لا يسجل" />
+                      <span className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 font-bold text-slate-600">الترتيب: {item.sort_order ?? "-"}</span>
+                      <span className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 font-bold text-slate-600">
+                        اللون: <span className="inline-block h-3 w-3 rounded-full align-middle" style={{ backgroundColor: item.color || "#64748b" }} />
+                      </span>
                     </div>
                     <ActionGroup className="mt-4">
                       <button disabled={!canEdit} onClick={() => setClassificationModal(item)}>تعديل</button>
@@ -915,7 +917,9 @@ function ClassificationModal({ value, setValue, onClose, onSave, saving }) {
         <Field label="الرمز" value={value.code} disabled={Boolean(value.id)} onChange={(next) => setValue({ ...value, code: next })} />
         <Field label="الاسم بالعربي" value={value.name_ar} onChange={(next) => setValue({ ...value, name_ar: next })} />
         <Field label="الاسم بالإنجليزي" value={value.name_en || ""} onChange={(next) => setValue({ ...value, name_en: next })} />
-        {["is_active", "restricted_access", "show_in_pdf", "show_in_reports", "allow_attachment_download", "log_downloads", "requires_special_permission"].map((key) => (
+        <Field label="اللون" value={value.color || "#64748b"} onChange={(next) => setValue({ ...value, color: next })} />
+        <Field label="الترتيب" type="number" value={value.sort_order ?? 100} onChange={(next) => setValue({ ...value, sort_order: Number(next) })} />
+        {["is_active"].map((key) => (
           <Toggle key={key} label={fieldLabel(key)} checked={value[key]} onChange={(next) => setValue({ ...value, [key]: next })} />
         ))}
       </Grid>
