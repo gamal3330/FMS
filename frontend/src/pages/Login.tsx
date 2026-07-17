@@ -1,7 +1,7 @@
 import { FormEvent, useEffect, useState } from "react";
 import { Eye, EyeOff, Landmark, LockKeyhole } from "lucide-react";
 import { API_BASE, IS_DOTNET_API } from "../lib/api";
-import { applyBrandColor, applyBranding, applyStoredFavicon } from "../lib/branding";
+import { applyBrandColor, applyBranding, applyStoredFavicon, getStoredSystemName } from "../lib/branding";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 
@@ -16,7 +16,7 @@ type PublicProfile = {
 const defaultLoginIntroText = "منصة داخلية موحدة لاستقبال الطلبات، تتبع مراحل الاعتماد، مراقبة مؤشرات الخدمة، وتوثيق الأثر التشغيلي.";
 
 export function Login({ onLogin }: { onLogin: (token: string) => void }) {
-  const [systemName, setSystemName] = useState(() => localStorage.getItem("qib_system_name") || "");
+  const [systemName, setSystemName] = useState(getStoredSystemName);
   const [loginIntroText, setLoginIntroText] = useState(defaultLoginIntroText);
   const [logoUrl, setLogoUrl] = useState(() => localStorage.getItem("qib_logo_url") || "");
   const [email, setEmail] = useState("admin@qib.internal-bank.qa");

@@ -1,11 +1,29 @@
 import { API_BASE } from "./api";
 
 const DEFAULT_BRAND_COLOR = "#0d6337";
+export const DEFAULT_SYSTEM_NAME = "مراسلتي";
+
+const LEGACY_SYSTEM_NAMES = new Set([
+  "نظام ادارة النمادج",
+  "نظام إدارة النمادج",
+  "نظام ادارة النماذج",
+  "نظام إدارة النماذج"
+]);
+
+export function getStoredSystemName() {
+  const stored = (localStorage.getItem("qib_system_name") || "").trim();
+  if (!stored || LEGACY_SYSTEM_NAMES.has(stored)) {
+    if (stored) localStorage.removeItem("qib_system_name");
+    return DEFAULT_SYSTEM_NAME;
+  }
+  return stored;
+}
 
 export function applyBranding(settings: { system_name?: string; logo_url?: string | null; brand_color?: string | null; timezone?: string | null }) {
-  if (settings.system_name) {
-    localStorage.setItem("qib_system_name", settings.system_name);
-    document.title = settings.system_name;
+  const systemName = (settings.system_name || "").trim();
+  if (systemName) {
+    localStorage.setItem("qib_system_name", systemName);
+    document.title = systemName;
   }
   if (settings.logo_url) {
     localStorage.setItem("qib_logo_url", settings.logo_url);
