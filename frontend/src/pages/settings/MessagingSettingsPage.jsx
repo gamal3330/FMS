@@ -475,7 +475,7 @@ export default function MessagingSettingsPage() {
           )}
 
           {active === "types" && (
-            <Section title="أنواع الرسائل" description="إدارة أنواع الرسائل الرسمية والداخلية وما يظهر في PDF والتقارير.">
+            <Section title="أنواع الرسائل" description="إدارة أنواع الرسائل الرسمية والداخلية المتاحة في شاشة المراسلات.">
               <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                 <div className="relative max-w-md flex-1">
                   <Search className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
@@ -484,13 +484,12 @@ export default function MessagingSettingsPage() {
                 <Button type="button" disabled={!canEdit} onClick={() => setTypeModal(defaultType)}><Plus className="h-4 w-4" />إضافة نوع رسالة</Button>
               </div>
               <SimpleTable
-                headers={["الاسم", "الرمز", "الحالة", "رسمي", "PDF", "ترتيب", "الإجراءات"]}
+                headers={["الاسم", "الرمز", "الحالة", "رسمي", "ترتيب", "الإجراءات"]}
                 rows={filteredTypes.map((item) => [
                   <div><p className="font-black">{item.name_ar}</p><p className="text-xs text-slate-500">{item.description || item.name_en || "-"}</p></div>,
                   <code className="text-xs">{item.code}</code>,
                   <Badge ok={item.is_active} yes="مفعل" no="معطل" />,
                   <Badge ok={item.is_official} yes="رسمي" no="داخلي" />,
-                  <Badge ok={item.show_in_pdf} yes="يظهر" no="لا يظهر" />,
                   item.sort_order,
                   <ActionGroup>
                     <button disabled={!canEdit} onClick={() => setTypeModal(item)}>تعديل</button>
@@ -901,8 +900,6 @@ function TypeModal({ value, setValue, onClose, onSave, saving }) {
         <Toggle label="رسمي" checked={value.is_official} onChange={(next) => setValue({ ...value, is_official: next })} />
         <Toggle label="يتطلب طلباً مرتبطاً" checked={value.requires_request} onChange={(next) => setValue({ ...value, requires_request: next })} />
         <Toggle label="يتطلب مرفقاً" checked={value.requires_attachment} onChange={(next) => setValue({ ...value, requires_attachment: next })} />
-        <Toggle label="يظهر في PDF" checked={value.show_in_pdf} onChange={(next) => setValue({ ...value, show_in_pdf: next })} />
-        <Toggle label="مرئي لمقدم الطلب" checked={value.visible_to_requester} onChange={(next) => setValue({ ...value, visible_to_requester: next })} />
         <Toggle label="يسمح بالرد" checked={value.allow_reply} onChange={(next) => setValue({ ...value, allow_reply: next })} />
       </Grid>
       <TextArea label="الوصف" value={value.description || ""} onChange={(next) => setValue({ ...value, description: next })} />
